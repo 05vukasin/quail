@@ -12,9 +12,9 @@ use quail_engine::RunOptions;
 use quail_io::{FsSource, JsonlSink, ListSource, ReadOptions};
 
 use crate::cli::ScanArgs;
+use crate::dump::DocumentDump;
 use crate::registry;
 use crate::stats::{self, CountingSink, Live};
-use crate::tap::DocumentDump;
 
 /// Exit code after Ctrl-C.
 pub const EXIT_INTERRUPTED: u8 = 130;
@@ -35,11 +35,9 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
         ),
         None => None,
     };
-    let mut builder = registry::builder(args.profile.into(), limits);
-    if let Some(d) = &dump {
-        builder = builder.analyzer(Box::new(d.tap()));
-    }
-    let engine = builder.build().map_err(|e| e.to_string())?;
+    let engine = registry::builder(args.profile.into(), limits)
+        .build()
+        .map_err(|e| e.to_string())?;
 
     let sink = sink(args)?;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -66,6 +64,7 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     }
     opts.ordered = args.ordered;
     opts.cancel = Some(Arc::clone(&cancel));
+    opts.on_artifacts = dump.as_ref().map(DocumentDump::hook);
 
     let done = Arc::new(AtomicBool::new(false));
     let progress = (!args.quiet && io::stderr().is_terminal()).then(|| {
@@ -85,7 +84,7 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     }
     let dump_err = dump
         .as_ref()
-        .and_then(|d| d.flush().err())
+        .and_then(|d| d.finish().err())
         .map(|e| format!("document dump: {e}"));
     if broken_pipe.load(Ordering::Relaxed) {
         // `quail scan | head`: the reader is gone, which is not an error.
@@ -112,7 +111,11 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     if run_stats.cancelled && interrupted.load(Ordering::Relaxed) > 0 {
         return Ok(ExitCode::from(EXIT_INTERRUPTED));
     }
-    if run_stats.sink_errors > 0 || run_stats.writer_panicked || dump_err.is_some() {
+    if run_stats.sink_errors > 0
+        || run_stats.writer_panicked
+        || run_stats.hook_panics > 0
+        || dump_err.is_some()
+    {
         if args.quiet
             && !args.json_stats
             && let Some(e) = &run_stats.first_sink_error
@@ -210,7 +213,7 @@ fn spawn_pipe_watchdog(broken: Arc<AtomicBool>, done: Arc<AtomicBool>, dump: Opt
                 std::thread::sleep(BROKEN_PIPE_GRACE);
                 if !done.load(Ordering::Relaxed) {
                     if let Some(d) = &dump {
-                        let _ = d.flush();
+                        let _ = d.finish();
                     }
                     std::process::exit(0);
                 }
