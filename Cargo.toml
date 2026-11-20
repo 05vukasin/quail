@@ -43,6 +43,17 @@ debug = true
 lto = "thin"
 codegen-units = 16
 
+# `cargo build --profile fuzz -p quail-fuzz`: optimized, but with debug assertions and overflow
+# checks on so silent wraparounds become (caught) panics, and line tables for backtraces.
+[profile.fuzz]
+inherits = "release"
+lto = false
+codegen-units = 16
+panic = "unwind"
+debug-assertions = true
+overflow-checks = true
+debug = "line-tables-only"
+
 # Dev builds keep dependencies optimized so tests over real files stay fast.
 [profile.dev.package."*"]
 opt-level = 2
