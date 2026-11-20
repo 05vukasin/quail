@@ -88,6 +88,36 @@ fn find_json(root: &Path, files: &[PathBuf]) -> Result<PathBuf> {
         .ok_or_else(|| Error::Invalid(format!("{}: no CUAD_v1.json found", root.display())))
 }
 
+/// Contract files by lowercase stem; PDF preferred over text.
+fn contracts_by_stem(files: &[PathBuf]) -> HashMap<String, PathBuf> {
+    let mut by_stem: HashMap<String, PathBuf> = HashMap::new();
+    for p in files {
+        let ext = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase);
+        let rank = match ext.as_deref() {
+            Some("pdf") => 0,
+            Some("txt") => 1,
+            _ => continue,
+        };
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let key = stem.trim().to_lowercase();
+        let better = by_stem.get(&key).is_none_or(|old| {
+            let old_pdf = old
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+            rank == 0 && !old_pdf
+        });
+        if better {
+            by_stem.insert(key, p.clone());
+        }
+    }
+    by_stem
+}
+
 impl GoldAdapter for Cuad {
     fn name(&self) -> &'static str {
         "cuad"
@@ -99,32 +129,7 @@ impl GoldAdapter for Cuad {
         let squad: Squad = serde_json::from_str(&crate::read_to_string(&json)?)
             .map_err(|e| Error::parse(&json, e))?;
 
-        // Contract files by lowercase stem; PDF preferred over text.
-        let mut by_stem: HashMap<String, PathBuf> = HashMap::new();
-        for p in &files {
-            let ext = p
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_lowercase);
-            let rank = match ext.as_deref() {
-                Some("pdf") => 0,
-                Some("txt") => 1,
-                _ => continue,
-            };
-            let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            let key = stem.trim().to_lowercase();
-            let better = by_stem.get(&key).is_none_or(|old| {
-                let old_pdf = old
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
-                rank == 0 && !old_pdf
-            });
-            if better {
-                by_stem.insert(key, p.clone());
-            }
-        }
+        let by_stem = contracts_by_stem(&files);
 
         let mut out = Converted::default();
         for entry in &squad.data {

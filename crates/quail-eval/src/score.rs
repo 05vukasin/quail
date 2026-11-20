@@ -103,8 +103,9 @@ impl CalAcc {
     #[allow(clippy::cast_precision_loss)]
     fn add(&mut self, conf: f32, correct: bool) {
         let c = f64::from(conf.clamp(0.0, 1.0));
+        // An f32 0.9 is 0.89999998: nudge so a confidence lands in the bin it names.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let b = ((c * CALIBRATION_BINS as f64) as usize).min(CALIBRATION_BINS - 1);
+        let b = ((c * CALIBRATION_BINS as f64 + 1e-6) as usize).min(CALIBRATION_BINS - 1);
         self.n[b] += 1;
         self.conf[b] += c;
         self.correct[b] += u64::from(correct);
