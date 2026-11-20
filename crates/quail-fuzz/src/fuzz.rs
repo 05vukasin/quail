@@ -61,6 +61,9 @@ struct Shared {
     findings: BTreeMap<String, Finding>,
     classes: BTreeMap<String, u64>,
     by_kind: BTreeMap<(Kind, String), u64>,
+    /// Record status of answered cases, by kind: how far the pipeline got.
+    statuses: BTreeMap<(Kind, String), u64>,
+    corpus: BTreeMap<usize, usize>,
 }
 
 fn short_hash(s: &str) -> String {
@@ -120,7 +123,7 @@ pub fn run(cfg: &Config) -> std::io::Result<String> {
             stop.clone(),
         );
         handles.push(std::thread::spawn(move || {
-            job(j, per, &cfg, &seeds, &shared, &execs, &stop, start)
+            job(j, per, &cfg, &seeds, &shared, &execs, &stop, start);
         }));
     }
     // progress
@@ -179,6 +182,11 @@ fn summarize(shared: &Mutex<Shared>, execs: u64, took: Duration, cfg: &Config) -
     for ((k, c), n) in &s.by_kind {
         let _ = writeln!(out, "  {:<5} {c:<16} {n}", k.as_str());
     }
+    let _ = writeln!(out, "\nrecord status of answered cases by input kind:");
+    for ((k, st), n) in &s.statuses {
+        let _ = writeln!(out, "  {:<5} {st:<16} {n}", k.as_str());
+    }
+    let _ = writeln!(out, "\ncorpus size per job: {:?}", s.corpus);
     let _ = writeln!(
         out,
         "\nfindings (distinct signatures): {}",
@@ -245,6 +253,10 @@ fn job(
             let Ok(mut s) = shared.lock() else { return };
             *s.classes.entry(class.clone()).or_default() += 1;
             *s.by_kind.entry((kind, class)).or_default() += 1;
+            if let Some(r) = &o.report {
+                *s.statuses.entry((kind, r.status.clone())).or_default() += 1;
+            }
+            s.corpus.insert(j, corpus.len());
             if o.class == Class::Ok {
                 false
             } else {

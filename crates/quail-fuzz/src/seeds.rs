@@ -521,9 +521,7 @@ pub fn pdf_seeds() -> Vec<Vec<u8>> {
     // incremental update changing the content
     {
         let mut base = page_pdf(b"BT /F1 12 Tf 72 700 Td (version 1) Tj ET", FONT, vec![]);
-        let prev = pdfgen::rfind(&base, b"\nxref\n")
-            .map(|p| p + 1)
-            .unwrap_or(0);
+        let prev = pdfgen::rfind(&base, b"\nxref\n").map_or(0, |p| p + 1);
         base.extend_from_slice(b"4 0 obj\n");
         base.extend_from_slice(&stream(
             b"BT /F1 12 Tf 72 700 Td (version 2 Verzija 2.0) Tj ET",

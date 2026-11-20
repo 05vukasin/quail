@@ -230,7 +230,11 @@ impl Report {
             },
             self.peak_kb,
             self.ms,
-            if self.slowest.is_empty() { "-" } else { &self.slowest },
+            if self.slowest.is_empty() {
+                "-"
+            } else {
+                &self.slowest
+            },
             feats.join(",")
         )
     }

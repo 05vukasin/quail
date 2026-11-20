@@ -45,9 +45,9 @@ impl WorkerOpts {
     }
 }
 
-/// CPU seconds this process has used (Linux; 0 elsewhere), rounded up.
+/// CPU seconds this process has used (Linux), rounded up.
+#[cfg(target_os = "linux")]
 fn cpu_used() -> u64 {
-    #[cfg(target_os = "linux")]
     if let Ok(s) = std::fs::read_to_string("/proc/self/stat") {
         // fields after the command name in parentheses; utime and stime are 14 and 15
         if let Some(rest) = s.rsplit_once(')').map(|x| x.1) {
