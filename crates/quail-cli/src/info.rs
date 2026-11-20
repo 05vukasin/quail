@@ -170,6 +170,9 @@ fn features() -> Vec<&'static str> {
     if cfg!(feature = "docx") {
         v.push("docx");
     }
+    if cfg!(feature = "text") {
+        v.push("text");
+    }
     if cfg!(feature = "zstd") {
         v.push("zstd");
     }
