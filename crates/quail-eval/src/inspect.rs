@@ -59,13 +59,9 @@ impl Default for TextFiles {
 pub fn text_document(text: String) -> Document {
     Document {
         pages: vec![Page {
-            index: 0,
-            kind: PageKind::Logical,
-            size: None,
             text,
-            blocks: vec![],
             text_source: TextSource::Native,
-            needs_ocr: false,
+            ..Page::new(0, PageKind::Logical)
         }],
     }
 }
