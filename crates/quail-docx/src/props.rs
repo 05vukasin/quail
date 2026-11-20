@@ -8,7 +8,7 @@ use quail_core::{Date, Emitter, FactKey, Value};
 use crate::keys;
 use crate::package::Package;
 use crate::rels::Rels;
-use crate::util::{MAX_LIST, clean};
+use crate::util::{MAX_LIST, Notes, clean};
 use crate::xml::{Ev, Flow, attr, attr_exact, name, on, val, walk};
 
 /// Facts gathered so far, emitted together at the end.
@@ -19,7 +19,7 @@ fn root_fields(
     pkg: &mut Package<'_>,
     part: &str,
     out: &Emitter,
-    warn: &mut Vec<String>,
+    warn: &mut Notes,
 ) -> Vec<(String, String)> {
     let mut fields = Vec::new();
     let Some(reader) = pkg.open_part(part) else {
@@ -57,7 +57,7 @@ fn root_fields(
         Flow::Go
     });
     if let Err(stop) = r {
-        warn.push(stop.describe(part));
+        warn.stop(&stop, part);
     }
     fields
 }
@@ -80,7 +80,7 @@ pub(crate) fn core(
     pkg: &mut Package<'_>,
     part: &str,
     out: &Emitter,
-    warn: &mut Vec<String>,
+    warn: &mut Notes,
     facts: &mut Facts,
 ) {
     for (n, v) in root_fields(pkg, part, out, warn) {
@@ -125,7 +125,7 @@ pub(crate) fn app(
     pkg: &mut Package<'_>,
     part: &str,
     out: &Emitter,
-    warn: &mut Vec<String>,
+    warn: &mut Notes,
     facts: &mut Facts,
 ) {
     for (n, v) in root_fields(pkg, part, out, warn) {
@@ -150,7 +150,7 @@ pub(crate) fn custom(
     pkg: &mut Package<'_>,
     part: &str,
     out: &Emitter,
-    warn: &mut Vec<String>,
+    warn: &mut Notes,
     facts: &mut Facts,
 ) {
     let Some(reader) = pkg.open_part(part) else {
@@ -200,7 +200,7 @@ pub(crate) fn custom(
         Flow::Go
     });
     if let Err(stop) = r {
-        warn.push(stop.describe(part));
+        warn.stop(&stop, part);
     }
     facts.push((keys::CUSTOM_PROPERTY_COUNT, Value::Int(count)));
     if !props.is_empty() {
@@ -259,7 +259,7 @@ pub(crate) fn settings(
     pkg: &mut Package<'_>,
     part: &str,
     out: &Emitter,
-    warn: &mut Vec<String>,
+    warn: &mut Notes,
     facts: &mut Facts,
 ) {
     let Some(reader) = pkg.open_part(part) else {
@@ -310,7 +310,7 @@ pub(crate) fn settings(
         Flow::Go
     });
     if let Err(stop) = r {
-        warn.push(stop.describe(part));
+        warn.stop(&stop, part);
     }
     if dropped > 0 {
         warn.push(format!(
@@ -349,7 +349,7 @@ pub(crate) fn main_content_type(
     pkg: &mut Package<'_>,
     main_part: &str,
     out: &Emitter,
-    warn: &mut Vec<String>,
+    warn: &mut Notes,
 ) -> Option<String> {
     let reader = pkg.open_part("[Content_Types].xml")?;
     let want = format!("/{}", main_part.trim_start_matches('/'));
@@ -365,7 +365,7 @@ pub(crate) fn main_content_type(
         Flow::Go
     });
     if let Err(stop) = r {
-        warn.push(stop.describe("[Content_Types].xml"));
+        warn.stop(&stop, "[Content_Types].xml");
     }
     found
 }
@@ -376,7 +376,7 @@ const ENTITY_NAME: &str = "PlaceholderLegalEntityName";
 /// The CLM placeholder form (`SciQuest` / Contract Express `sqph:contractplaceholders`) some
 /// contract platforms store in `customXml/item*.xml`: the filled legal-entity names of the
 /// First and Second Party. Unfilled `[[ ... ]]` placeholders are ignored.
-pub(crate) fn clm(pkg: &mut Package<'_>, out: &Emitter, warn: &mut Vec<String>, facts: &mut Facts) {
+pub(crate) fn clm(pkg: &mut Package<'_>, out: &Emitter, warn: &mut Notes, facts: &mut Facts) {
     let items: Vec<String> = pkg
         .names()
         .iter()
@@ -454,7 +454,7 @@ pub(crate) fn clm(pkg: &mut Package<'_>, out: &Emitter, warn: &mut Vec<String>, 
             Flow::Go
         });
         if let Err(stop) = r {
-            warn.push(stop.describe(&item));
+            warn.stop(&stop, &item);
         }
     }
     if let Some(v) = first {

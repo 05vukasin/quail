@@ -106,6 +106,39 @@ fn percent_lower(h: &str) -> String {
     h.to_lowercase()
 }
 
+/// What the extractor tells the record besides facts: warnings (notes about the file) and
+/// problems (it stopped short: a limit, the deadline, a broken part), which make the record
+/// partial.
+#[derive(Debug, Default)]
+pub(crate) struct Notes {
+    /// Warnings.
+    pub warnings: Vec<String>,
+    /// Problems.
+    pub problems: Vec<String>,
+}
+
+impl Notes {
+    /// A warning.
+    pub fn push(&mut self, msg: impl Into<String>) {
+        self.warnings.push(msg.into());
+    }
+
+    /// A problem: the result is partial.
+    pub fn problem(&mut self, msg: impl Into<String>) {
+        self.problems.push(msg.into());
+    }
+
+    /// A part ended early: always a problem.
+    pub fn stop(&mut self, stop: &crate::xml::Stop, part: &str) {
+        self.problem(stop.describe(part));
+    }
+
+    /// Moves warnings in.
+    pub fn append(&mut self, v: &mut Vec<String>) {
+        self.warnings.append(v);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

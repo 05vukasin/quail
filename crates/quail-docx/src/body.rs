@@ -18,7 +18,7 @@ use quail_core::{BlockKind, Emitter, Zone};
 use crate::numbering::{Counters, Numbering};
 use crate::package::Package;
 use crate::styles::Styles;
-use crate::util::Distinct;
+use crate::util::{Distinct, Notes};
 use crate::xml::{Ev, Flow, MAX_EVENT, Stop, attr, name, on, val, val_int, walk_with};
 
 /// Deepest field nesting tracked; deeper `begin`s are counted but not stacked.
@@ -192,7 +192,7 @@ pub(crate) fn parse_part(
     counters: &mut Counters,
     shared: &mut Shared,
     out: &Emitter,
-    warn: &mut Vec<String>,
+    warn: &mut Notes,
 ) -> (Parsed, Option<Stop>) {
     let Some(reader) = pkg.open_part(part) else {
         return (Parsed::default(), None);
@@ -257,7 +257,7 @@ pub(crate) fn parse_part(
             None
         }
         Err(s) => {
-            warn.push(s.describe(part));
+            warn.stop(&s, part);
             Some(s)
         }
     };

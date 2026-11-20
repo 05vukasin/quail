@@ -21,7 +21,10 @@ fn texts_of(doc: &Document) -> Vec<String> {
 fn run(bytes: Vec<u8>, limits: &Limits) -> (Document, Vec<String>, Emitter) {
     let (doc, out) = extract_with(bytes, limits);
     // Split off the warnings, keep the facts in an emitter for `fact()`.
-    let (facts, _, warnings) = out.into_parts();
+    let mut out = out;
+    let mut warnings = out.take_problems();
+    let (facts, _, w) = out.into_parts();
+    warnings.extend(w);
     let mut facts_only = Emitter::new(quail_docx::ID);
     for f in facts {
         facts_only.push(f.key, f.value, f.conf, f.evidence);
@@ -335,7 +338,7 @@ fn deadline_applies_inside_a_skipped_subtree() {
     let t = Instant::now();
     let _ = DocxExtractor.extract(&Blob::from(bytes), &Limits::default(), &mut out);
     let elapsed = t.elapsed();
-    let w = out.into_parts().2;
+    let w = problems(out);
     assert!(w.iter().any(|w| w.contains("deadline")), "{w:?}");
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
 }

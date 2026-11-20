@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use quail_core::Emitter;
 
 use crate::package::Package;
+use crate::util::Notes;
 use crate::xml::{Ev, Flow, attr, name, val, val_int, walk};
 
 /// Longest `w:basedOn` chain followed (also stops cycles).
@@ -33,7 +34,7 @@ pub(crate) struct Styles {
 
 impl Styles {
     /// Reads `part`; missing or broken parts give what could be read.
-    pub fn read(pkg: &mut Package<'_>, part: &str, out: &Emitter, warn: &mut Vec<String>) -> Self {
+    pub fn read(pkg: &mut Package<'_>, part: &str, out: &Emitter, warn: &mut Notes) -> Self {
         let mut s = Self::default();
         let Some(reader) = pkg.open_part(part) else {
             return s;
@@ -120,7 +121,7 @@ impl Styles {
             Flow::Go
         });
         if let Err(stop) = r {
-            warn.push(stop.describe(part));
+            warn.stop(&stop, part);
         }
         s.heading = s
             .map

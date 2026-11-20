@@ -15,7 +15,7 @@ use crate::package::Package;
 use crate::props::{self, Facts};
 use crate::rels::Rels;
 use crate::styles::Styles;
-use crate::util::{Distinct, link_domain};
+use crate::util::{Distinct, Notes, link_domain};
 use crate::xml::Stop;
 
 /// Largest text a page may hold (spans are `u32`).
@@ -32,7 +32,7 @@ pub(crate) fn run(
     bytes: &[u8],
     limits: &Limits,
     out: &Emitter,
-    warn: &mut Vec<String>,
+    warn: &mut Notes,
     facts: &mut Facts,
 ) -> Result<Document> {
     let mut pkg = Package::open(bytes, limits, out)?;
@@ -128,7 +128,7 @@ pub(crate) fn run(
     let notes = |pkg: &mut Package<'_>,
                  kind: &str,
                  shared: &mut Shared,
-                 warn: &mut Vec<String>,
+                 warn: &mut Notes,
                  timed_out: &mut bool,
                  domains: &mut Distinct|
      -> Option<Vec<Container>> {
@@ -265,7 +265,7 @@ pub(crate) fn run(
     let timed_out = asm.timed_out;
     drop(asm);
     if skipped > 0 {
-        warn.push(format!(
+        warn.problem(format!(
             "{skipped} sections beyond max_pages ({}) skipped",
             limits.max_pages
         ));
@@ -301,25 +301,25 @@ pub(crate) fn run(
         props::clm(&mut pkg, out, warn, facts);
     }
     if shared.truncated {
-        warn.push(format!(
+        warn.problem(format!(
             "text limit of {} bytes reached, rest of the text dropped",
             limits.max_text_bytes
         ));
     }
     if shared.sections_stopped {
-        warn.push(format!(
+        warn.problem(format!(
             "body reading stopped after max_pages ({}) sections",
             limits.max_pages
         ));
     }
     if shared.items_capped {
-        warn.push(format!(
+        warn.problem(format!(
             "more than {} blocks and references: the rest dropped",
             crate::body::MAX_ITEMS
         ));
     }
     if timed_out {
-        warn.push("deadline reached: document is partial".to_owned());
+        warn.problem("deadline reached: document is partial");
     }
     Ok(Document { pages })
 }
@@ -336,7 +336,7 @@ struct Assembler<'a, 'p> {
     numbering: &'a Numbering,
     shared: &'a mut Shared,
     out: &'a Emitter,
-    warn: &'a mut Vec<String>,
+    warn: &'a mut Notes,
     footnotes: &'a HashMap<String, String>,
     endnotes: &'a HashMap<String, String>,
     comments: &'a HashMap<String, String>,
@@ -430,13 +430,10 @@ impl Assembler<'_, '_> {
         self.running(&mut page, &refs.footers, Mode::Footer);
         let index = u32::try_from(self.pages.len()).unwrap_or(u32::MAX);
         self.pages.push(Page {
-            index,
-            kind: PageKind::Logical,
-            size: None,
             text: page.text,
             blocks: page.blocks,
             text_source: TextSource::Native,
-            needs_ocr: false,
+            ..Page::new(index, PageKind::Logical)
         });
     }
 

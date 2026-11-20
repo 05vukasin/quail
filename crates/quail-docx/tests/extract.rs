@@ -662,7 +662,7 @@ fn page_and_text_limits() {
     assert_eq!(doc.pages.len(), 2);
     // The body stops at the section limit.
     assert_eq!(fact(&out, "docx.sections"), Some(&Value::Int(2)));
-    assert!(warnings(out).iter().any(|w| w.contains("max_pages")));
+    assert!(problems(out).iter().any(|w| w.contains("max_pages")));
 
     let limits = Limits {
         max_text_bytes: 10,
@@ -673,7 +673,7 @@ fn page_and_text_limits() {
         &limits,
     );
     assert_eq!(doc.full_text(), "0123456789");
-    assert!(warnings(out).iter().any(|w| w.contains("text limit")));
+    assert!(problems(out).iter().any(|w| w.contains("text limit")));
 }
 
 #[test]

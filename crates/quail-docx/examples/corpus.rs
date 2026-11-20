@@ -54,6 +54,7 @@ fn main() {
     let mut errors: BTreeMap<String, usize> = BTreeMap::new();
     let mut warning_kinds: BTreeMap<String, usize> = BTreeMap::new();
     let mut key_files: BTreeMap<String, usize> = BTreeMap::new();
+    let mut partial = 0usize;
     let (mut ok, mut bytes, mut blocks, mut pages, mut text, mut warned, mut facts) =
         (0usize, 0u64, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut total = Duration::ZERO;
@@ -95,6 +96,9 @@ fn main() {
                 *key_files.entry(f.key.as_str().to_owned()).or_default() += 1;
             }
         }
+        if !out.take_problems().is_empty() {
+            partial += 1;
+        }
         let w = out.into_parts().2;
         if !w.is_empty() {
             warned += 1;
@@ -116,6 +120,7 @@ fn main() {
     println!("files            {}", files.len());
     println!("ok               {ok}");
     println!("errors           {errors:?}");
+    println!("partial          {partial}");
     println!("with warnings    {warned}");
     for (k, v) in &warning_kinds {
         println!("  {v:>5}  {k}");

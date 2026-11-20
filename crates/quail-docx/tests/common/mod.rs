@@ -198,9 +198,16 @@ pub fn texts(out: &Emitter, key: &str) -> Vec<String> {
     }
 }
 
-/// Warnings of a finished emitter.
-pub fn warnings(out: Emitter) -> Vec<String> {
-    out.into_parts().2
+/// Warnings and problems of a finished emitter (problems first).
+pub fn warnings(mut out: Emitter) -> Vec<String> {
+    let mut all = out.take_problems();
+    all.extend(out.into_parts().2);
+    all
+}
+
+/// Problems only (the record would be partial).
+pub fn problems(mut out: Emitter) -> Vec<String> {
+    out.take_problems()
 }
 
 /// `zip` with the entry `name` replaced by `data` (all entries stored).

@@ -26,27 +26,40 @@ DOCX extractor for quail: a streaming OOXML reader on `zip` (inflate only) and `
 
 | Source | Keys |
 |---|---|
-| `docProps/core.xml` | `title`, `subject`, `creator`, `last_modified_by`, `revision`, `created`, `modified`, `last_printed`, `keywords`, `category`, `description` |
+| `docProps/core.xml` | `title`, `subject`, `creator`, `last_modified_by`, `revision`, `created`, `modified`, `last_printed` (Dates), `keywords`, `category`, `description` |
 | `docProps/app.xml` | `application`, `app_version`, `company`, `manager`, `template`, `total_time`, `pages`, `words`, `characters`, `app_paragraphs` |
 | `docProps/custom.xml` | `custom_property_count`, `custom_property_names`, `custom_properties` (`name=value`) |
 | `word/settings.xml` | `rsids` (List of U64, file order), `rsid_root` (U64), `rsid_count`, `attached_template`, `track_revisions`, `protection` |
-| revisions, comments | `tracked_insertions`, `tracked_deletions`, `tracked_format_changes`, `revision_authors`, `comments`, `comment_authors` |
-| package | `has_macros`, `main_content_type`, `images`, `embedded_objects`, `hyperlink_domains`, `zip_entries` |
+| revisions, comments | `tracked_insertions`, `tracked_deletions`, `tracked_format_changes`, `revision_authors`, `deleted_text_chars`, `hidden_text_chars`, `comments`, `comment_authors` |
+| package | `has_macros`, `main_content_type`, `images`, `embedded_objects`, `hyperlink_domains`, `zip_entries`, `duplicate_entries` |
 | structure | `sections`, `paragraphs`, `tables`, `nested_tables`, `footnotes`, `endnotes`, `headers`, `footers` |
 | `customXml` CLM form | `clm_first_party`, `clm_second_party` |
 
-Dates are kept as written (W3CDTF text). rsids are accepted only as exactly 8 hex digits.
+Dates are the calendar date of the W3CDTF value (an unparsable one is a warning). rsids are
+accepted only as exactly 8 hex digits. Hidden runs (`w:vanish` on the run itself) are left out
+of the text and counted in `hidden_text_chars`.
 
 ## Limits
 
-- At most 20 000 zip entries; entries with absolute, `..`, drive-letter or backslash names are
-  ignored (warning).
-- The bytes each part **actually** inflates to are counted against `Limits::max_decompressed`
-  for the whole file; reading stops at the first byte over it. Declared sizes are never trusted.
-- `max_pages` caps sections, `max_text_bytes` caps text; the deadline is checked every 2048 XML
-  events and before each part.
-- Malformed XML or a broken entry ends that part only: partial document plus a warning.
-  Encrypted (OLE-wrapped) files return `Error::Encrypted`; a non-zip returns `Error::Malformed`.
+Stopping short at any limit is an `Emitter::problem` (the record becomes partial, the document
+is kept); notes about the file are warnings.
+
+| What | Limit |
+|---|---|
+| zip entries | 20 000, read from the EOCD / ZIP64 record before the directory is parsed (`LimitExceeded`) |
+| entry names | absolute, `..`, drive letter, backslash, control characters: ignored (warning); exact repeats: the last is read, case variants: the first (counted in `duplicate_entries`) |
+| inflated bytes | the bytes parts **actually** inflate to, against `max_decompressed` for the whole file; declared sizes never trusted |
+| one XML event | remaining text budget + 1 MiB, at most 17 MiB (a huge text node is not buffered whole) |
+| sections | `max_pages`: the body stops after that many section ends |
+| text | `max_text_bytes`: every byte of page text is charged, separators and numbering labels included (labels at most 32 chars) |
+| items | 250 000 blocks, references and section ends per file; then the part stops |
+| nesting | 64 paragraphs, 64 tables, 64 fields deep (deeper ones flattened, ends kept in sync) |
+| fields | a field still in its instruction part when its paragraph ends is abandoned (warning) |
+| lists, styles, rels | 20 000 lists, 20 000 styles, 50 000 relationships per part, 1 override per list level, 100 000 rsids |
+| deadline | checked every 2048 XML events (skipped subtrees included), before each part, per section and while opening the zip |
+
+Malformed XML or a broken entry ends that part only. Encrypted (OLE-wrapped) files return
+`Error::Encrypted`; a non-zip returns `Error::Malformed`.
 
 ## Development
 

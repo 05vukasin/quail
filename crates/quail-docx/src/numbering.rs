@@ -11,6 +11,7 @@ use quail_core::Emitter;
 
 use crate::package::Package;
 use crate::styles::Styles;
+use crate::util::Notes;
 use crate::xml::{Ev, Flow, attr, name, on, val, val_int, walk};
 
 /// Levels of a list.
@@ -119,7 +120,7 @@ impl Numbering {
         part: &str,
         styles: &Styles,
         out: &Emitter,
-        warn: &mut Vec<String>,
+        warn: &mut Notes,
     ) -> Self {
         let Some(reader) = pkg.open_part(part) else {
             return Self::default();
@@ -234,7 +235,7 @@ impl Numbering {
             Flow::Go
         });
         if let Err(stop) = r {
-            warn.push(stop.describe(part));
+            warn.stop(&stop, part);
         }
 
         let targets: HashMap<&str, &str> = nums

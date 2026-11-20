@@ -27,12 +27,15 @@
 //!
 //! # Limits
 //!
-//! Zip entry count (at most 20 000), unsafe entry names (absolute, `..`, drive letters,
-//! backslashes: ignored), and the bytes every part *actually* inflates to, counted against
-//! [`Limits::max_decompressed`](quail_core::Limits) for the whole file; declared sizes only
-//! ever make it refuse earlier. `max_pages` caps sections, `max_text_bytes` caps text. The
-//! deadline is checked every 2048 XML events. Malformed XML yields a partial document and a
-//! warning.
+//! Zip entry count (at most 20 000, read from the end-of-central-directory record before the
+//! directory is parsed), unsafe entry names (ignored), and the bytes every part *actually*
+//! inflates to, counted against [`Limits::max_decompressed`](quail_core::Limits) for the
+//! whole file; declared sizes are never trusted. `max_pages` stops the body after that many
+//! sections; `max_text_bytes` is charged for every byte of page text (labels and separators
+//! included); one XML event may not exceed the remaining text budget plus 1 MiB; at most
+//! 250 000 items per file. The deadline is checked every 2048 XML events, skipped subtrees
+//! included. Stopping short is reported with `Emitter::problem`; malformed XML ends only its
+//! part.
 
 mod body;
 mod extract;
@@ -71,14 +74,18 @@ impl Extractor for DocxExtractor {
     }
 
     fn extract(&self, blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> {
-        let mut warnings = Vec::new();
+        let mut notes = util::Notes::default();
         let mut facts = Vec::new();
-        let result = extract::run(blob.as_bytes(), limits, out, &mut warnings, &mut facts);
+        let result = extract::run(blob.as_bytes(), limits, out, &mut notes, &mut facts);
         for (k, v) in facts {
             out.fact(k, v);
         }
-        for w in warnings {
+        for w in notes.warnings {
             out.warn(w);
+        }
+        // Stopped short (a limit, the deadline, a broken part): the record becomes partial.
+        for p in notes.problems {
+            out.problem(p);
         }
         result
     }

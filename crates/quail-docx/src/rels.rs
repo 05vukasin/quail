@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use quail_core::Emitter;
 
 use crate::package::{Package, resolve_target};
+use crate::util::Notes;
 use crate::xml::{Ev, Flow, attr_exact, name, walk};
 
 /// One relationship of a source part.
@@ -33,12 +34,7 @@ const MAX_RELS: usize = 50_000;
 
 impl Rels {
     /// Reads the relationships of `source` (`""` for the package itself).
-    pub fn read(
-        pkg: &mut Package<'_>,
-        source: &str,
-        out: &Emitter,
-        warn: &mut Vec<String>,
-    ) -> Self {
+    pub fn read(pkg: &mut Package<'_>, source: &str, out: &Emitter, warn: &mut Notes) -> Self {
         let rels_name = match source.rsplit_once('/') {
             Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
             None if source.is_empty() => "_rels/.rels".to_owned(),
@@ -68,7 +64,7 @@ impl Rels {
                 Flow::Go
             });
             if let Err(stop) = r {
-                warn.push(stop.describe(&rels_name));
+                warn.stop(&stop, &rels_name);
             }
         }
         let mut by_id = HashMap::with_capacity(list.len());
