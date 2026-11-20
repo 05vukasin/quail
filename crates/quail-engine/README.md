@@ -73,6 +73,7 @@ preempted inside a thread; process isolation is the service's job.
 | `stop_on_sink_error`  | true                    | first sink error stops pulling                      |
 | `cancel`              | none                    | `Arc<AtomicBool>`: stop pulling, drain, return      |
 | `stack_size`          | 32 MiB                  | worker stacks: deep recursion on hostile nesting would abort the process |
+| `on_artifacts`        | none                    | `Arc<dyn Fn(&FileRecord, &Artifacts)>` per processed file, on the worker (see below) |
 
 Workers are std threads; one writer thread owns the sink; `crossbeam-channel` in between.
 The reader learns of freed slots from the writer and wakes every 20 ms, so it notices
@@ -87,7 +88,22 @@ pulled file is in memory before the byte budget can refuse it.
 
 `RunStats`: files, bytes, ok/partial/failed, source errors / error records / panics, sink
 errors and the first one, unwritten, stopped_on_sink_error, cancelled, stalls,
-writer_panicked, elapsed, `files_per_sec()`, `mb_per_sec()`.
+writer_panicked, hook panics and the first one, elapsed, `files_per_sec()`, `mb_per_sec()`.
+
+## Getting artifacts out
+
+A record carries facts only; the artifacts (the extracted `Document`, a page raster, ...) are
+dropped when the file is done. To keep them without registering an analyzer (which would
+appear in `steps`):
+
+- one file: `Engine::process_with(item, |record, artifacts| ..)` returns the same record as
+  `process` and calls the closure first, on the calling thread (a panic in it is the
+  caller's and is not caught);
+- a run: `RunOptions::on_artifacts`, called on the worker thread for every processed file,
+  concurrently and in completion order, before the artifacts are dropped. It is not called
+  for the `Failed` records of source errors. A panic in it is caught and counted in
+  `RunStats::hook_panics` (first message in `first_hook_panic`); the record is still
+  written. `quail scan --dump-documents` uses it.
 
 ## Overhead
 
