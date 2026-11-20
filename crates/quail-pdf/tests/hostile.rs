@@ -811,17 +811,50 @@ fn rotated_text_is_grouped_along_its_baseline() {
 
 #[test]
 fn two_column_page_reads_by_column() {
+    // Two text columns, each with two paragraphs; the right column's baselines are offset
+    // (different leading), as in real columns.
     let mut c = b"BT /F1 10 Tf".to_vec();
-    for (i, y) in [700, 688, 640, 628].iter().enumerate() {
-        c.extend_from_slice(format!(" 1 0 0 1 72 {y} Tm (left {i}) Tj").as_bytes());
-        c.extend_from_slice(format!(" 1 0 0 1 330 {y} Tm (right {i}) Tj").as_bytes());
+    for (i, y) in [700, 688, 676, 628, 616, 604].iter().enumerate() {
+        c.extend_from_slice(
+            format!(" 1 0 0 1 40 {y} Tm (left {i} lorem ipsum dolor sit amet consectetur) Tj")
+                .as_bytes(),
+        );
+        c.extend_from_slice(
+            format!(
+                " 1 0 0 1 320 {} Tm (right {i} lorem ipsum dolor sit amet consectetur) Tj",
+                y - 5
+            )
+            .as_bytes(),
+        );
     }
     c.extend_from_slice(b" ET");
     let r = run(page_pdf(&c, FONT, vec![]), &Limits::default());
     let doc = r.doc.expect("doc");
     let t = &doc.pages[0].text;
     let pos = |s: &str| t.find(s).expect(s);
-    assert!(pos("left 3") < pos("right 0"), "{t:?}");
+    assert!(pos("left 5") < pos("right 0"), "{t:?}");
+}
+
+#[test]
+fn two_column_table_reads_by_row() {
+    // The same geometry on shared baselines is a table: its row groups (split at the gap)
+    // are read in order, not the whole left column first. (Stacked cells still merge into a
+    // paragraph block per column inside a group; table detection is not done yet.)
+    let mut c = b"BT /F1 10 Tf".to_vec();
+    for (i, y) in [700, 688, 676, 628, 616, 604].iter().enumerate() {
+        c.extend_from_slice(
+            format!(" 1 0 0 1 40 {y} Tm (label {i} lorem ipsum dolor sit amet) Tj").as_bytes(),
+        );
+        c.extend_from_slice(
+            format!(" 1 0 0 1 320 {y} Tm (value {i} lorem ipsum dolor sit amet) Tj").as_bytes(),
+        );
+    }
+    c.extend_from_slice(b" ET");
+    let r = run(page_pdf(&c, FONT, vec![]), &Limits::default());
+    let doc = r.doc.expect("doc");
+    let t = &doc.pages[0].text;
+    let pos = |s: &str| t.find(s).expect(s);
+    assert!(pos("value 2") < pos("label 3"), "{t:?}");
 }
 
 fn scan_pdf(cm: &str) -> Vec<u8> {
