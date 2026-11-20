@@ -39,19 +39,19 @@ fn bench(c: &mut Criterion) {
         b.iter(|| minhash::text_minhash(black_box(&raw)));
     });
     g.bench_function("simhash_text", |b| {
-        b.iter(|| simhash::text_simhash(black_box(&norm)))
+        b.iter(|| simhash::text_simhash(black_box(&norm)));
     });
     g.bench_function("simhash_template", |b| {
         b.iter(|| template::template_simhash(black_box(&norm)));
     });
     g.bench_function("invoice_layout", |b| {
-        b.iter(|| invoice::features(black_box(&raw)))
+        b.iter(|| invoice::features(black_box(&raw)));
     });
     g.bench_function("sada raw_minhash", |b| {
-        b.iter(|| sada::raw_minhash(black_box(&raw)))
+        b.iter(|| sada::raw_minhash(black_box(&raw)));
     });
     g.bench_function("sada template_fp", |b| {
-        b.iter(|| sada::template_fp(black_box(&raw)))
+        b.iter(|| sada::template_fp(black_box(&raw)));
     });
     g.finish();
 }
