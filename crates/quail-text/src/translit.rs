@@ -32,11 +32,11 @@
 //!    word with a Latin letter outside the Serbian alphabet (`q w x y`, `ä ö ü ß é ...`) is
 //!    copied unchanged, so `Windows` or `Exxon` survive. A foreign word spelled only with
 //!    Serbian letters (`Microsoft`) cannot be told apart and is converted.
-//! 4. **Roman numerals and acronyms stay Latin** ([`LatinToCyrillic::keep_roman`],
-//!    [`LatinToCyrillic::keep_acronyms`], on by default): all-caps words made of
-//!    `I V X L C D M` (`IV`, `XII`; a lone `I` is the conjunction and converts), and all-caps
-//!    words of 2–6 letters without a vowel (`PDV`, `JMBG`). All-caps words with vowels
-//!    (`UGOVOR`) convert.
+//! 4. **Roman numerals stay Latin** ([`LatinToCyrillic::keep_roman`], on by default):
+//!    all-caps words made of `I V X L C D M` (`IV`, `XII`; a lone `I` is the conjunction and
+//!    converts). Acronyms convert, as standard Serbian Cyrillic writes them (`PDV → ПДВ`);
+//!    [`LatinToCyrillic::keep_acronyms`] (off by default) keeps all-caps words of 2–6
+//!    letters without a vowel (`PDV`, `JMBG`) Latin instead.
 //! 5. **ASCII-ized text is not repaired.** `dj`, `c`, `s`, `z` written for `đ`, `č/ć`, `š`,
 //!    `ž` are converted as written (`dj → дј`); the transliterator does not guess.
 //!
@@ -225,8 +225,7 @@ pub struct LatinToCyrillic {
     /// Keep all-caps Roman numerals (`IV`, `XII`, `MCMXC`) Latin (default `true`).
     pub keep_roman: bool,
     /// Keep all-caps acronyms without a vowel (`PDV`, `JMBG`, `SFRJ`, 2–6 letters) Latin
-    /// (default `true`). Serbian Cyrillic style writes them in Cyrillic (`ПДВ`); turn this
-    /// off for that.
+    /// (default `false`: standard Serbian Cyrillic writes them in Cyrillic, `ПДВ`).
     pub keep_acronyms: bool,
 }
 
@@ -236,7 +235,7 @@ impl Default for LatinToCyrillic {
             keep_foreign: true,
             exceptions: true,
             keep_roman: true,
-            keep_acronyms: true,
+            keep_acronyms: false,
         }
     }
 }
@@ -248,7 +247,7 @@ impl Default for LatinToCyrillic {
 /// assert_eq!(latin_to_cyrillic("Ljubljana, NJIVA, džep"), "Љубљана, ЊИВА, џеп");
 /// assert_eq!(
 ///     latin_to_cyrillic("nadživeti Windows, član IV, PDV"),
-///     "надживети Windows, члан IV, PDV"
+///     "надживети Windows, члан IV, ПДВ"
 /// );
 /// ```
 pub fn latin_to_cyrillic(text: &str) -> Cow<'_, str> {
@@ -520,15 +519,22 @@ mod tests {
         );
         assert_eq!(
             latin_to_cyrillic("Član IV i VI, glava MCMXC, PDV i JMBG, UGOVOR"),
-            "Члан IV и VI, глава MCMXC, PDV и JMBG, УГОВОР"
+            "Члан IV и VI, глава MCMXC, ПДВ и ЈМБГ, УГОВОР"
         );
         assert_eq!(latin_to_cyrillic("I tako"), "И тако");
         let plain = LatinToCyrillic {
             keep_roman: false,
-            keep_acronyms: false,
             ..LatinToCyrillic::default()
         };
         assert_eq!(latin_to_cyrillic_with("IV PDV", plain), "ИВ ПДВ");
+        let acronyms = LatinToCyrillic {
+            keep_acronyms: true,
+            ..LatinToCyrillic::default()
+        };
+        assert_eq!(
+            latin_to_cyrillic_with("IV PDV UGOVOR", acronyms),
+            "IV PDV УГОВОР"
+        );
         let all = LatinToCyrillic {
             keep_foreign: false,
             ..LatinToCyrillic::default()

@@ -8,7 +8,7 @@ Text utilities every text analyzer builds on, plus two text-level analyzers. Nam
 |---|---|
 | `normalize` | NFKC, invisible/control characters removed, quotes and dashes folded, whitespace collapsed, `ugo-\nvor → ugovor` (real hyphens only, never dashes); `Cow` result, `normalize_into` buffer reuse, `normalize_mapped` + `OffsetMap` in both directions (normalized ⇄ source spans) |
 | `fold` | matching keys: lowercase, diacritics off (`đ → dj` or `d`), Serbian Cyrillic → Latin; `fold_into` never allocates beyond the caller's buffer |
-| `translit` | exact Serbian Cyrillic ⇄ Latin, linear; documented Latin→Cyrillic policy (greedy digraphs + exception list; foreign words, Roman numerals and vowel-less acronyms kept Latin); `cyrillic_to_latin_chars` streams |
+| `translit` | exact Serbian Cyrillic ⇄ Latin, linear; documented Latin→Cyrillic policy (greedy digraphs + exception list; foreign words and Roman numerals kept Latin, acronyms converted (`PDV → ПДВ`) unless `keep_acronyms`); `cyrillic_to_latin_chars` streams |
 | `script` | Latin / Cyrillic / Greek / other letter counts and ratios |
 | `token` | UAX #29 tokens with byte spans, linear time; kinds `Word Number Alnum Url Email Punct Symbol`; `114/23`, `2023-05-12`, `1.200,50`, `1 200 000,00`, spaced IBANs, `+381`, `C++`, URLs and e-mail addresses kept whole; `keyed_tokens` adds a folded key per token from one reused buffer |
 | `shingle` | word shingles and char n-grams as **stable** XXH3-64 hashes (fixed seed, pinned by tests) |
