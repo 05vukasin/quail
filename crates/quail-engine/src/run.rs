@@ -2,17 +2,28 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender, bounded};
-use quail_core::{FileRecord, RecordSink, SCHEMA_VERSION, Source, SourceItem, Status};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
+use quail_core::{FileRecord, RecordSink, Source, SourceItem, Status};
 
-use crate::engine::Engine;
+use crate::engine::{Engine, failed_record};
 use crate::panic::contain;
 
+/// How often blocked loops wake up to look at cancellation, stop and liveness.
+const TICK: Duration = Duration::from_millis(20);
+
+/// Default worker stack: 32 MiB.
+pub const DEFAULT_STACK_SIZE: usize = 32 << 20;
+
+/// Default byte budget of files in flight: 1 GiB.
+pub const DEFAULT_MAX_IN_FLIGHT_BYTES: u64 = 1 << 30;
+
 /// How [`Engine::run`] schedules work.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct RunOptions {
     /// Worker threads. `0` is treated as 1.
     pub threads: usize,
@@ -20,14 +31,33 @@ pub struct RunOptions {
     /// at most this many blobs (and records waiting for the writer) exist at once. `0` is
     /// treated as 1.
     pub max_in_flight: usize,
+    /// Bytes of files in flight, at most: no new file is dispatched while the files in
+    /// flight plus it would exceed this, except that one file bigger than the budget may go
+    /// alone. The source still reads one file ahead, so it should cap file size itself
+    /// (`quail-io`'s `max_file_bytes`, set from [`Limits::max_bytes`](quail_core::Limits)).
+    pub max_in_flight_bytes: u64,
     /// Write records in source order. Records that finish early wait in a reorder buffer,
-    /// which `max_in_flight` bounds too.
+    /// bounded by `max_in_flight`. One slow file holds back every record after it (and,
+    /// once the buffer is full, the whole run) until it finishes; such waits longer than
+    /// twice [`Limits::timeout`](quail_core::Limits) are counted in [`RunStats::stalls`].
     pub ordered: bool,
+    /// Stop pulling new files after the first sink error (broken pipe, full disk). Records
+    /// already in flight are dropped and counted in [`RunStats::unwritten`].
+    pub stop_on_sink_error: bool,
+    /// Set to `true` from anywhere to stop: no new file is pulled, files in flight are
+    /// finished and written, and the run returns with [`RunStats::cancelled`].
+    pub cancel: Option<Arc<AtomicBool>>,
+    /// Stack size of each worker thread. Parsers of nested formats (PDF objects, XML) recurse,
+    /// and a hostile file can nest deeply; a stack overflow aborts the whole process and
+    /// cannot be caught like a panic, so workers get a large stack. It is virtual memory,
+    /// committed only as it is used.
+    pub stack_size: usize,
 }
 
 impl Default for RunOptions {
-    /// `available_parallelism - 1` workers (at least 1), two files in flight per worker,
-    /// unordered.
+    /// `available_parallelism - 1` workers (at least 1), two files and at most
+    /// [`DEFAULT_MAX_IN_FLIGHT_BYTES`] in flight, unordered, stop on sink error,
+    /// [`DEFAULT_STACK_SIZE`] stacks.
     fn default() -> Self {
         let threads = thread::available_parallelism()
             .map_or(1, |n| n.get().saturating_sub(1))
@@ -35,7 +65,11 @@ impl Default for RunOptions {
         Self {
             threads,
             max_in_flight: threads * 2,
+            max_in_flight_bytes: DEFAULT_MAX_IN_FLIGHT_BYTES,
             ordered: false,
+            stop_on_sink_error: true,
+            cancel: None,
+            stack_size: DEFAULT_STACK_SIZE,
         }
     }
 }
@@ -43,7 +77,7 @@ impl Default for RunOptions {
 /// What a run did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RunStats {
-    /// Records written (or attempted) to the sink.
+    /// Records produced (written, failed to write, or unwritten after a stop).
     pub files: u64,
     /// Sum of their sizes.
     pub bytes: u64,
@@ -51,14 +85,29 @@ pub struct RunStats {
     pub ok: u64,
     /// Records with [`Status::Partial`].
     pub partial: u64,
-    /// Records with [`Status::Failed`].
+    /// Records with [`Status::Failed`] (including those for source errors).
     pub failed: u64,
-    /// Items the source could not produce (skipped, no record).
+    /// Items the source could not produce (errors and panics).
     pub source_errors: u64,
+    /// Source errors that carried a locator and got a `Failed` record.
+    pub source_error_records: u64,
+    /// Source panics (also counted in `source_errors`).
+    pub source_panics: u64,
     /// Failed sink writes (including `finish`).
     pub sink_errors: u64,
     /// The first sink error, for the log.
     pub first_sink_error: Option<String>,
+    /// Records not written because the run stopped on a sink error.
+    pub unwritten: u64,
+    /// The run stopped early because of a sink error.
+    pub stopped_on_sink_error: bool,
+    /// The run stopped early because [`RunOptions::cancel`] was set.
+    pub cancelled: bool,
+    /// Ordered mode: times the head record held back finished ones for over twice the
+    /// file timeout.
+    pub stalls: u64,
+    /// The writer thread died (a bug); counts above are those it reached.
+    pub writer_panicked: bool,
     /// Wall time of the run.
     pub elapsed: Duration,
 }
@@ -106,18 +155,116 @@ impl fmt::Display for RunStats {
                 self.source_errors, self.sink_errors
             )?;
         }
+        if self.cancelled {
+            f.write_str("; cancelled")?;
+        }
+        if self.stopped_on_sink_error {
+            f.write_str("; stopped on sink error")?;
+        }
         Ok(())
     }
+}
+
+/// A finished file on its way to the writer.
+struct Done {
+    seq: u64,
+    bytes: u64,
+    record: FileRecord,
+}
+
+/// Sends a `Failed` record for its item if the worker unwinds before sending the real one,
+/// so ordered mode never waits for a sequence number that will not come.
+struct Guard<'a> {
+    seq: u64,
+    size: u64,
+    locator: Option<String>,
+    tx: &'a Sender<Done>,
+}
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        if let Some(locator) = self.locator.take() {
+            let _ = self.tx.send(Done {
+                seq: self.seq,
+                bytes: self.size,
+                record: failed_record(locator, self.size, "engine: worker died".to_owned()),
+            });
+        }
+    }
+}
+
+/// The reader's view of what is in flight, fed by the writer's "freed" messages.
+struct Gate<'a> {
+    freed: &'a Receiver<u64>,
+    items: usize,
+    bytes: u64,
+}
+
+enum Wait {
+    Ready,
+    Stopped,
+    WriterGone,
+}
+
+impl Gate<'_> {
+    fn free(&mut self, bytes: u64) {
+        self.items = self.items.saturating_sub(1);
+        self.bytes = self.bytes.saturating_sub(bytes);
+    }
+
+    fn wait(&mut self, ready: impl Fn(usize, u64) -> bool, stop: &dyn Fn() -> bool) -> Wait {
+        loop {
+            while let Ok(b) = self.freed.try_recv() {
+                self.free(b);
+            }
+            if ready(self.items, self.bytes) {
+                return Wait::Ready;
+            }
+            if stop() {
+                return Wait::Stopped;
+            }
+            match self.freed.recv_timeout(TICK) {
+                Ok(b) => self.free(b),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Wait::WriterGone,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WriterCfg {
+    ordered: bool,
+    stop_on_sink_error: bool,
+    quiet: bool,
+    stall_after: Duration,
+}
+
+#[derive(Default)]
+struct Shared {
+    stats: Mutex<RunStats>,
+    /// Set by the writer on a sink error when `stop_on_sink_error`.
+    stop: AtomicBool,
 }
 
 impl Engine {
     /// Processes every item of `source` on `opts.threads` workers and writes each record to
     /// `sink` from a single writer thread, then calls [`RecordSink::finish`].
     ///
-    /// Backpressure: the source is pulled only when one of `opts.max_in_flight` slots is
-    /// free, and a slot is freed only when its record has been written. So at most
-    /// `max_in_flight` blobs or pending records exist at any time, however fast the source.
-    /// Source errors skip the item; sink errors are counted and the run continues.
+    /// Backpressure: the source is pulled only when fewer than `opts.max_in_flight` files
+    /// (and fewer than `opts.max_in_flight_bytes` bytes) are between the source and the
+    /// sink; a file stops counting once its record is written. So memory is bounded
+    /// however fast the source is.
+    ///
+    /// Source errors skip the item; one that carries a locator ([`quail_core::Error::at`])
+    /// still gets a `Failed` record. A panicking source counts as an error item. Sink errors
+    /// are counted and, with `stop_on_sink_error`, end the run early. Nothing here blocks
+    /// forever if a thread dies: the reader notices a dead writer, and a worker that dies
+    /// still delivers a `Failed` record for its file.
+    ///
+    /// # Panics
+    ///
+    /// If the operating system cannot create the worker or writer threads.
     pub fn run(
         &self,
         source: &mut dyn Source,
@@ -127,124 +274,271 @@ impl Engine {
         let started = Instant::now();
         let threads = opts.threads.max(1);
         let slots = opts.max_in_flight.max(1);
-        let ordered = opts.ordered;
+        let budget = opts.max_in_flight_bytes.max(1);
+        let quiet = self.is_quiet();
+        let cfg = WriterCfg {
+            ordered: opts.ordered,
+            stop_on_sink_error: opts.stop_on_sink_error,
+            quiet,
+            stall_after: self.limits().timeout.saturating_mul(2),
+        };
+        let shared = Shared::default();
+        let cancel = opts.cancel.as_deref();
+        let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
 
-        let (slot_tx, slot_rx) = bounded::<()>(slots);
-        for _ in 0..slots {
-            let _ = slot_tx.send(());
-        }
         let (work_tx, work_rx) = bounded::<(u64, SourceItem)>(slots);
-        let (done_tx, done_rx) = bounded::<(u64, FileRecord)>(slots);
+        let (done_tx, done_rx) = bounded::<Done>(slots);
+        let (freed_tx, freed_rx) = unbounded::<u64>();
 
-        let mut stats = thread::scope(|s| {
-            for _ in 0..threads {
+        let mut counts = SourceCounts::default();
+        let mut was_cancelled = false;
+
+        let writer_ok = thread::scope(|s| {
+            for i in 0..threads {
                 let rx = work_rx.clone();
                 let tx = done_tx.clone();
-                s.spawn(move || {
-                    for (seq, item) in rx {
-                        if tx.send((seq, self.process_contained(item))).is_err() {
-                            break;
-                        }
-                    }
-                });
+                thread::Builder::new()
+                    .name(format!("quail-worker-{i}"))
+                    .stack_size(opts.stack_size)
+                    .spawn_scoped(s, move || self.work(&rx, &tx))
+                    .expect("spawn worker thread");
             }
             drop(work_rx);
-            drop(done_tx);
-            let writer_slots = slot_tx.clone();
-            let quiet = self.is_quiet();
-            let writer = s.spawn(move || write_all(sink, &done_rx, &writer_slots, ordered, quiet));
+            let shared = &shared;
+            // The writer owns its channel ends, so if it dies the reader sees `freed`
+            // disconnect and the workers see `done` disconnect.
+            let writer = thread::Builder::new()
+                .name("quail-writer".to_owned())
+                .spawn_scoped(s, move || write_all(sink, &done_rx, &freed_tx, shared, cfg))
+                .expect("spawn writer thread");
 
-            let mut seq = 0u64;
-            let mut source_errors = 0u64;
-            while slot_rx.recv().is_ok() {
-                match source.next_item() {
-                    None => break,
-                    Some(Err(_)) => {
-                        source_errors += 1;
-                        let _ = slot_tx.send(());
-                    }
-                    Some(Ok(item)) => {
-                        if work_tx.send((seq, item)).is_err() {
-                            break;
-                        }
-                        seq += 1;
-                    }
-                }
-            }
+            let stop_now = || cancelled() || shared.stop.load(Ordering::Relaxed);
+            let mut gate = Gate {
+                freed: &freed_rx,
+                items: 0,
+                bytes: 0,
+            };
+            let reader = Reader {
+                work: &work_tx,
+                done: &done_tx,
+                slots,
+                budget,
+                quiet,
+            };
+            counts = reader.read_all(source, &mut gate, &stop_now);
+            was_cancelled = cancelled();
             drop(work_tx);
-            let mut stats = writer.join().unwrap_or_default();
-            stats.source_errors = source_errors;
-            stats
+            drop(done_tx);
+            writer.join().is_ok()
         });
+
+        let mut stats = shared
+            .stats
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
+        stats.writer_panicked = !writer_ok;
+        stats.source_errors = counts.errors;
+        stats.source_error_records = counts.error_records;
+        stats.source_panics = counts.panics;
+        stats.cancelled = was_cancelled;
         stats.elapsed = started.elapsed();
         stats
     }
 
-    /// `process`, plus a last-resort net for a bug in the engine itself: the file still
-    /// gets a (failed) record and the run goes on.
-    fn process_contained(&self, item: SourceItem) -> FileRecord {
-        let locator = item.locator.clone();
-        let size = item.blob.len() as u64;
-        contain(self.is_quiet(), || self.process(item)).unwrap_or_else(|e| FileRecord {
-            schema: SCHEMA_VERSION,
-            locator,
-            size,
-            format: quail_core::Format::Unknown,
-            pages: None,
-            facts: Vec::new(),
-            steps: Vec::new(),
-            timings: Vec::new(),
-            status: Status::Failed {
-                error: format!("engine: {e}"),
-            },
-        })
+    fn work(&self, rx: &Receiver<(u64, SourceItem)>, tx: &Sender<Done>) {
+        for (seq, item) in rx {
+            let size = item.blob.len() as u64;
+            let mut guard = Guard {
+                seq,
+                size,
+                locator: Some(item.locator.clone()),
+                tx,
+            };
+            // Last-resort net for a bug in the engine itself: the file still gets a record.
+            let record = match contain(self.is_quiet(), || self.process(item)) {
+                Ok(r) => r,
+                Err(e) => failed_record(
+                    guard.locator.take().unwrap_or_default(),
+                    size,
+                    format!("engine: {e}"),
+                ),
+            };
+            guard.locator = None;
+            if tx
+                .send(Done {
+                    seq,
+                    bytes: size,
+                    record,
+                })
+                .is_err()
+            {
+                break;
+            }
+        }
     }
 }
 
-/// The single writer: reorders if asked, writes, frees a slot per record.
+#[derive(Default)]
+struct SourceCounts {
+    errors: u64,
+    error_records: u64,
+    panics: u64,
+}
+
+/// The pulling side of a run (on the caller's thread, since the source is `&mut`).
+struct Reader<'a> {
+    work: &'a Sender<(u64, SourceItem)>,
+    done: &'a Sender<Done>,
+    slots: usize,
+    budget: u64,
+    quiet: bool,
+}
+
+impl Reader<'_> {
+    fn read_all(
+        &self,
+        source: &mut dyn Source,
+        gate: &mut Gate<'_>,
+        stop_now: &dyn Fn() -> bool,
+    ) -> SourceCounts {
+        let mut counts = SourceCounts::default();
+        let mut seq = 0u64;
+        loop {
+            if stop_now() {
+                break;
+            }
+            match gate.wait(|items, _| items < self.slots, stop_now) {
+                Wait::Ready => {}
+                Wait::Stopped | Wait::WriterGone => break,
+            }
+            let item = match contain(self.quiet, || source.next_item()) {
+                Ok(None) => break,
+                Ok(Some(Ok(item))) => item,
+                Ok(Some(Err(e))) => {
+                    counts.errors += 1;
+                    if let Some(locator) = e.locator() {
+                        let record = failed_record(locator.to_owned(), 0, format!("source: {e}"));
+                        gate.items += 1;
+                        let done = Done {
+                            seq,
+                            bytes: 0,
+                            record,
+                        };
+                        if self.done.send(done).is_err() {
+                            break;
+                        }
+                        seq += 1;
+                        counts.error_records += 1;
+                    }
+                    continue;
+                }
+                Err(_) => {
+                    counts.errors += 1;
+                    counts.panics += 1;
+                    continue;
+                }
+            };
+            let size = item.blob.len() as u64;
+            // Room for its bytes; a file bigger than the budget goes alone. Cancellation does
+            // not interrupt this wait: the file is already read, so it is processed.
+            let budget = self.budget;
+            let fits =
+                |items: usize, bytes: u64| items == 0 || bytes.saturating_add(size) <= budget;
+            if let Wait::WriterGone = gate.wait(fits, &|| false) {
+                break;
+            }
+            gate.items += 1;
+            gate.bytes += size;
+            if self.work.send((seq, item)).is_err() {
+                break;
+            }
+            seq += 1;
+        }
+        counts
+    }
+}
+
+/// The single writer: reorders if asked, writes, reports each freed slot to the reader.
 fn write_all(
     sink: &mut dyn RecordSink,
-    done: &Receiver<(u64, FileRecord)>,
-    slots: &Sender<()>,
-    ordered: bool,
-    quiet: bool,
-) -> RunStats {
-    let mut stats = RunStats::default();
-    let mut pending: BTreeMap<u64, FileRecord> = BTreeMap::new();
-    let mut next = 0u64;
-    let mut write = |r: &FileRecord, stats: &mut RunStats| {
-        stats.files += 1;
-        stats.bytes += r.size;
-        match r.status {
-            Status::Ok => stats.ok += 1,
-            Status::Partial { .. } => stats.partial += 1,
-            Status::Failed { .. } => stats.failed += 1,
+    done: &Receiver<Done>,
+    freed: &Sender<u64>,
+    shared: &Shared,
+    cfg: WriterCfg,
+) {
+    let lock = || shared.stats.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut emit = |d: Done| {
+        {
+            let mut st = lock();
+            let r = &d.record;
+            st.files += 1;
+            st.bytes += r.size;
+            match r.status {
+                Status::Ok => st.ok += 1,
+                Status::Partial { .. } => st.partial += 1,
+                Status::Failed { .. } => st.failed += 1,
+            }
+            if st.stopped_on_sink_error {
+                st.unwritten += 1;
+            } else if let Err(e) = contain(cfg.quiet, || sink.write(r)).and_then(|x| x) {
+                st.sink_errors += 1;
+                st.first_sink_error.get_or_insert_with(|| e.to_string());
+                if cfg.stop_on_sink_error {
+                    st.stopped_on_sink_error = true;
+                    shared.stop.store(true, Ordering::Relaxed);
+                }
+            }
         }
-        let res = contain(quiet, || sink.write(r)).and_then(|r| r);
-        if let Err(e) = res {
-            stats.sink_errors += 1;
-            stats.first_sink_error.get_or_insert_with(|| e.to_string());
-        }
-        let _ = slots.send(());
+        let _ = freed.send(d.bytes);
     };
-    for (seq, rec) in done {
-        if !ordered {
-            write(&rec, &mut stats);
+
+    let mut pending: BTreeMap<u64, Done> = BTreeMap::new();
+    let mut next = 0u64;
+    let mut head_since = Instant::now();
+    let mut head_flagged = false;
+    loop {
+        let msg = if cfg.ordered {
+            match done.recv_timeout(TICK) {
+                Ok(d) => Some(d),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match done.recv() {
+                Ok(d) => Some(d),
+                Err(_) => break,
+            }
+        };
+        let Some(d) = msg else {
+            if !head_flagged && !pending.is_empty() && head_since.elapsed() > cfg.stall_after {
+                lock().stalls += 1;
+                head_flagged = true;
+            }
+            continue;
+        };
+        if !cfg.ordered {
+            emit(d);
             continue;
         }
-        pending.insert(seq, rec);
-        while let Some(rec) = pending.remove(&next) {
-            write(&rec, &mut stats);
+        pending.insert(d.seq, d);
+        while let Some(d) = pending.remove(&next) {
+            emit(d);
             next += 1;
+            head_since = Instant::now();
+            head_flagged = false;
+        }
+        if !head_flagged && !pending.is_empty() && head_since.elapsed() > cfg.stall_after {
+            lock().stalls += 1;
+            head_flagged = true;
         }
     }
-    // Only reachable with gaps if a worker died; write what is left in order.
-    for rec in pending.into_values() {
-        write(&rec, &mut stats);
+    // Gaps are impossible (every dispatched item yields a record), but never lose records.
+    for d in pending.into_values() {
+        emit(d);
     }
-    if let Err(e) = contain(quiet, || sink.finish()).and_then(|r| r) {
-        stats.sink_errors += 1;
-        stats.first_sink_error.get_or_insert_with(|| e.to_string());
+    if let Err(e) = contain(cfg.quiet, || sink.finish()).and_then(|r| r) {
+        let mut st = lock();
+        st.sink_errors += 1;
+        st.first_sink_error.get_or_insert_with(|| e.to_string());
     }
-    stats
 }

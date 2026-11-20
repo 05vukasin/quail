@@ -34,7 +34,7 @@ pub mod sniff;
 pub use builder::{BUILTIN_ARTIFACTS, BuildError, EngineBuilder};
 pub use engine::{Engine, SNIFF_ID};
 pub use panic::install_quiet_panic_hook;
-pub use run::{RunOptions, RunStats};
+pub use run::{DEFAULT_MAX_IN_FLIGHT_BYTES, DEFAULT_STACK_SIZE, RunOptions, RunStats};
 pub use sniff::{Sniff, detect, sniff};
 
 /// Fact keys emitted by the engine.
