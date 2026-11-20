@@ -81,6 +81,27 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "Document language with top candidates (lingua + sr/hr/bs layer).",
     },
+    #[cfg(feature = "signals")]
+    StepDoc {
+        id: quail_signals::SignalScan::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Identifiers with check digits, dates with roles, amounts, contact domains.",
+    },
+    #[cfg(feature = "refs")]
+    StepDoc {
+        id: quail_refs::RefAnalyzer::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Own document numbers, cited documents, title, instrument kind, page/version markers.",
+    },
+    #[cfg(feature = "parties")]
+    StepDoc {
+        id: quail_parties::PartyCandidates::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Company mentions with roles and defined terms, ranked candidates, name statements.",
+    },
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
@@ -100,6 +121,13 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     let b = b
         .analyzer(Box::new(quail_text::TextStats))
         .analyzer(Box::new(quail_text::TextLang::new()));
+    #[cfg(feature = "signals")]
+    let b = b.analyzer(Box::new(quail_signals::SignalScan));
+    // Compiles its patterns once; shared by every worker.
+    #[cfg(feature = "refs")]
+    let b = b.analyzer(Box::new(quail_refs::RefAnalyzer::new()));
+    #[cfg(feature = "parties")]
+    let b = b.analyzer(Box::new(quail_parties::PartyCandidates));
     b
 }
 
@@ -115,6 +143,12 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     // TODO(quail-pdf #7): v.push(("quail-pdf", keydocs::PDF));
     #[cfg(feature = "text")]
     v.push(("quail-text", keydocs::TEXT));
+    #[cfg(feature = "signals")]
+    v.push(("quail-signals", keydocs::SIGNALS));
+    #[cfg(feature = "refs")]
+    v.push(("quail-refs", keydocs::REFS));
+    #[cfg(feature = "parties")]
+    v.push(("quail-parties", keydocs::PARTIES));
     v
 }
 
@@ -157,6 +191,12 @@ mod tests {
             ("quail-docx", "quail-docx/src/keys.rs"),
             #[cfg(feature = "text")]
             ("quail-text", "quail-text/src/lib.rs"),
+            #[cfg(feature = "signals")]
+            ("quail-signals", "quail-signals/src/lib.rs"),
+            #[cfg(feature = "refs")]
+            ("quail-refs", "quail-refs/src/lib.rs"),
+            #[cfg(feature = "parties")]
+            ("quail-parties", "quail-parties/src/lib.rs"),
         ];
         let tables = key_tables();
         for (krate, file) in sources {

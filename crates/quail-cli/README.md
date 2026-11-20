@@ -74,7 +74,9 @@ quail inspect scan.pdf --json --text  # {"record": .., "document": ..}
 
 Facts are grouped by namespace and show value, `conf` (when below 1), `src` and evidence
 (`p3 header [10..42] box(72,40,300,58)`). Long text is cut at 160 characters, lists at 8
-items. Exit code 1 for a `failed` record.
+items. Records print as `{field=value ...}` (`party.company`, `ref.doc_number`, `ref.cites`);
+a list of records (`party.candidates`) prints one record per line under its key. Floats show
+at most four decimals. Exit code 1 for a `failed` record.
 
 ## keys
 
@@ -107,7 +109,10 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | (always) | quail-engine, quail-hash | `engine.sniff@1`, `hash.identity@1` |
 | `docx` (default) | quail-docx | `docx.extract@1` |
 | `pdf` | quail-pdf | `pdf.extract@1` — to wire in when #7 merges |
-| `text` | quail-text | `text.stats@1`, `text.lang@1` — to wire in when #6 merges |
+| `text` (default) | quail-text | `text.stats@1`, `text.lang@1` |
+| `signals` (default) | quail-signals | `signal.scan@1` |
+| `refs` (default) | quail-refs | `ref.references@1` |
+| `parties` (default) | quail-parties | `party.candidates@1` |
 | `zstd` | (quail-io) | `--zstd` output |
 
 Key docs (`src/keydocs.rs`) are generated from each crate's `keys` module by

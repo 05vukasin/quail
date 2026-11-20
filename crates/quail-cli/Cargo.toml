@@ -12,11 +12,14 @@ name = "quail"
 path = "src/main.rs"
 
 [features]
-default = ["docx", "text"]
+default = ["docx", "text", "signals", "refs", "parties"]
 # Extractors and analyzers wired in by `registry.rs`, one feature per crate.
 docx = ["dep:quail-docx"]
 # TODO(quail-pdf #7): pdf = ["dep:quail-pdf"]
 text = ["dep:quail-text"]
+signals = ["dep:quail-signals"]
+refs = ["dep:quail-refs"]
+parties = ["dep:quail-parties"]
 # zstd-compressed output (`--zstd`). Links the C zstd library, so it is not in the default build.
 zstd = ["quail-io/zstd"]
 
@@ -27,6 +30,9 @@ quail-io = { path = "../quail-io" }
 quail-hash = { path = "../quail-hash" }
 quail-docx = { path = "../quail-docx", optional = true }
 quail-text = { path = "../quail-text", optional = true }
+quail-signals = { path = "../quail-signals", optional = true }
+quail-refs = { path = "../quail-refs", optional = true }
+quail-parties = { path = "../quail-parties", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 clap = { version = "4.6", features = ["derive"] }

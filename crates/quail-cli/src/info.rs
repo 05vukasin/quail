@@ -173,6 +173,15 @@ fn features() -> Vec<&'static str> {
     if cfg!(feature = "text") {
         v.push("text");
     }
+    if cfg!(feature = "signals") {
+        v.push("signals");
+    }
+    if cfg!(feature = "refs") {
+        v.push("refs");
+    }
+    if cfg!(feature = "parties") {
+        v.push("parties");
+    }
     if cfg!(feature = "zstd") {
         v.push("zstd");
     }
