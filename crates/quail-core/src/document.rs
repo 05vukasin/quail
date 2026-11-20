@@ -84,7 +84,18 @@ pub struct Block {
     pub bbox: Option<BBox>,
 }
 
-/// One page of a document.
+/// An image placed on a page.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PageImage {
+    /// Where it is drawn, in points.
+    pub bbox: BBox,
+    /// Its pixel size as stored in the file.
+    pub pixels: (u32, u32),
+}
+
+/// One page of a document. Build it with struct update syntax over [`Page::new`] so that
+/// fields added later do not break extractors:
+/// `Page { text, blocks, ..Page::new(index, PageKind::Physical) }`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Page {
     /// Zero-based index.
@@ -101,6 +112,35 @@ pub struct Page {
     pub text_source: TextSource,
     /// The text layer is missing or unusable and the page should be OCR'd.
     pub needs_ocr: bool,
+    /// Images drawn on the page (scans, logos, stamps, signatures).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PageImage>,
+    /// Share of the page area covered by images, in [0, 1].
+    #[serde(default)]
+    pub image_coverage: f32,
+}
+
+impl Page {
+    /// An empty page with no text and no images.
+    pub fn new(index: u32, kind: PageKind) -> Self {
+        Self {
+            index,
+            kind,
+            size: None,
+            text: String::new(),
+            blocks: Vec::new(),
+            text_source: TextSource::None,
+            needs_ocr: false,
+            images: Vec::new(),
+            image_coverage: 0.0,
+        }
+    }
+
+    /// True when the page is a single image covering most of it (a scan): OCR can take the
+    /// embedded image instead of rendering the page.
+    pub fn is_scan(&self) -> bool {
+        self.images.len() == 1 && self.image_coverage >= 0.85
+    }
 }
 
 /// What an extractor makes of a file. File-level properties (producer, author, ...) are

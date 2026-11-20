@@ -90,6 +90,7 @@ pub struct Emitter {
     facts: Vec<Fact>,
     artifacts: Artifacts,
     warnings: Vec<String>,
+    problems: Vec<String>,
     deadline: Option<Instant>,
 }
 
@@ -101,6 +102,7 @@ impl Emitter {
             facts: Vec::new(),
             artifacts: Artifacts::new(),
             warnings: Vec::new(),
+            problems: Vec::new(),
             deadline: None,
         }
     }
@@ -147,6 +149,18 @@ impl Emitter {
     /// Records a non-fatal problem (e.g. "page 7 has a broken font, text skipped").
     pub fn warn(&mut self, msg: impl Into<String>) {
         self.warnings.push(msg.into());
+    }
+
+    /// Records that the step did not finish its job (stopped at a limit or the deadline, skipped
+    /// a broken page...) while still returning a valid partial result. Unlike a warning this
+    /// makes the file's record `Partial`.
+    pub fn problem(&mut self, msg: impl Into<String>) {
+        self.problems.push(msg.into());
+    }
+
+    /// Takes the problems recorded so far (used by the engine).
+    pub fn take_problems(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.problems)
     }
 
     /// Who is emitting.
