@@ -1,11 +1,15 @@
 //! [`PageRaster`] for PDF, on hayro: renders pages, or decodes a page's single embedded scan.
 //!
-//! [`PdfRaster`] holds only the file's [`Blob`] (shared, not copied) and re-parses the xref
-//! per call. Parsing is cheap next to rendering, and it keeps the artifact's memory bounded by
-//! the file itself for as long as the file's artifacts live.
+//! [`PdfRaster`] shares the file's [`Blob`] and keeps one parsed document behind a mutex, so
+//! OCR over many pages parses the file once, not once per page. Every call gets a fresh decode
+//! budget (`max_decompressed`, images up to `max_render_pixels`), and the parsed document is
+//! dropped once the bytes decoded since it was opened pass [`REOPEN_AFTER_BYTES`], because
+//! hayro caches each page's decoded content for the life of the parse. Memory held by the
+//! artifact is thus the file itself plus that bounded cache.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{PixmapSettings, RenderCache, RenderSettings};
@@ -16,46 +20,92 @@ use hayro_interpret::{
     BlendMode, ClipPath, Context, Device, DrawMode, DrawProps, Image as HImage, ImageData,
     ImageDrawProps, InterpreterCache, InterpreterSettings, SoftMask, interpret_page,
 };
-use hayro_syntax::{DecryptionError, LoadPdfError, Pdf, PdfData};
+use hayro_syntax::Pdf;
+use hayro_syntax::budget::DecodeBudget;
+use hayro_syntax::page::Page as HPage;
 use quail_core::{Blob, Error, Format, Image, Limits, PageRaster, Result};
 
-use crate::budget::Budget;
-use crate::extract::{BlobBytes, panic_msg};
+use crate::device::{Abort, Clock, DryRun, Watchdog};
+use crate::extract::REOPEN_AFTER_BYTES;
+use crate::open::{Caught, caught, open, panic_msg};
 
 /// Highest DPI [`PdfRaster::render`] accepts.
 pub const MAX_DPI: f32 = 1200.0;
+/// Share of the page an image must cover to count as the page's scan.
+pub const SCAN_COVERAGE: f64 = 0.98;
 
 /// Renders the pages of one PDF. Built by [`PdfExtractor`](crate::PdfExtractor) and provided
 /// as the [`Raster`](quail_core::Raster) artifact; usable directly too.
-#[derive(Clone, Debug)]
 pub struct PdfRaster {
     blob: Blob,
+    state: Mutex<State>,
+}
+
+struct State {
+    budget: Arc<DecodeBudget>,
+    pdf: Option<Pdf>,
+    decoded_since_open: u64,
+}
+
+impl std::fmt::Debug for PdfRaster {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PdfRaster")
+            .field("len", &self.blob.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PdfRaster {
-    /// A raster over the PDF in `blob`.
+    /// A raster over the PDF in `blob`. Nothing is parsed until the first call.
     pub fn new(blob: Blob) -> Self {
-        Self { blob }
-    }
-
-    fn open(&self) -> Result<Pdf> {
-        let data = PdfData::from(Arc::new(BlobBytes(self.blob.clone())));
-        match catch_unwind(AssertUnwindSafe(|| Pdf::new(data))) {
-            Ok(Ok(pdf)) => Ok(pdf),
-            Ok(Err(LoadPdfError::Decryption(DecryptionError::PasswordProtected))) => {
-                Err(Error::Encrypted)
-            }
-            Ok(Err(_)) => Err(Error::Malformed {
-                format: Format::Pdf,
-                msg: "cannot open for rendering".to_owned(),
+        Self {
+            blob,
+            state: Mutex::new(State {
+                budget: Arc::new(DecodeBudget::new(0, 0)),
+                pdf: None,
+                decoded_since_open: 0,
             }),
-            Err(p) => Err(Error::Panic(format!("pdf parser: {}", panic_msg(&*p)))),
         }
     }
-}
 
-fn page_error(page: u32) -> Error {
-    Error::Other(format!("page {page} does not exist"))
+    /// Runs `f` on page `page` of the parsed document under a fresh budget for `limits`.
+    fn with_page<T>(
+        &self,
+        page: u32,
+        limits: &Limits,
+        f: impl FnOnce(&HPage<'_>, &DecodeBudget) -> Result<T>,
+    ) -> Result<T> {
+        if page >= limits.max_pages {
+            return Err(Error::LimitExceeded("max_pages"));
+        }
+        let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        st.budget
+            .reset(limits.max_decompressed, limits.max_render_pixels);
+        if st.pdf.is_none() {
+            st.pdf = Some(open(&self.blob, &st.budget)?);
+            st.decoded_since_open = 0;
+        }
+        let budget = st.budget.clone();
+        let result = match st.pdf.as_ref() {
+            Some(pdf) => {
+                let pages = pdf.pages();
+                match pages.get(usize::try_from(page).unwrap_or(usize::MAX)) {
+                    Some(p) => f(p, &budget),
+                    None => Err(Error::Other(format!("page {page} does not exist"))),
+                }
+            }
+            None => Err(Error::Other("document not open".to_owned())),
+        };
+        st.decoded_since_open = st
+            .decoded_since_open
+            .saturating_add(limits.max_decompressed.saturating_sub(budget.remaining()));
+        // After an unwind out of hayro, or past the cache margin, start from a fresh parse.
+        let unwound = matches!(&result, Err(Error::Panic(_) | Error::Timeout));
+        if unwound || st.decoded_since_open > REOPEN_AFTER_BYTES {
+            st.pdf = None;
+        }
+        result
+    }
 }
 
 /// Luma from premultiplied RGBA over an opaque white background.
@@ -63,134 +113,163 @@ fn to_gray(rgba: &[u8]) -> Vec<u8> {
     rgba.chunks_exact(4)
         .map(|p| {
             let (r, g, b) = (u32::from(p[0]), u32::from(p[1]), u32::from(p[2]));
-            // `min` keeps the cast lossless.
             u8::try_from(((299 * r + 587 * g + 114 * b) / 1000).min(255)).unwrap_or(u8::MAX)
         })
         .collect()
 }
 
+fn unwind_error(p: &(dyn std::any::Any + Send), what: &str) -> Error {
+    match caught(p) {
+        Caught::Abort(Abort::Deadline) => Error::Timeout,
+        Caught::Abort(Abort::TooManyCalls) => Error::LimitExceeded("draw operations per page"),
+        Caught::Panic(m) => Error::Panic(format!("{what}: {m}")),
+    }
+}
+
+/// Interprets the page with a device that only counts, so that a page whose drawing fans out
+/// (forms, Type3 glyphs) or runs past the deadline is refused before the expensive render.
+fn dry_run(p: &HPage<'_>, deadline: Instant) -> Result<()> {
+    let (w, h) = p.render_dimensions();
+    catch_unwind(AssertUnwindSafe(|| {
+        let cache = InterpreterCache::new();
+        let mut ctx = Context::new(
+            p.initial_transform(true).to_kurbo(),
+            Rect::new(0.0, 0.0, f64::from(w), f64::from(h)),
+            &cache,
+            p.xref(),
+            InterpreterSettings::default(),
+        );
+        let mut dev = DryRun(Watchdog::new(Clock::Until(deadline)));
+        interpret_page(p, &mut ctx, &mut dev);
+    }))
+    .map_err(|e| unwind_error(&*e, "dry run"))
+}
+
 impl PageRaster for PdfRaster {
-    /// Renders to 8-bit gray (`channels == 1`) on white. Fails with
-    /// `LimitExceeded("max_render_pixels")` before allocating when the page at `dpi` is too
-    /// big, and with `LimitExceeded("max_decompressed")` when its streams or images would
-    /// inflate past the budget.
+    /// Renders to 8-bit gray (`channels == 1`) on white. Refuses, before allocating:
+    /// - a page index at or past `limits.max_pages` (`LimitExceeded("max_pages")`);
+    /// - a canvas over `limits.max_render_pixels` or hayro's 65 535 px per side
+    ///   (`LimitExceeded("max_render_pixels")`);
+    /// - a page whose drawing exceeds the per-page draw-call cap or `limits.timeout`, found by a
+    ///   counting dry run;
+    /// - a page with a stream or image over `max_decompressed` / `max_render_pixels`
+    ///   (`LimitExceeded("max_decompressed")`): a render with images missing would mislead OCR.
     fn render(&self, page: u32, dpi: f32, limits: &Limits) -> Result<Image> {
         if !(dpi.is_finite() && dpi > 0.0 && dpi <= MAX_DPI) {
             return Err(Error::Other(format!("dpi {dpi} outside (0, {MAX_DPI}]")));
         }
-        let pdf = self.open()?;
-        let pages = pdf.pages();
-        let p = pages
-            .get(usize::try_from(page).unwrap_or(usize::MAX))
-            .ok_or_else(|| page_error(page))?;
-        let (w, h) = p.render_dimensions();
-        let scale = dpi / 72.0;
-        let (pw, ph) = ((w * scale).ceil(), (h * scale).ceil());
-        if !(pw.is_finite() && ph.is_finite() && pw >= 1.0 && ph >= 1.0) {
-            return Err(Error::Malformed {
-                format: Format::Pdf,
-                msg: format!("page {page} has no area"),
-            });
-        }
-        // hayro's canvas is u16 per side.
-        let max_side = f32::from(u16::MAX);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let pixels = u64::from(pw.min(max_side) as u32) * u64::from(ph.min(max_side) as u32);
-        if pw > max_side || ph > max_side || pixels > limits.max_render_pixels {
-            return Err(Error::LimitExceeded("max_render_pixels"));
-        }
-        let mut budget = Budget::new(limits.max_decompressed, self.blob.len());
-        if !(budget.charge_page(p) && budget.charge_images(p)) {
-            return Err(Error::LimitExceeded("max_decompressed"));
-        }
-        let rendered = catch_unwind(AssertUnwindSafe(|| {
-            let cache = RenderCache::new();
-            hayro::render(
-                p,
-                &cache,
-                &InterpreterSettings::default(),
-                &RenderSettings::default(),
-                &PixmapSettings {
-                    x_scale: scale,
-                    y_scale: scale,
-                    bg_color: WHITE,
-                },
-            )
-        }));
-        let pixmap = rendered.map_err(|e| Error::Panic(format!("renderer: {}", panic_msg(&*e))))?;
-        Ok(Image {
-            width: u32::from(pixmap.width()),
-            height: u32::from(pixmap.height()),
-            channels: 1,
-            data: to_gray(pixmap.data_as_u8_slice()),
+        let deadline = Instant::now() + limits.timeout;
+        self.with_page(page, limits, |p, budget| {
+            let (w, h) = p.render_dimensions();
+            let scale = dpi / 72.0;
+            let (pw, ph) = ((w * scale).ceil(), (h * scale).ceil());
+            if !(pw.is_finite() && ph.is_finite() && pw >= 1.0 && ph >= 1.0) {
+                return Err(Error::Malformed {
+                    format: Format::Pdf,
+                    msg: format!("page {page} has no area"),
+                });
+            }
+            let max_side = f32::from(u16::MAX);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pixels = u64::from(pw.min(max_side) as u32) * u64::from(ph.min(max_side) as u32);
+            if pw > max_side || ph > max_side || pixels > limits.max_render_pixels {
+                return Err(Error::LimitExceeded("max_render_pixels"));
+            }
+            dry_run(p, deadline)?;
+            let pixmap = catch_unwind(AssertUnwindSafe(|| {
+                let cache = RenderCache::new();
+                hayro::render(
+                    p,
+                    &cache,
+                    &InterpreterSettings::default(),
+                    &RenderSettings::default(),
+                    &PixmapSettings {
+                        x_scale: scale,
+                        y_scale: scale,
+                        bg_color: WHITE,
+                    },
+                )
+            }))
+            .map_err(|e| Error::Panic(format!("renderer: {}", panic_msg(&*e))))?;
+            if budget.take_limit_hit() {
+                return Err(Error::LimitExceeded("max_decompressed"));
+            }
+            Ok(Image {
+                width: u32::from(pixmap.width()),
+                height: u32::from(pixmap.height()),
+                channels: 1,
+                data: to_gray(pixmap.data_as_u8_slice()),
+            })
         })
     }
 
-    /// The single image of a scanned page, decoded as stored (1 or 3 channels). `None` when the
-    /// page does not hold exactly one image, or when that image is rotated or mirrored on the
-    /// page (then rendering gives the upright page). Image masks come back as gray, ink dark.
+    /// The single image of a scanned page, decoded as stored (1 or 3 channels). `None` unless
+    /// the page draws exactly one image, upright (a positive scale from pixels to the page, so
+    /// OCR can map pixel boxes to page boxes by scaling), covering at least [`SCAN_COVERAGE`]
+    /// of the page; rendering is the fallback for everything else. Image masks come back as
+    /// gray, ink dark.
     fn embedded_scan(&self, page: u32, limits: &Limits) -> Option<Result<Image>> {
-        let pdf = match self.open() {
-            Ok(p) => p,
-            Err(e) => return Some(Err(e)),
-        };
-        let pages = pdf.pages();
-        let Some(p) = pages.get(usize::try_from(page).unwrap_or(usize::MAX)) else {
-            return Some(Err(page_error(page)));
-        };
-        let mut budget = Budget::new(limits.max_decompressed, self.blob.len());
-        if !(budget.charge_page(p) && budget.charge_images(p)) {
-            return Some(Err(Error::LimitExceeded("max_decompressed")));
-        }
-        let (w, h) = p.render_dimensions();
-        let found = catch_unwind(AssertUnwindSafe(|| {
-            let cache = InterpreterCache::new();
-            let mut ctx = Context::new(
-                p.initial_transform(true).to_kurbo(),
-                Rect::new(0.0, 0.0, f64::from(w), f64::from(h)),
-                &cache,
-                p.xref(),
-                InterpreterSettings::default(),
-            );
-            let mut dev = ScanDevice {
-                max_pixels: limits.max_render_pixels,
-                ..ScanDevice::default()
-            };
-            interpret_page(p, &mut ctx, &mut dev);
-            dev
-        }));
-        let dev = match found {
-            Ok(d) => d,
-            Err(e) => return Some(Err(Error::Panic(format!("scan: {}", panic_msg(&*e))))),
-        };
-        if dev.images != 1 {
-            return None;
-        }
-        match dev.result {
-            Some(Ok(img)) => Some(Ok(img)),
-            Some(Err(e)) => Some(Err(e)),
-            None => None,
+        let deadline = Instant::now() + limits.timeout;
+        let found = self.with_page(page, limits, |p, budget| {
+            let (w, h) = p.render_dimensions();
+            let dev = catch_unwind(AssertUnwindSafe(|| {
+                let cache = InterpreterCache::new();
+                let mut ctx = Context::new(
+                    p.initial_transform(true).to_kurbo(),
+                    Rect::new(0.0, 0.0, f64::from(w), f64::from(h)),
+                    &cache,
+                    p.xref(),
+                    InterpreterSettings::default(),
+                );
+                let mut dev = ScanDevice {
+                    page: Rect::new(0.0, 0.0, f64::from(w), f64::from(h)),
+                    images: 0,
+                    result: None,
+                    watchdog: Watchdog::new(Clock::Until(deadline)),
+                };
+                interpret_page(p, &mut ctx, &mut dev);
+                (dev.images, dev.result)
+            }))
+            .map_err(|e| unwind_error(&*e, "scan"))?;
+            if budget.take_limit_hit() {
+                return Err(Error::LimitExceeded("max_decompressed"));
+            }
+            Ok(dev)
+        });
+        match found {
+            Err(e) => Some(Err(e)),
+            Ok((1, Some(img))) => Some(Ok(img)),
+            Ok(_) => None,
         }
     }
 }
 
-/// Decodes the first image drawn, if it is upright, and counts the rest.
-#[derive(Default)]
-struct ScanDevice {
+/// Decodes the first image drawn when it is upright and covers the page; counts the rest.
+struct ScanDevice<'e> {
+    page: Rect,
     images: usize,
-    max_pixels: u64,
-    result: Option<Result<Image>>,
+    result: Option<Image>,
+    watchdog: Watchdog<'e>,
 }
 
-impl<'a> Device<'a> for ScanDevice {
-    fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {}
-    fn push_clip_path(&mut self, _: &ClipPath) {}
-    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
-    fn draw_glyph_run(&mut self, _: &GlyphRun<'_, 'a>, _: DrawProps<'a>, _: &DrawMode) {}
+impl<'a> Device<'a> for ScanDevice<'_> {
+    fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {
+        self.watchdog.tick();
+    }
+    fn push_clip_path(&mut self, _: &ClipPath) {
+        self.watchdog.nest();
+    }
+    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {
+        self.watchdog.nest();
+    }
+    fn draw_glyph_run(&mut self, _: &GlyphRun<'_, 'a>, _: DrawProps<'a>, _: &DrawMode) {
+        self.watchdog.tick();
+    }
     fn pop_clip(&mut self) {}
     fn pop_transparency_group(&mut self) {}
 
     fn draw_image(&mut self, image: HImage<'a, '_>, props: ImageDrawProps<'a>) {
+        self.watchdog.tick();
         self.images += 1;
         if self.images > 1 {
             self.result = None;
@@ -202,10 +281,17 @@ impl<'a> Device<'a> for ScanDevice {
         if !(sx > 0.0 && sy > 0.0 && shy.abs() <= eps && shx.abs() <= eps) {
             return;
         }
-        if u64::from(image.width()) * u64::from(image.height()) > self.max_pixels {
-            self.result = Some(Err(Error::LimitExceeded("max_render_pixels")));
+        let (iw, ih) = (image.width(), image.height());
+        let placed = props
+            .transform
+            .transform_rect_bbox(Rect::new(0.0, 0.0, f64::from(iw), f64::from(ih)))
+            .intersect(self.page);
+        let page_area = self.page.area();
+        if !(page_area > 0.0 && placed.area() / page_area >= SCAN_COVERAGE) {
             return;
         }
+        // Decoding goes through the file's budget: pixels and bytes are capped by the
+        // vendored decoders before anything is allocated.
         let mut out: Option<Image> = None;
         match &image {
             HImage::Raster(raster) => raster.with_rgba(
@@ -240,7 +326,11 @@ impl<'a> Device<'a> for ScanDevice {
                 None,
             ),
         }
-        self.result = out.map(Ok);
+        self.result = out;
+    }
+
+    fn draw_rect(&mut self, _: &Rect, _: DrawProps<'a>, _: &DrawMode) {
+        self.watchdog.tick();
     }
 }
 
@@ -252,5 +342,11 @@ mod tests {
     fn gray_conversion() {
         assert_eq!(to_gray(&[255, 255, 255, 255, 0, 0, 0, 255]), [255, 0]);
         assert!(to_gray(&[1, 2]).is_empty());
+    }
+
+    #[test]
+    fn raster_is_send_and_sync() {
+        fn check<T: Send + Sync>() {}
+        check::<PdfRaster>();
     }
 }

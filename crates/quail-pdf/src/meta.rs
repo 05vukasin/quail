@@ -117,7 +117,8 @@ fn walk_field(
         out.form_fields += 1;
         if ft == Some("Sig") {
             out.signature_fields += 1;
-            if f.contains_key(b"V") {
+            // A signature value is a dictionary; `/V null` (or anything else) is unsigned.
+            if f.get::<Dict<'_>>(b"V").is_some() {
                 out.signed_fields += 1;
             }
         }
@@ -185,6 +186,24 @@ pub(crate) fn to_date(d: &DateTime) -> Option<Date> {
         m: d.month,
         d: d.day,
     })
+}
+
+/// The date's offset from UTC as `+hh:mm`/`-hh:mm`, when it has a non-zero one. A zero offset
+/// is not reported: a PDF date written with `Z` and one written without any zone cannot be told
+/// apart after parsing.
+pub(crate) fn utc_offset(d: &DateTime) -> Option<String> {
+    if d.utc_offset_hour == 0 && d.utc_offset_minute == 0 {
+        return None;
+    }
+    if d.utc_offset_hour.unsigned_abs() > 14 || d.utc_offset_minute > 59 {
+        return None;
+    }
+    let sign = if d.utc_offset_hour < 0 { '-' } else { '+' };
+    Some(format!(
+        "{sign}{:02}:{:02}",
+        d.utc_offset_hour.unsigned_abs(),
+        d.utc_offset_minute
+    ))
 }
 
 /// Decodes a PDF text string: UTF-16BE or UTF-8 with a BOM, else `PDFDocEncoding`. Control

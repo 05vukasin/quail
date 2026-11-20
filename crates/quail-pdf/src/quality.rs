@@ -14,6 +14,9 @@ const MOSTLY_IMAGE: f32 = 0.6;
 const MAX_GARBAGE: f32 = 0.35;
 /// Paths above which a page without text likely has its text drawn as outlines.
 const OUTLINED_TEXT_PATHS: usize = 200;
+/// Images covering less than this share of a text-less page (logos, 1-px spacers) do not
+/// make it an OCR candidate.
+const MIN_SCAN_COVERAGE: f32 = 0.2;
 
 /// The measurements the verdict is based on.
 #[derive(Clone, Copy, Debug, Default)]
@@ -53,7 +56,7 @@ pub(crate) fn judge(s: &Signals) -> Verdict {
     let garbage = s.garbage.max(unmapped_share);
     let has_text = s.chars >= MIN_TEXT_CHARS;
     let mostly_image = s.images > 0 && s.image_coverage >= MOSTLY_IMAGE;
-    let image_only = s.images > 0 && !has_text && s.image_coverage >= 0.2;
+    let image_only = s.images > 0 && !has_text && s.image_coverage >= MIN_SCAN_COVERAGE;
 
     if has_text && garbage > MAX_GARBAGE {
         return Verdict {
@@ -65,7 +68,9 @@ pub(crate) fn judge(s: &Signals) -> Verdict {
     let needs_ocr = if has_text {
         mostly_image && s.chars < SCAN_MAX_TEXT_CHARS
     } else {
-        s.images > 0 || s.paths >= OUTLINED_TEXT_PATHS || s.unmapped >= MIN_TEXT_CHARS
+        (s.images > 0 && s.image_coverage >= MIN_SCAN_COVERAGE)
+            || s.paths >= OUTLINED_TEXT_PATHS
+            || s.unmapped >= MIN_TEXT_CHARS
     };
     Verdict {
         keep_text: has_text || s.chars > 0,
@@ -129,6 +134,13 @@ mod tests {
         assert!(!judge(&ocrd).needs_ocr);
         let blank = Signals::default();
         assert!(!judge(&blank).needs_ocr);
+        // A logo on an otherwise empty page is not a scan.
+        let logo = Signals {
+            images: 1,
+            image_coverage: 0.02,
+            ..Signals::default()
+        };
+        assert!(!judge(&logo).needs_ocr && !judge(&logo).image_only);
         let garbage = Signals {
             chars: 500,
             garbage: 0.9,

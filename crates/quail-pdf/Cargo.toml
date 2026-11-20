@@ -11,14 +11,14 @@ rust-version.workspace = true
 quail-core.workspace = true
 # Pure-Rust PDF parser (xref repair, object streams, RC4/AES decryption) and content-stream
 # interpreter. The same stack renders pages (crate `hayro`) for OCR later.
-hayro-syntax = "0.9.0"
-hayro-interpret = "0.9.0"
+hayro-syntax = "=0.9.0"
+hayro-interpret = "=0.9.0"
 # Renderer behind the `PageRaster` the extractor provides (same interpreter as above).
-hayro = "0.9.0"
-# Bounded inflate for the `max_decompressed` guard.
-miniz_oxide = "0.8.9"
+hayro = "=0.9.0"
 
 [dev-dependencies]
+# Builds compressed bombs for the hostile-input tests.
+miniz_oxide = "0.8.9"
 # Writes the synthetic PDFs the tests and the bench run on.
 lopdf = { version = "0.47.0", default-features = false }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

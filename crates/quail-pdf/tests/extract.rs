@@ -426,8 +426,15 @@ fn decompression_bomb_is_stopped() {
         ..Limits::default()
     };
     let r = run_with(bytes, &limits, Emitter::new(PdfExtractor::ID));
-    assert_eq!(r.doc.expect("doc").pages.len(), 0);
-    assert!(r.problems.iter().any(|w| w.contains("max_decompressed")));
+    // The page is there, its content refused (never inflated past the budget).
+    let doc = r.doc.as_ref().expect("doc");
+    assert_eq!(doc.pages.len(), 1);
+    assert!(doc.pages[0].text.is_empty());
+    assert!(
+        r.problems.iter().any(|w| w.contains("max_decompressed")),
+        "{:?}",
+        r.problems
+    );
 }
 
 #[test]

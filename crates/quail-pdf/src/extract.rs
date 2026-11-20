@@ -1,5 +1,11 @@
 //! The extractor: parse, emit file facts, walk pages, lay out text, judge text quality,
 //! assign zones.
+//!
+//! Memory: every stream decode is charged to one per-file budget (`max_decompressed`, in the
+//! vendored hayro-syntax), and hayro keeps each page's decoded content cached for the life of
+//! the parsed document. So the document is dropped and re-parsed whenever the bytes decoded
+//! since it was opened pass [`REOPEN_AFTER_BYTES`]: what a long or hostile file holds at once
+//! stays near one page's worth plus that margin.
 
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -8,18 +14,27 @@ use std::sync::Arc;
 use hayro_interpret::kurbo::Rect;
 use hayro_interpret::util::TransformExt;
 use hayro_interpret::{Context, InterpreterCache, InterpreterSettings, interpret_page};
+use hayro_syntax::budget::DecodeBudget;
 use hayro_syntax::page::Page as HPage;
-use hayro_syntax::{DecryptionError, LoadPdfError, Pdf, PdfData, PdfVersion};
+use hayro_syntax::{Pdf, PdfVersion};
 use quail_core::{
     AnalyzerId, Blob, Block, BlockKind, Document, Emitter, Error, Extractor, Format, Limits, Page,
     PageKind, Raster, Result, Span, TextSource, Value, Zone,
 };
 
-use crate::budget::Budget;
-use crate::device::PageCapture;
+use crate::device::{
+    Abort, Captured, Clock, MAX_CALLS_PER_PAGE, MAX_NESTINGS_PER_PAGE, PageCapture, Watchdog,
+};
+use crate::open::{Caught, caught, open};
 use crate::quality::{Signals, garbage_ratio, judge};
 use crate::raster::PdfRaster;
 use crate::{keys, layout, meta, raw, zones};
+
+/// Decoded bytes after which the parsed document is dropped and re-opened, releasing hayro's
+/// per-page content caches.
+pub(crate) const REOPEN_AFTER_BYTES: u64 = 64 << 20;
+/// Below this much budget left after a refused decode, the file is treated as spent.
+const BUDGET_SPENT: u64 = 1 << 20;
 
 /// The PDF extractor (`pdf.extract@1`). Stateless; one instance serves every thread.
 #[derive(Clone, Copy, Debug, Default)]
@@ -46,29 +61,6 @@ impl Extractor for PdfExtractor {
 
     fn extract(&self, blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> {
         extract(blob, limits, out)
-    }
-}
-
-/// Lets hayro read the blob without copying it.
-pub(crate) struct BlobBytes(pub(crate) Blob);
-
-impl AsRef<[u8]> for BlobBytes {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-pub(crate) fn panic_msg(p: &(dyn std::any::Any + Send)) -> String {
-    p.downcast_ref::<&str>()
-        .map(|s| (*s).to_owned())
-        .or_else(|| p.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown panic".to_owned())
-}
-
-fn malformed(msg: impl Into<String>) -> Error {
-    Error::Malformed {
-        format: Format::Pdf,
-        msg: msg.into(),
     }
 }
 
@@ -104,54 +96,37 @@ fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> 
     );
     out.fact(keys::LINEARIZED, Value::Bool(scan.linearized));
 
-    // hayro inflates object streams while opening, without a cap: measure them first.
-    if !crate::budget::object_streams_fit(bytes, limits.max_decompressed) {
-        if let Some(v) = &scan.header_version {
-            out.fact(keys::VERSION, Value::text(v.as_str()));
-        }
-        out.fact(keys::ENCRYPTED, Value::Bool(scan.encrypt_entry));
-        return Err(Error::LimitExceeded("max_decompressed"));
-    }
-
-    let data = PdfData::from(Arc::new(BlobBytes(blob.clone())));
-    let pdf = match catch_unwind(AssertUnwindSafe(|| Pdf::new(data))) {
-        Ok(Ok(pdf)) => pdf,
-        Ok(Err(e)) => {
+    let budget = crate::open::budget(limits);
+    let pdf = match open(blob, &budget) {
+        Ok(pdf) => pdf,
+        Err(e) => {
             if let Some(v) = &scan.header_version {
                 out.fact(keys::VERSION, Value::text(v.as_str()));
             }
-            return Err(match e {
-                LoadPdfError::Decryption(d) => {
-                    out.fact(keys::ENCRYPTED, Value::Bool(true));
-                    match d {
-                        DecryptionError::PasswordProtected => Error::Encrypted,
-                        DecryptionError::UnsupportedAlgorithm => {
-                            Error::Unsupported("PDF encryption algorithm".to_owned())
-                        }
-                        DecryptionError::MissingIDEntry | DecryptionError::InvalidEncryption => {
-                            malformed("invalid encryption dictionary")
-                        }
-                    }
-                }
-                LoadPdfError::Invalid => {
-                    out.fact(keys::ENCRYPTED, Value::Bool(scan.encrypt_entry));
-                    malformed("no usable xref or page tree, even after repair")
-                }
-            });
+            out.fact(
+                keys::ENCRYPTED,
+                Value::Bool(e.encrypted() || scan.encrypt_entry),
+            );
+            return Err(e.into());
         }
-        Err(p) => return Err(Error::Panic(format!("pdf parser: {}", panic_msg(&*p)))),
     };
 
     out.fact(keys::VERSION, Value::text(version_str(pdf.version())));
     out.fact(keys::ENCRYPTED, Value::Bool(scan.encrypt_entry));
-    match catch_unwind(AssertUnwindSafe(|| document_facts(&pdf, bytes, out))) {
-        Ok(()) => {}
-        Err(p) => out.warn(format!("document facts skipped: {}", panic_msg(&*p))),
+    if let Err(p) = catch_unwind(AssertUnwindSafe(|| document_facts(&pdf, bytes, out))) {
+        out.problem(format!(
+            "document facts skipped: {}",
+            crate::open::panic_msg(&*p)
+        ));
+    }
+    if budget.take_limit_hit() {
+        out.problem(
+            "max_decompressed: some objects were not decoded; document facts may be incomplete",
+        );
     }
 
-    let doc = pages(&pdf, bytes.len(), limits, out);
+    let doc = pages(pdf, blob, &budget, limits, out);
     // Later steps (OCR) get pixels through the core trait and never depend on this crate.
-    // The raster shares the file's bytes; it holds no parsed state.
     out.provide(Raster(Arc::new(PdfRaster::new(blob.clone()))));
     Ok(doc)
 }
@@ -171,12 +146,21 @@ fn document_facts(pdf: &Pdf, bytes: &[u8], out: &mut Emitter) {
             out.fact(k, Value::text(s));
         }
     }
-    for (k, v) in [
-        (keys::CREATED, &m.creation_date),
-        (keys::MODIFIED, &m.modification_date),
+    for (k, tz, v) in [
+        (keys::CREATED, keys::CREATED_UTC_OFFSET, &m.creation_date),
+        (
+            keys::MODIFIED,
+            keys::MODIFIED_UTC_OFFSET,
+            &m.modification_date,
+        ),
     ] {
-        if let Some(d) = v.as_ref().and_then(meta::to_date) {
+        if let Some(dt) = v.as_ref()
+            && let Some(d) = meta::to_date(dt)
+        {
             out.fact(k, Value::Date(d));
+            if let Some(off) = meta::utc_offset(dt) {
+                out.fact(tz, Value::text(off));
+            }
         }
     }
     let c = meta::catalog_facts(pdf, bytes);
@@ -194,80 +178,270 @@ struct Pending {
     bboxes: Vec<quail_core::BBox>,
 }
 
-#[allow(clippy::too_many_lines)]
-fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> Document {
-    let all = pdf.pages();
-    out.fact(keys::PAGE_COUNT, int(all.len()));
+/// State carried across pages (and across re-opens of the document).
+struct Walk<'o> {
+    out: &'o mut Emitter,
+    budget: &'o DecodeBudget,
+    text_left: usize,
+    fonts: BTreeSet<String>,
+    pending: Vec<Pending>,
+    image_only_pages: usize,
+}
+
+/// Whether to go on with the next page.
+#[derive(PartialEq, Eq)]
+enum Flow {
+    Continue,
+    Stop,
+}
+
+fn pages(
+    first: Pdf,
+    blob: &Blob,
+    budget: &Arc<DecodeBudget>,
+    limits: &Limits,
+    out: &mut Emitter,
+) -> Document {
+    let total = first.pages().len();
+    out.fact(keys::PAGE_COUNT, int(total));
     let max = usize::try_from(limits.max_pages).unwrap_or(usize::MAX);
-    if all.len() > max {
+    if total > max {
         out.problem(format!(
-            "{} pages, only the first {max} extracted (max_pages)",
-            all.len()
+            "{total} pages, only the first {max} extracted (max_pages)"
+        ));
+    }
+    let n = total.min(max);
+    if total >= hayro_syntax::page::MAX_PAGES {
+        out.problem(format!(
+            "page tree truncated at {} pages",
+            hayro_syntax::page::MAX_PAGES
         ));
     }
 
+    let mut walk = Walk {
+        out,
+        budget,
+        text_left: usize::try_from(limits.max_text_bytes).unwrap_or(usize::MAX),
+        fonts: BTreeSet::new(),
+        pending: Vec::new(),
+        image_only_pages: 0,
+    };
     let settings = InterpreterSettings::default();
-    let mut cache = InterpreterCache::new();
-    let mut budget = Budget::new(limits.max_decompressed, file_len);
-    let mut text_left = usize::try_from(limits.max_text_bytes).unwrap_or(usize::MAX);
-    let mut fonts = BTreeSet::new();
-    let mut pending: Vec<Pending> = Vec::new();
-    let mut image_only_pages = 0usize;
+    let mut next = 0usize;
+    let mut doc = Some(first);
+    'docs: while next < n {
+        let pdf = match doc.take() {
+            Some(p) => p,
+            None => match open(blob, budget) {
+                Ok(p) => p,
+                Err(e) => {
+                    walk.out
+                        .problem(format!("re-open before page {next} failed: {e:?}"));
+                    break;
+                }
+            },
+        };
+        let mark = budget.remaining();
+        let mut cache = InterpreterCache::new();
+        let all = pdf.pages();
+        if all.len() <= next {
+            break;
+        }
+        let start = next;
+        for i in start..n.min(all.len()) {
+            let Some(page) = all.get(i) else {
+                break 'docs;
+            };
+            next = i + 1;
+            let index = u32::try_from(i).unwrap_or(u32::MAX);
+            let (flow, reset) = walk.page(page, index, &cache, &settings);
+            if reset {
+                // The cache may hold half-built state after an unwind.
+                cache = InterpreterCache::new();
+            }
+            if flow == Flow::Stop {
+                break 'docs;
+            }
+            if mark.saturating_sub(budget.remaining()) > REOPEN_AFTER_BYTES {
+                // Drop this parse (and its per-page caches); the next one starts at `next`.
+                continue 'docs;
+            }
+        }
+    }
 
-    for (i, page) in all.iter().take(max).enumerate() {
-        let index = u32::try_from(i).unwrap_or(u32::MAX);
-        if out.check_deadline().is_err() {
-            out.problem(format!("timeout: stopped before page {index}"));
-            break;
+    let Walk {
+        out,
+        fonts,
+        mut pending,
+        image_only_pages,
+        ..
+    } = walk;
+
+    // Zones need every page: repetition is a cross-page signal.
+    if out.check_deadline().is_ok() {
+        assign_zones(&mut pending);
+    } else {
+        out.problem("timeout: zones not assigned");
+        for p in &mut pending {
+            for b in &mut p.page.blocks {
+                b.zone = Zone::Body;
+            }
         }
-        if !budget.charge_page(page) {
-            out.problem(format!(
-                "max_decompressed reached: stopped before page {index}"
-            ));
-            break;
+    }
+    let doc = Document {
+        pages: pending.into_iter().map(|p| p.page).collect(),
+    };
+
+    out.fact(
+        keys::FONTS,
+        Value::List(fonts.into_iter().map(Value::text).collect()),
+    );
+    out.fact(keys::IMAGE_ONLY_PAGES, int(image_only_pages));
+    out.fact(
+        keys::PAGES_NEEDING_OCR,
+        int(doc.pages.iter().filter(|p| p.needs_ocr).count()),
+    );
+    doc
+}
+
+fn assign_zones(pending: &mut [Pending]) {
+    let assigned = {
+        let zone_in: Vec<(f32, Vec<zones::ZoneInput<'_>>)> = pending
+            .iter()
+            .map(|p| {
+                let h = p.page.size.map_or(0.0, |s| s.1);
+                let blocks = p
+                    .page
+                    .blocks
+                    .iter()
+                    .zip(&p.bboxes)
+                    .map(|(b, bbox)| zones::ZoneInput {
+                        text: b.span.slice(&p.page.text),
+                        bbox: *bbox,
+                    })
+                    .collect();
+                (h, blocks)
+            })
+            .collect();
+        zones::assign(&zone_in)
+    };
+    for (p, z) in pending.iter_mut().zip(assigned) {
+        for (b, zone) in p.page.blocks.iter_mut().zip(z) {
+            b.zone = zone;
         }
-        let _ = catch_unwind(AssertUnwindSafe(|| meta::page_fonts(page, &mut fonts)));
+    }
+}
+
+impl Walk<'_> {
+    fn failed_page(&mut self, index: u32, size: (f32, f32), needs_ocr: bool) {
+        self.pending.push(Pending {
+            page: Page {
+                size: Some(size),
+                needs_ocr,
+                ..Page::new(index, PageKind::Physical)
+            },
+            bboxes: Vec::new(),
+        });
+    }
+
+    /// Extracts one page. Returns whether to go on, and whether the interpreter cache must be
+    /// rebuilt (after an unwind out of hayro).
+    #[allow(clippy::too_many_lines)]
+    fn page<'a>(
+        &mut self,
+        page: &HPage<'a>,
+        index: u32,
+        cache: &InterpreterCache<'a>,
+        settings: &InterpreterSettings,
+    ) -> (Flow, bool) {
+        if self.out.check_deadline().is_err() {
+            self.out
+                .problem(format!("timeout: stopped before page {index}"));
+            return (Flow::Stop, false);
+        }
+        let _ = catch_unwind(AssertUnwindSafe(|| meta::page_fonts(page, &mut self.fonts)));
 
         let (w, h) = page.render_dimensions();
-        let captured = catch_unwind(AssertUnwindSafe(|| capture(page, &cache, &settings, w, h)));
+        let captured = {
+            let out: &Emitter = self.out;
+            catch_unwind(AssertUnwindSafe(|| {
+                capture(
+                    page,
+                    cache,
+                    settings,
+                    w,
+                    h,
+                    Watchdog::new(Clock::Emitter(out)),
+                )
+            }))
+        };
         let cap = match captured {
             Ok(c) => c,
             Err(p) => {
-                out.problem(format!(
-                    "page {index}: interpreter failed: {}",
-                    panic_msg(&*p)
-                ));
-                // The cache may hold half-built state now.
-                cache = InterpreterCache::new();
-                pending.push(Pending {
-                    page: Page {
-                        size: Some((w, h)),
-                        needs_ocr: true,
-                        ..Page::new(index, PageKind::Physical)
-                    },
-                    bboxes: Vec::new(),
-                });
-                continue;
+                return match caught(&*p) {
+                    Caught::Abort(Abort::Deadline) => {
+                        self.out
+                            .problem(format!("timeout on page {index}: interpretation stopped"));
+                        self.failed_page(index, (w, h), false);
+                        (Flow::Stop, true)
+                    }
+                    Caught::Abort(Abort::TooManyCalls) => {
+                        self.out.problem(format!(
+                            "page {index}: more than {MAX_CALLS_PER_PAGE} draw operations or {MAX_NESTINGS_PER_PAGE} nested forms/clips, skipped"
+                        ));
+                        self.failed_page(index, (w, h), true);
+                        (Flow::Continue, true)
+                    }
+                    Caught::Panic(m) => {
+                        self.out
+                            .problem(format!("page {index}: interpreter failed: {m}"));
+                        self.failed_page(index, (w, h), true);
+                        (Flow::Continue, true)
+                    }
+                };
             }
         };
+        let mut flow = Flow::Continue;
+        if self.budget.take_limit_hit() {
+            self.out.problem(format!(
+                "page {index}: a stream or image exceeded max_decompressed or max_render_pixels and was skipped"
+            ));
+            if self.budget.remaining() < BUDGET_SPENT {
+                self.out.problem(format!(
+                    "max_decompressed reached: stopped after page {index}"
+                ));
+                flow = Flow::Stop;
+            }
+        }
         if cap.truncated > 0 {
-            out.warn(format!(
+            self.out.warn(format!(
                 "page {index}: {} glyphs beyond the per-page cap dropped",
                 cap.truncated
             ));
         }
+        if self.out.check_deadline().is_err() {
+            self.out
+                .problem(format!("timeout after interpreting page {index}"));
+            flow = Flow::Stop;
+        }
 
-        let coverage = cap.image_coverage();
+        let coverage = cap.image_coverage;
         let (images, placements, unmapped, paths) =
             (cap.images, cap.placements, cap.unmapped, cap.paths);
         let blocks = layout::layout(cap.glyphs);
+        if self.out.check_deadline().is_err() {
+            self.out
+                .problem(format!("timeout after laying out page {index}"));
+            flow = Flow::Stop;
+        }
 
         let mut text = String::new();
         let mut kept: Vec<(Span, quail_core::BBox)> = Vec::with_capacity(blocks.len());
         let mut truncated_text = false;
+        let text_left_before = self.text_left;
         for b in &blocks {
             let t = b.text();
-            if t.len() + 1 > text_left {
+            if t.len() + 1 > self.text_left {
                 truncated_text = true;
                 break;
             }
@@ -276,7 +450,7 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> Docu
             }
             let start = text.len();
             text.push_str(&t);
-            text_left -= t.len() + 1;
+            self.text_left -= t.len() + 1;
             let span = Span {
                 start: u32::try_from(start).unwrap_or(u32::MAX),
                 end: u32::try_from(text.len()).unwrap_or(u32::MAX),
@@ -284,7 +458,7 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> Docu
             kept.push((span, b.bbox));
         }
         if truncated_text {
-            out.problem(format!(
+            self.out.problem(format!(
                 "max_text_bytes reached on page {index}: text truncated"
             ));
         }
@@ -299,9 +473,12 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> Docu
             paths,
         });
         if !verdict.keep_text && chars > 0 {
-            out.warn(format!("page {index}: text layer rejected as garbage"));
+            self.out
+                .warn(format!("page {index}: text layer rejected as garbage"));
             text.clear();
             kept.clear();
+            // Rejected text does not count against max_text_bytes.
+            self.text_left = text_left_before;
         }
         let text_source = if text.is_empty() {
             TextSource::None
@@ -317,7 +494,7 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> Docu
                 bbox: Some(*bbox),
             })
             .collect();
-        pending.push(Pending {
+        self.pending.push(Pending {
             page: Page {
                 size: Some((w, h)),
                 text,
@@ -330,48 +507,9 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> Docu
             },
             bboxes: kept.into_iter().map(|(_, b)| b).collect(),
         });
-        image_only_pages += usize::from(verdict.image_only);
+        self.image_only_pages += usize::from(verdict.image_only);
+        (flow, false)
     }
-
-    // Zones need every page: repetition is a cross-page signal.
-    let zone_in: Vec<(f32, Vec<zones::ZoneInput<'_>>)> = pending
-        .iter()
-        .map(|p| {
-            let h = p.page.size.map_or(0.0, |s| s.1);
-            let blocks = p
-                .page
-                .blocks
-                .iter()
-                .zip(&p.bboxes)
-                .map(|(b, bbox)| zones::ZoneInput {
-                    text: b.span.slice(&p.page.text),
-                    bbox: *bbox,
-                })
-                .collect();
-            (h, blocks)
-        })
-        .collect();
-    let assigned = zones::assign(&zone_in);
-    drop(zone_in);
-    let mut doc = Document::default();
-    for (p, z) in pending.into_iter().zip(assigned) {
-        let mut page = p.page;
-        for (b, zone) in page.blocks.iter_mut().zip(z) {
-            b.zone = zone;
-        }
-        doc.pages.push(page);
-    }
-
-    out.fact(
-        keys::FONTS,
-        Value::List(fonts.into_iter().map(Value::text).collect()),
-    );
-    out.fact(keys::IMAGE_ONLY_PAGES, int(image_only_pages));
-    out.fact(
-        keys::PAGES_NEEDING_OCR,
-        int(doc.pages.iter().filter(|p| p.needs_ocr).count()),
-    );
-    doc
 }
 
 pub(crate) fn capture<'a>(
@@ -380,7 +518,8 @@ pub(crate) fn capture<'a>(
     settings: &InterpreterSettings,
     w: f32,
     h: f32,
-) -> PageCapture {
+    watchdog: Watchdog<'_>,
+) -> Captured {
     let (w, h) = (f64::from(w), f64::from(h));
     let mut ctx = Context::new(
         page.initial_transform(true).to_kurbo(),
@@ -389,7 +528,7 @@ pub(crate) fn capture<'a>(
         page.xref(),
         settings.clone(),
     );
-    let mut dev = PageCapture::new(w, h);
+    let mut dev = PageCapture::new(w, h, watchdog);
     interpret_page(page, &mut ctx, &mut dev);
-    dev
+    dev.finish()
 }

@@ -19,11 +19,11 @@
 //! run under `catch_unwind` per document and per page, and problems become warnings with a
 //! partial document whenever something could be read.
 
-mod budget;
 mod device;
 mod extract;
 mod layout;
 mod meta;
+mod open;
 mod quality;
 mod raster;
 mod raw;
@@ -58,6 +58,10 @@ pub mod keys {
     pub const CREATED: FactKey = FactKey::new("pdf.created");
     /// Info `ModDate`. Date.
     pub const MODIFIED: FactKey = FactKey::new("pdf.modified");
+    /// UTC offset of `CreationDate`, e.g. `+02:00`, when it has a non-zero one. Text.
+    pub const CREATED_UTC_OFFSET: FactKey = FactKey::new("pdf.created_utc_offset");
+    /// UTC offset of `ModDate`, e.g. `-05:00`, when it has a non-zero one. Text.
+    pub const MODIFIED_UTC_OFFSET: FactKey = FactKey::new("pdf.modified_utc_offset");
     /// Incremental updates appended after the first revision (`%%EOF` sections minus one,
     /// minus the extra section of a linearized file). Int.
     pub const INCREMENTAL_UPDATES: FactKey = FactKey::new("pdf.incremental_updates");
