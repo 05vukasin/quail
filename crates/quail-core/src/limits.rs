@@ -39,7 +39,7 @@ impl Default for Limits {
         Self {
             max_bytes: 512 << 20,
             max_pages: 2_000,
-            max_decompressed: 1 << 30,
+            max_decompressed: 256 << 20,
             max_text_bytes: 64 << 20,
             max_render_pixels: 40_000_000,
             timeout: Duration::from_mins(2),
