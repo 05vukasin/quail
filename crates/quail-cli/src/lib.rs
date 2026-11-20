@@ -6,17 +6,16 @@
 //!   pipe handling.
 //! - [`inspect`]: `quail inspect`, one file pretty-printed.
 //! - [`info`]: `quail keys` and `quail version`.
-//! - [`tap`]: getting the extracted `Document` out of the engine (`--dump-documents`,
-//!   `inspect --text`).
+//! - [`dump`]: `--dump-documents`, fed by the engine's artifacts hook.
 
 pub mod cli;
+pub mod dump;
 pub mod info;
 pub mod inspect;
 pub mod keydocs;
 pub mod registry;
 pub mod scan;
 pub mod stats;
-pub mod tap;
 
 use std::io::{self, Write};
 use std::process::ExitCode;

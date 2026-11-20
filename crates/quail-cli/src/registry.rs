@@ -71,7 +71,7 @@ pub const STEPS: &[StepDoc] = &[
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
-/// Callers may register more (e.g. the document tap of `--dump-documents`) before building.
+/// Callers may register more (e.g. an analyzer of its own) before building.
 pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     let b = EngineBuilder::new()
         .profile(profile)

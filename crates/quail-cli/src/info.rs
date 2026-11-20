@@ -113,7 +113,7 @@ pub fn fingerprint(profile: Profile, steps: &[(String, AnalyzerId)]) -> String {
         let _ = writeln!(text, "{role} {id}");
     }
     let d = quail_hash::blake3(text.as_bytes());
-    crate::tap::hex(&d[..8])
+    crate::dump::hex(&d[..8])
 }
 
 /// `quail version`.

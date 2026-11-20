@@ -228,6 +228,13 @@ pub fn summary(stats: &RunStats, tally: &Tally, threads: usize) -> String {
     if let Some(e) = &stats.first_sink_error {
         let _ = writeln!(s, "  sink error: {e} ({} unwritten)", stats.unwritten);
     }
+    if let Some(e) = &stats.first_hook_panic {
+        let _ = writeln!(
+            s,
+            "  document dump panics: {} (first: {e})",
+            stats.hook_panics
+        );
+    }
     if stats.stalls > 0 {
         let _ = writeln!(s, "  ordered-mode stalls: {}", stats.stalls);
     }
@@ -258,6 +265,8 @@ pub fn json(stats: &RunStats, tally: &Tally, threads: usize) -> serde_json::Valu
         "cancelled": stats.cancelled,
         "stalls": stats.stalls,
         "writer_panicked": stats.writer_panicked,
+        "hook_panics": stats.hook_panics,
+        "first_hook_panic": stats.first_hook_panic,
         "elapsed_secs": stats.elapsed.as_secs_f64(),
         "files_per_sec": stats.files_per_sec(),
         "mb_per_sec": stats.mb_per_sec(),

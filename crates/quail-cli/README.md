@@ -59,8 +59,10 @@ Behaviour:
   error or an unusable input (bad glob, missing manifest), 2 on a usage error (unknown or
   malformed option), 130 after Ctrl-C.
 
-`--dump-documents` registers one extra analyzer, `cli.dump_documents@1`, after every other
-step; it appears in the records' `steps` and writes nothing for files without a document.
+`--dump-documents` uses the engine's artifacts hook (`RunOptions::on_artifacts`), so records
+are byte-for-byte what a run without it writes (no extra step). Files without a document get
+no line. A failed write or a panic while dumping is reported in the summary
+(`hook_panics` in `--json-stats`) and makes the exit code 1.
 
 ## inspect
 

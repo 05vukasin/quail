@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use quail_core::{FileRecord, Format, Status, Value};
+#[cfg(feature = "docx")]
+use quail_core::Value;
+use quail_core::{FileRecord, Format, Status};
+#[cfg(feature = "docx")]
 use quail_eval::inspect::{DocumentSource, Sidecar};
 use serde_json::Value as Json;
 use zip::write::SimpleFileOptions;
@@ -96,9 +99,10 @@ fn name(r: &FileRecord) -> &str {
     Path::new(&r.locator).file_name().unwrap().to_str().unwrap()
 }
 
+#[cfg(feature = "docx")]
 fn blake3_hex(r: &FileRecord) -> String {
     match &r.facts_for("hash.blake3").next().expect("blake3").value {
-        Value::Bytes(b) => quail_cli::tap::hex(b),
+        Value::Bytes(b) => quail_cli::dump::hex(b),
         v => panic!("{v:?}"),
     }
 }
@@ -113,6 +117,7 @@ fn json_stats(o: &Output) -> Json {
 }
 
 #[test]
+#[cfg(feature = "docx")]
 fn scan_writes_one_valid_record_per_file_and_stats() {
     let t = corpus();
     let out = t.path().join("out.jsonl");
@@ -263,6 +268,7 @@ fn manifest_mode_keeps_locators_and_fails_missing_files_by_locator() {
 }
 
 #[test]
+#[cfg(feature = "docx")]
 fn dump_documents_writes_sidecar_lines() {
     let t = corpus();
     write(t.path(), "d2.docx", &docx("Second", "More text."));
@@ -302,15 +308,16 @@ fn dump_documents_writes_sidecar_lines() {
         let doc: quail_core::Document = serde_json::from_value(l["document"].clone()).unwrap();
         assert_eq!(doc.pages.len(), 1);
         assert!(doc.pages[0].text.contains("text") || doc.pages[0].text.contains("agree"));
-        assert!(rec.steps.iter().any(|s| s.name == "cli.dump_documents"));
         assert_eq!(rec.status, Status::Ok);
     }
-    let txt = recs.iter().find(|r| name(r) == "b.txt").unwrap();
-    assert_eq!(
-        txt.status,
-        Status::Ok,
-        "the tap adds no problem without a document"
-    );
+    // The dump leaves the records untouched: no extra step.
+    for r in &recs {
+        assert!(
+            r.steps.iter().all(|s| !s.name.starts_with("cli.")),
+            "{:?}",
+            r.steps
+        );
+    }
 
     // quail-eval reads the dump back and finds each record's document.
     let sidecar = Sidecar::load(&dump, None).unwrap();
@@ -472,6 +479,7 @@ fn ctrl_c_drains_prints_stats_and_exits_130() {
 }
 
 #[test]
+#[cfg(feature = "docx")]
 fn inspect_pretty_prints_facts_and_text() {
     let t = corpus();
     let a = t.path().join("a.docx");
@@ -511,6 +519,7 @@ fn inspect_pretty_prints_facts_and_text() {
 }
 
 #[test]
+#[cfg(feature = "docx")]
 fn keys_and_version() {
     let o = run(&["keys"]);
     assert!(o.status.success());

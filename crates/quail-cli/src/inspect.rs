@@ -8,8 +8,8 @@ use quail_core::{BlockKind, Document, Evidence, Fact, FileRecord, Status, Value,
 use quail_io::{ReadOptions, read_file};
 
 use crate::cli::InspectArgs;
+use crate::dump::hex;
 use crate::registry;
-use crate::tap::{CAPTURE_ID, Capture, hex};
 
 /// Text values longer than this are cut in the fact listing.
 const MAX_TEXT: usize = 160;
@@ -21,16 +21,15 @@ pub fn run(args: &InspectArgs) -> Result<(String, ExitCode), String> {
     let limits = args.limits.limits();
     let read = ReadOptions::new().max_file_bytes(Some(limits.max_bytes));
     let item = read_file(&args.file, &read).map_err(|e| e.to_string())?;
-    let capture = Capture::default();
-    let mut builder = registry::builder(args.profile.into(), limits);
-    if args.text {
-        builder = builder.analyzer(Box::new(capture.tap()));
-    }
-    let engine = builder.build().map_err(|e| e.to_string())?;
-    let mut rec = engine.process(item);
-    rec.steps.retain(|s| *s != CAPTURE_ID);
-    rec.timings.retain(|t| t.src != CAPTURE_ID);
-    let doc = capture.take();
+    let engine = registry::builder(args.profile.into(), limits)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut doc = None;
+    let rec = engine.process_with(item, |_, artifacts| {
+        if args.text {
+            doc = artifacts.get::<Document>().cloned();
+        }
+    });
 
     let code = match rec.status {
         Status::Failed { .. } => ExitCode::FAILURE,
