@@ -971,6 +971,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quail-refs"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "quail-core",
+ "quail-text",
+ "regex",
+]
+
+[[package]]
 name = "quail-signals"
 version = "0.1.0"
 dependencies = [
