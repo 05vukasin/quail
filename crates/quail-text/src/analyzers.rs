@@ -4,7 +4,7 @@ use quail_core::{
     Analyzer, AnalyzerId, Ctx, Document, Emitter, Evidence, Page, Profile, Result, Value,
 };
 
-use crate::garbage::{GarbageReport, MIN_JUDGED_CHARS, NEEDS_OCR_RATIO, garbage_report};
+use crate::garbage::{GarbageReport, garbage_report};
 use crate::keys;
 use crate::lang::{Detection, LanguageDetector};
 use crate::normalize::{NormalizeOptions, normalize_into};
@@ -30,8 +30,11 @@ fn within(text: &str, budget: usize) -> &str {
 ///
 /// Emits [`keys::CHARS`], [`keys::WORDS`], [`keys::PAGES_WITH_TEXT`], [`keys::SCRIPT`],
 /// [`keys::SCRIPT_LATIN`], [`keys::SCRIPT_CYRILLIC`], [`keys::SCRIPT_GREEK`],
-/// [`keys::SCRIPT_OTHER`], [`keys::GARBAGE_RATIO`] and [`keys::GARBAGE_PAGES`]. Reads at most
-/// `Limits::max_text_bytes` of text (with a warning when it stops early).
+/// [`keys::SCRIPT_OTHER`], [`keys::GARBAGE_RATIO`] and [`keys::GARBAGE_PAGES`]. Characters,
+/// scripts and garbage are measured on the page text as extracted; words on the normalized
+/// text (de-hyphenated). A page counts as garbage by the same rule as
+/// [`GarbageReport::verdict`] (too-short pages never do). Reads at most
+/// `Limits::max_text_bytes` of text and records a problem when it stops early.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TextStats;
 
@@ -61,13 +64,13 @@ impl Analyzer for TextStats {
         let mut chars = 0usize;
         let mut words = 0usize;
         let mut pages_with_text = 0usize;
-        let mut garbage_pages = 0usize;
+        let mut norm = String::new();
         let mut scripts = ScriptCounts::default();
         let mut garbage = GarbageReport::default();
         for page in &doc.pages {
             out.check_deadline()?;
             if budget == 0 {
-                out.warn(format!(
+                out.problem(format!(
                     "text.stats: text limit reached, pages from {} not counted",
                     page.index
                 ));
@@ -81,12 +84,12 @@ impl Analyzer for TextStats {
             }
             pages_with_text += 1;
             chars += g.chars;
-            if g.chars >= MIN_JUDGED_CHARS && g.ratio() > NEEDS_OCR_RATIO {
-                garbage_pages += 1;
-            }
             garbage.merge(&g);
             scripts.add(text);
-            words += tokens(text).count();
+            // Words of the normalized text: "ugo-\nvor" is one word.
+            norm.clear();
+            normalize_into(text, &NormalizeOptions::default(), &mut norm);
+            words += tokens(&norm).count();
         }
         out.fact(keys::CHARS, Value::Int(to_i64(chars)));
         out.fact(keys::WORDS, Value::Int(to_i64(words)));
@@ -96,7 +99,10 @@ impl Analyzer for TextStats {
                 keys::GARBAGE_RATIO,
                 Value::Float(f64::from(garbage.ratio())),
             );
-            out.fact(keys::GARBAGE_PAGES, Value::Int(to_i64(garbage_pages)));
+            out.fact(
+                keys::GARBAGE_PAGES,
+                Value::Int(to_i64(garbage.garbage_texts)),
+            );
         }
         if let Some(dominant) = scripts.dominant() {
             let r = scripts.ratios();
@@ -254,13 +260,9 @@ mod tests {
 
     fn page(index: u32, text: &str) -> Page {
         Page {
-            index,
-            kind: PageKind::Physical,
-            size: None,
             text: text.to_owned(),
-            blocks: Vec::new(),
             text_source: TextSource::Native,
-            needs_ocr: false,
+            ..Page::new(index, PageKind::Physical)
         }
     }
 
@@ -323,6 +325,21 @@ mod tests {
     }
 
     #[test]
+    fn words_after_dehyphenation_and_short_pages() {
+        let doc = Document {
+            pages: vec![
+                page(0, "Ovaj ugo-\nvor je zaključen."),
+                page(1, "Strana 2"),
+                page(2, "\u{e000}\u{e001}"),
+            ],
+        };
+        let f = run(&TextStats, doc, Profile::Fast, &Limits::default());
+        assert_eq!(int(&f, &keys::WORDS), 4 + 2);
+        // Short pages, even private-use ones, are not garbage pages.
+        assert_eq!(int(&f, &keys::GARBAGE_PAGES), 0);
+    }
+
+    #[test]
     fn stats_flag_garbage_pages() {
         let pua: String = (0xE000u32..0xE100).filter_map(char::from_u32).collect();
         let doc = Document {
@@ -357,9 +374,10 @@ mod tests {
         };
         let mut out = Emitter::new(TextStats::ID);
         TextStats.run(&ctx, &mut out).unwrap();
-        let (facts, _, warnings) = out.into_parts();
+        let problems = out.take_problems();
+        let (facts, _, _) = out.into_parts();
         assert_eq!(int(&facts, &keys::CHARS), 4);
-        assert_eq!(warnings.len(), 1);
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]

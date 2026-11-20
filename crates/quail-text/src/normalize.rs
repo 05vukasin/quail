@@ -9,7 +9,8 @@
 //!    characters that follow it), which equals whole-string NFKC for every script quail
 //!    targets, keeps memory flat and lets the output be mapped back to the input.
 //! 2. **Invisible characters** removed: C0/C1 controls other than whitespace, zero-width
-//!    space/joiners, word joiner, BOM, bidi controls. The soft hyphen (U+00AD) is dropped,
+//!    space, word joiner, BOM, bidi marks and controls. Zero-width (non-)joiners stay: they
+//!    shape emoji sequences and Indic/Persian words. The soft hyphen (U+00AD) is dropped,
 //!    except that at a line end it marks a hyphenated word (step 5).
 //! 3. **Typography** folded to ASCII: single quotes and primes `‘ ’ ‚ ‛ ′ → '`, double quotes
 //!    and guillemets `“ ” „ ‟ ″ « » → "`, hyphens, dashes and minus `‐ ‑ ‒ – — ― − → -`.
@@ -151,8 +152,8 @@ impl OffsetMap {
     }
 
     #[inline]
-    fn record(&mut self, out_len: usize, src: usize, src_end: usize) {
-        let lockstep = src == self.src_end && src_end - src == out_len;
+    fn record(&mut self, out_len: usize, src: usize, src_end: usize, single: bool) {
+        let lockstep = single && src == self.src_end && src_end - src == out_len;
         if !lockstep {
             self.points.push(Point {
                 out: self.out_len,
@@ -189,6 +190,52 @@ impl OffsetMap {
         }
     }
 
+    /// Normalized offset for a source offset, as a start (`end == false`) or exclusive end.
+    fn map_back(&self, x: usize, end: bool) -> usize {
+        // Last point whose source range starts at or before x (for an end: before x).
+        let i = self
+            .points
+            .partition_point(|p| if end { p.src < x } else { p.src <= x });
+        let next_out = self.points.get(i).map_or(self.out_len, |p| p.out);
+        let Some(mut j) = i.checked_sub(1) else {
+            return x.min(next_out);
+        };
+        // An expansion (ﬁ -> f, i) has one point per output char with the same source
+        // range: a start maps to the first of them.
+        while !end
+            && j > 0
+            && x < self.points[j].src_end
+            && self.points[j - 1].src == self.points[j].src
+        {
+            j -= 1;
+        }
+        let p = &self.points[j];
+        let inside = if end { x <= p.src_end } else { x < p.src_end };
+        if inside {
+            if end { p.out + p.out_len } else { p.out }
+        } else {
+            // Lockstep after p, up to the next point (source bytes that were dropped map to
+            // where the next output begins).
+            (p.out + p.out_len + (x - p.src_end)).min(next_out)
+        }
+    }
+
+    /// Normalized byte offset of the source byte offset `src` (as the start of a range).
+    pub fn to_normalized(&self, src: usize) -> usize {
+        self.map_back(src, false)
+    }
+
+    /// Maps a span of the source text to the normalized text: the inverse of
+    /// [`Self::span_to_source`]. A span over removed characters maps to an empty span.
+    pub fn span_to_normalized(&self, span: Span) -> Span {
+        let start = self.map_back(span.start as usize, false);
+        let end = self.map_back(span.end as usize, true).max(start);
+        Span {
+            start: u32::try_from(start).unwrap_or(u32::MAX),
+            end: u32::try_from(end).unwrap_or(u32::MAX),
+        }
+    }
+
     /// Source byte offset of the output byte offset `out` (as the start of a range).
     pub fn to_source(&self, out: usize) -> usize {
         self.map(out, false)
@@ -205,8 +252,9 @@ impl OffsetMap {
     }
 }
 
-/// Source range `[start, end)` of the cluster an output character came from.
-type Src = (usize, usize);
+/// Source range `[start, end)` of the cluster an output character came from, and whether
+/// that cluster is a single character (only then can offsets inside it run in lockstep).
+type Src = (usize, usize, bool);
 
 trait Sink {
     fn push(&mut self, c: char, src: Src);
@@ -229,7 +277,7 @@ struct MapSink<'a> {
 impl Sink for MapSink<'_> {
     #[inline]
     fn push(&mut self, c: char, src: Src) {
-        self.map.record(c.len_utf8(), src.0, src.1);
+        self.map.record(c.len_utf8(), src.0, src.1, src.2);
         self.out.push(c);
     }
 }
@@ -297,7 +345,9 @@ fn is_invisible(c: char) -> bool {
     match c {
         '\t' | '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' => false,
         c if c.is_control() => true,
-        '\u{200B}'..='\u{200F}'
+        '\u{200B}'
+        | '\u{200E}'
+        | '\u{200F}'
         | '\u{202A}'..='\u{202E}'
         | '\u{2060}'..='\u{2064}'
         | '\u{2066}'..='\u{2069}'
@@ -378,6 +428,8 @@ impl<S: Sink> Pipeline<'_, S> {
         if self.opts.remove_invisible && is_invisible(c) {
             return;
         }
+        // Only a real hyphen marks hyphenation, never a dash folded to '-' ("reč—\nkao").
+        let hyphen = is_hyphen(c);
         let c = if self.opts.fold_typography {
             fold_typo(c)
         } else {
@@ -408,11 +460,7 @@ impl<S: Sink> Pipeline<'_, S> {
                 return;
             }
             self.flush_pending();
-        } else if self.opts.dehyphenate
-            && is_hyphen(c)
-            && self.after_letter
-            && self.ws == WsKind::None
-        {
+        } else if self.opts.dehyphenate && hyphen && self.after_letter && self.ws == WsKind::None {
             self.hyphen = Some((c, src, false));
             return;
         }
@@ -447,7 +495,7 @@ fn run<S: Sink>(text: &str, opts: NormalizeOptions, sink: &mut S) {
         opts,
         sink,
         ws: WsKind::None,
-        ws_src: (0, 0),
+        ws_src: (0, 0, true),
         ws_raw: Vec::new(),
         hyphen: None,
         after_letter: false,
@@ -458,7 +506,7 @@ fn run<S: Sink>(text: &str, opts: NormalizeOptions, sink: &mut S) {
     while let Some(&b) = bytes.get(i) {
         // ASCII fast path: an ASCII char followed by ASCII (or the end) is its own cluster.
         if b < 0x80 && bytes.get(i + 1).is_none_or(|&n| n < 0x80) {
-            p.feed(char::from(b), (i, i + 1));
+            p.feed(char::from(b), (i, i + 1, true));
             i += 1;
             continue;
         }
@@ -481,10 +529,10 @@ fn run<S: Sink>(text: &str, opts: NormalizeOptions, sink: &mut S) {
         let cluster = &rest[..end];
         let single = end == first.len_utf8();
         if !opts.nfkc || (single && is_nfkc_quick(std::iter::once(first)) == IsNormalized::Yes) {
-            p.feed(first, (i, i + end));
+            p.feed(first, (i, i + end, true));
         } else {
             for c in cluster.nfkc() {
-                p.feed(c, (i, i + end));
+                p.feed(c, (i, i + end, single));
             }
         }
         i += end;
@@ -564,6 +612,11 @@ mod tests {
         assert_eq!(n("kraj-"), "kraj-");
         assert_eq!(n("12-\nmaj"), "12-\nmaj");
         assert_eq!(n("уго-\nвор"), "уговор");
+        // Dashes are not hyphens, even though typography folds them to '-'.
+        assert_eq!(n("reč—\nkao"), "reč-\nkao");
+        assert_eq!(n("pravo–\nobaveza"), "pravo-\nobaveza");
+        assert_eq!(n("pravo\u{2212}\nobaveza"), "pravo-\nobaveza");
+        assert_eq!(n("ugo\u{2010}\nvor"), "ugovor");
         let keep = NormalizeOptions {
             whitespace: Whitespace::Keep,
             ..NormalizeOptions::default()
@@ -618,6 +671,100 @@ mod tests {
             end: out.len() as u32,
         };
         assert_eq!(map.span_to_source(whole).slice(src), src.trim());
+    }
+
+    /// Deterministic pseudo-random strings over an alphabet full of edge cases.
+    fn fuzz_strings(n: usize) -> Vec<String> {
+        let alphabet: Vec<char> =
+            "aZ1 -\n\r\t\u{ad}\u{200b}\u{301}\u{323}ﬁＡ\u{a0}ǅш—„.,/\u{feff}\u{1100}\u{1161}é"
+                .chars()
+                .collect();
+        let mut seed: u64 = 0x1234_5678;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as usize
+        };
+        (0..n)
+            .map(|_| {
+                let len = next() % 14 + 1;
+                (0..len)
+                    .map(|_| alphabet[next() % alphabet.len()])
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn offset_map_properties_both_directions() {
+        let keep = NormalizeOptions {
+            whitespace: Whitespace::Keep,
+            ..NormalizeOptions::default()
+        };
+        let mut out = String::new();
+        let mut map = OffsetMap::new();
+        for s in fuzz_strings(20_000) {
+            for o in [NormalizeOptions::default(), keep] {
+                normalize_mapped(&s, &o, &mut out, &mut map);
+                assert_eq!(normalize(&s, &o), out.as_str());
+                // normalized -> source: on char boundaries, monotonic.
+                let mut last = 0;
+                let bounds: Vec<usize> = out
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .chain(std::iter::once(out.len()))
+                    .collect();
+                for &i in &bounds {
+                    let x = map.to_source(i);
+                    assert!(s.is_char_boundary(x) && x >= last, "{s:?} {out:?} {i}->{x}");
+                    last = x;
+                }
+                // source -> normalized: on char boundaries, monotonic, and a round trip
+                // through the source never loses the original span.
+                let mut last = 0;
+                for (i, _) in s.char_indices().chain(std::iter::once((s.len(), ' '))) {
+                    let y = map.to_normalized(i);
+                    assert!(
+                        out.is_char_boundary(y) && y >= last,
+                        "{s:?} {out:?} {i}->{y}"
+                    );
+                    last = y;
+                }
+                for w in bounds.windows(2) {
+                    let span = Span {
+                        start: w[0] as u32,
+                        end: w[1] as u32,
+                    };
+                    let back = map.span_to_normalized(map.span_to_source(span));
+                    assert!(
+                        back.start <= span.start && back.end >= span.end,
+                        "{s:?} {span:?} {back:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_to_normalized() {
+        let src = "  Ugo-\nvor ﬁrme \u{200b}X";
+        let mut out = String::new();
+        let mut map = OffsetMap::new();
+        normalize_mapped(src, &NormalizeOptions::default(), &mut out, &mut map);
+        assert_eq!(out, "Ugovor firme X");
+        let find = |w: &str| {
+            let s = src.find(w).unwrap();
+            Span {
+                start: s as u32,
+                end: (s + w.len()) as u32,
+            }
+        };
+        assert_eq!(map.span_to_normalized(find("Ugo")).slice(&out), "Ugo");
+        assert_eq!(map.span_to_normalized(find("vor")).slice(&out), "vor");
+        assert_eq!(map.span_to_normalized(find("ﬁrme")).slice(&out), "firme");
+        assert_eq!(map.span_to_normalized(find("X")).slice(&out), "X");
+        assert_eq!(map.span_to_normalized(find("\u{200b}")).slice(&out), "");
     }
 
     #[test]

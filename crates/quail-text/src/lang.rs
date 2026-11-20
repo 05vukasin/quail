@@ -11,6 +11,18 @@
 //! high-accuracy mode take about 1 GB, which is why the set is restricted). Lingua keeps its
 //! models in a process-wide, read-only-after-load cache shared by every detector.
 //!
+//! Words that would be markers but also occur, unaccented or in other senses, in the other
+//! standards are left out on purpose: `bih` (conditional "ja bih" in all three), `posto`
+//! (ASCII-ized Serbian `pošto`), `kanton`, `federacija` (generic words).
+//!
+//! # Threads and memory
+//!
+//! Models load lazily on first use, per language and script, into Lingua's process-wide
+//! cache (thread-safe, read-only once loaded); [`LanguageDetector::new`] warms them up with
+//! two short texts so the cost is paid at construction. quail never asks Lingua to preload
+//! or unload models, because those calls run on rayon's global thread pool and would start
+//! it (one thread per core); detection itself runs on the caller's thread.
+//!
 //! Text is sampled before detection ([`DetectorOptions::max_chars`], taken from the start,
 //! middle and end of the text) so cost per document is bounded: about 1 ms for the default
 //! 3 000 characters.
@@ -28,7 +40,7 @@
 //!   primjerak` (Croatian and Bosnian, and also Serbian as written in Montenegro and the
 //!   Republika Srpska, which is why yat alone never decides Croatian or Bosnian);
 //! - **lexicon**: Croatian `tisuća, tjedan, tko, kruh, obveza, poduzeće, ravnatelj, tvrtka,
-//!   natječaj, točno, posto` and the Croatian month names; Bosnian `historija, sedmica` +
+//!   natječaj, točno, postotak` and the Croatian month names; Bosnian `historija, sedmica` +
 //!   ijekavian, `hljeb, uposlenik, lahko, kahva`; Serbian `opština, opšti, takođe, istorija,
 //!   poreski`; shared Serbian/Bosnian `hiljada, obaveza, preduzeće, tačno, procenat,
 //!   evropski, fabrika` and agent nouns in `-lac` (`naručilac`) vs Croatian `-telj`
@@ -217,7 +229,7 @@ impl Default for LanguageDetector {
 }
 
 impl LanguageDetector {
-    /// Detector with default options; preloads the models (about 50 MB).
+    /// Detector with default options; loads the models (about 50 MB) on this thread.
     pub fn new() -> Self {
         Self::with_options(DetectorOptions::default())
     }
@@ -225,14 +237,21 @@ impl LanguageDetector {
     /// Detector with explicit options.
     pub fn with_options(opts: DetectorOptions) -> Self {
         let langs: Vec<Language> = Lang::ALL.iter().map(|l| l.lingua()).collect();
-        let inner = LanguageDetectorBuilder::from_languages(&langs)
-            .with_preloaded_language_models()
-            .build();
-        Self {
+        // No `with_preloaded_language_models`: it would start rayon's global pool.
+        let inner = LanguageDetectorBuilder::from_languages(&langs).build();
+        let det = Self {
             inner: Arc::new(inner),
             markers: Arc::new(MarkerIndex::new()),
             opts,
+        };
+        // Load the Latin and Cyrillic models now, on this thread.
+        for warm in [
+            "Ugovor o zakupu, the agreement, der Vertrag",
+            "Уговор о закупу, договор",
+        ] {
+            let _ = det.inner.compute_language_confidence_values(warm);
         }
+        det
     }
 
     /// Options in use.
@@ -563,7 +582,6 @@ const MARKERS: &[(&str, Class, bool)] = &[
     ("obvez", Class::Hr, true),
     ("obiju", Class::Hr, false),
     ("uvjet", Class::Hr, true),
-    ("posto", Class::Hr, false),
     ("postot", Class::Hr, true),
     ("glede", Class::Hr, false),
     ("unatoč", Class::Hr, false),
@@ -617,11 +635,8 @@ const MARKERS: &[(&str, Class, bool)] = &[
     ("lahk", Class::Bs, true),
     ("mehk", Class::Bs, true),
     ("kahv", Class::Bs, true),
-    ("kanton", Class::Bs, true),
-    ("federacij", Class::Bs, true),
     ("konvertibiln", Class::Bs, true),
     ("maraka", Class::Bs, false),
-    ("bih", Class::Bs, false),
     ("sedmic", Class::SrBs, true),
     // Serbian
     ("opštin", Class::Sr, true),
@@ -899,6 +914,50 @@ mod tests {
         let bs = "Uposlenik ima pravo na godišnji odmor, a hiljadu maraka se uplaćuje \
                   svake sedmice u mjesecu.";
         assert_eq!(best(bs), "bs");
+    }
+
+    #[test]
+    fn markers_that_mislead_are_gone() {
+        // "ja bih" is the conditional in all three standards; this text is Serbian.
+        let sr = "Ja bih želeo da se ugovor potpiše sutra u Beogradu, rekao je direktor \
+                  preduzeća posle sednice.";
+        assert_eq!(best(sr), "sr");
+        // ASCII-ized Serbian "pošto" must not count as Croatian "posto".
+        let ascii = "Rok je istekao posto je prosao mesec dana, a resenje opstine nije stiglo.";
+        assert_eq!(best(ascii), "sr");
+        let m = hbs_markers("ja bih posto kanton federacija");
+        assert_eq!((m.hr, m.bs), (0, 0));
+    }
+
+    #[test]
+    fn mixed_serbian_english_document() {
+        let sr = "Zakupac je dužan da plaća zakupninu do petog u mesecu. ";
+        let en = "The tenant shall pay the rent by the fifth day of each month. ";
+        let doc = format!("{}{}", sr.repeat(6), en.repeat(2));
+        let d = DET.detect(&doc).unwrap();
+        assert_eq!(d.best().unwrap().lang, Lang::Sr, "{:?}", d.candidates);
+        assert!(
+            d.top(3).iter().any(|c| c.lang == Lang::En),
+            "{:?}",
+            d.candidates
+        );
+    }
+
+    #[test]
+    fn shared_across_threads() {
+        let text = "Zakupac je dužan da plaća zakupninu do petog u mesecu, posle sednice.";
+        let expected = DET.detect(text);
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let d = DET.clone();
+                std::thread::spawn(move || (0..10).map(|_| d.detect(text)).collect::<Vec<_>>())
+            })
+            .collect();
+        for h in handles {
+            for r in h.join().unwrap() {
+                assert_eq!(r, expected);
+            }
+        }
     }
 
     #[test]

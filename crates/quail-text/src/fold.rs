@@ -26,7 +26,7 @@ use std::borrow::Cow;
 
 use unicode_normalization::char::{decompose_canonical, is_combining_mark};
 
-use crate::translit::cyrillic_to_latin;
+use crate::translit::cyrillic_to_latin_chars;
 
 /// How diacritic folding writes `đ` / `Đ`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,12 +101,16 @@ pub fn fold<'a>(text: &'a str, opts: &FoldOptions) -> Cow<'a, str> {
 /// Folds `text`, appending to `out`. Reuse `out` (e.g. per token) to avoid allocations.
 pub fn fold_into(text: &str, opts: &FoldOptions, out: &mut String) {
     out.reserve(text.len());
-    let text: Cow<'_, str> = if opts.cyrillic {
-        cyrillic_to_latin(text)
+    if opts.cyrillic && text.bytes().any(|b| (0xD0..=0xD3).contains(&b)) {
+        fold_chars(cyrillic_to_latin_chars(text.chars()), *opts, out);
     } else {
-        Cow::Borrowed(text)
-    };
-    for c in text.chars() {
+        fold_chars(text.chars(), *opts, out);
+    }
+}
+
+/// Folds a character stream into `out` (no allocation besides `out` growing).
+fn fold_chars(chars: impl Iterator<Item = char>, opts: FoldOptions, out: &mut String) {
+    for c in chars {
         if c.is_ascii() {
             out.push(if opts.lowercase {
                 c.to_ascii_lowercase()
@@ -117,10 +121,10 @@ pub fn fold_into(text: &str, opts: &FoldOptions, out: &mut String) {
         }
         if opts.lowercase {
             for l in c.to_lowercase() {
-                push_folded(l, *opts, out);
+                push_folded(l, opts, out);
             }
         } else {
-            push_folded(c, *opts, out);
+            push_folded(c, opts, out);
         }
     }
 }

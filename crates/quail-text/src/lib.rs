@@ -10,9 +10,9 @@
 //! | [`fold`] | matching keys: lowercase, diacritics, Serbian Cyrillic → Latin |
 //! | [`translit`] | exact Serbian Cyrillic ⇄ Latin |
 //! | [`script`] | Latin / Cyrillic / Greek / other letter ratios |
-//! | [`token`] | UAX #29 tokens with byte spans, number- and IBAN-aware |
+//! | [`token`] | UAX #29 tokens with byte spans and kinds, number-, IBAN-, URL- and e-mail-aware; keyed tokens |
 //! | [`shingle`] | word shingles and char n-grams as stable XXH3-64 hashes |
-//! | [`garbage`] | how broken a text layer looks (drives `needs_ocr`) |
+//! | [`garbage`] | how broken a text layer looks: `Clean`, `Garbage` or `TooShort` |
 //! | [`lang`] | language identification with top candidates |
 //!
 //! Everything borrows where it can ([`std::borrow::Cow`] results, iterators over `&str`,

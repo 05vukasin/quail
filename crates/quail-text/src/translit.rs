@@ -7,11 +7,13 @@
 //! The case of an uppercase digraph follows its neighbours: `Љубав → Ljubav`, but
 //! `ЉУБАВ → LJUBAV`, `ЊЊ → NJNJ`. An uppercase digraph letter is written all caps when the
 //! next character is an uppercase letter, or when the next character is not a letter and
-//! the previous one is an uppercase letter; otherwise it is title case.
+//! the previous one is an uppercase letter; otherwise it is title case. Combining marks on
+//! a digraph letter go on its first Latin letter (`Њ́ива → Ńjiva`).
 //!
 //! Cyrillic letters that are not in the Serbian alphabet (Russian `я ю щ ы э й ё ъ ь`,
 //! Macedonian `ѓ ќ ѕ`, Ukrainian `і ї є ґ`, ...) are left unchanged: this is a Serbian
 //! transliterator, not a general romanizer. Everything that is not Cyrillic is copied.
+//! [`cyrillic_to_latin_chars`] does it over a character stream without allocating.
 //!
 //! # Latin → Cyrillic
 //!
@@ -26,18 +28,24 @@
 //!    list is short on purpose; a word outside it gets the greedy reading. `od-` + `ž` is not
 //!    an exception because `оџак` (chimney) is far more common in business text than the
 //!    prefixed forms.
-//! 3. **Foreign words stay Latin** (option [`LatinToCyrillic::keep_foreign`], on by
-//!    default): a word that contains a Latin letter outside the Serbian alphabet (`q w x y`,
-//!    `ä ö ü ß é ...`) is copied unchanged, so `Windows`, `Exxon` or `XII` survive. A foreign
-//!    word spelled only with Serbian letters (`Microsoft`) cannot be told apart and is
-//!    converted.
-//! 4. **ASCII-ized text is not repaired.** `dj`, `c`, `s`, `z` written for `đ`, `č/ć`, `š`,
+//! 3. **Foreign words stay Latin** ([`LatinToCyrillic::keep_foreign`], on by default): a
+//!    word with a Latin letter outside the Serbian alphabet (`q w x y`, `ä ö ü ß é ...`) is
+//!    copied unchanged, so `Windows` or `Exxon` survive. A foreign word spelled only with
+//!    Serbian letters (`Microsoft`) cannot be told apart and is converted.
+//! 4. **Roman numerals and acronyms stay Latin** ([`LatinToCyrillic::keep_roman`],
+//!    [`LatinToCyrillic::keep_acronyms`], on by default): all-caps words made of
+//!    `I V X L C D M` (`IV`, `XII`; a lone `I` is the conjunction and converts), and all-caps
+//!    words of 2–6 letters without a vowel (`PDV`, `JMBG`). All-caps words with vowels
+//!    (`UGOVOR`) convert.
+//! 5. **ASCII-ized text is not repaired.** `dj`, `c`, `s`, `z` written for `đ`, `č/ć`, `š`,
 //!    `ž` are converted as written (`dj → дј`); the transliterator does not guess.
 //!
-//! Input in decomposed form (`c` + U+030C) is composed (NFC) first.
+//! Input in decomposed form (`c` + U+030C) is composed (NFC) first. Both directions are
+//! linear in the input.
 
 use std::borrow::Cow;
 
+use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
 
 /// Latin form of a lowercase Serbian Cyrillic letter, or `None` for anything else.
@@ -128,6 +136,63 @@ fn has_cyrillic(text: &str) -> bool {
     text.as_bytes().iter().any(|b| (0xD0..=0xD3).contains(b))
 }
 
+/// Serbian Cyrillic → Latin over a stream of characters, without allocating. See
+/// [`cyrillic_to_latin_chars`].
+pub struct CyrToLat<I: Iterator<Item = char>> {
+    it: std::iter::Peekable<I>,
+    prev: Option<char>,
+    /// Second letter of a digraph, written after any combining marks of the first.
+    deferred: Option<char>,
+}
+
+impl<I: Iterator<Item = char>> Iterator for CyrToLat<I> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        if self.deferred.is_some() {
+            if let Some(&m) = self.it.peek()
+                && is_combining_mark(m)
+            {
+                self.it.next();
+                return Some(m);
+            }
+            return self.deferred.take();
+        }
+        let c = self.it.next()?;
+        let latin = if let Some(l) = cyr_lower(c) {
+            l
+        } else if let Some(u) = cyr_upper(c) {
+            if matches!(c, 'Љ' | 'Њ' | 'Џ') {
+                let caps = match self.it.peek().copied() {
+                    Some(n) if n.is_alphabetic() => n.is_uppercase(),
+                    _ => self.prev.is_some_and(char::is_uppercase),
+                };
+                if caps { all_caps_digraph(c) } else { u }
+            } else {
+                u
+            }
+        } else {
+            self.prev = Some(c);
+            return Some(c);
+        };
+        self.prev = Some(c);
+        let mut chars = latin.chars();
+        let first = chars.next();
+        self.deferred = chars.next();
+        first
+    }
+}
+
+/// Serbian Cyrillic → Latin as a character iterator (no allocation;
+/// [`fold`](crate::fold) builds keys with it).
+pub fn cyrillic_to_latin_chars<I: IntoIterator<Item = char>>(chars: I) -> CyrToLat<I::IntoIter> {
+    CyrToLat {
+        it: chars.into_iter().peekable(),
+        prev: None,
+        deferred: None,
+    }
+}
+
 /// Serbian Cyrillic → Latin. Borrows when the text has no Cyrillic letter.
 ///
 /// ```
@@ -146,36 +211,23 @@ pub fn cyrillic_to_latin(text: &str) -> Cow<'_, str> {
 /// Serbian Cyrillic → Latin, appended to `out` (reuse the buffer across calls).
 pub fn cyrillic_to_latin_into(text: &str, out: &mut String) {
     out.reserve(text.len());
-    let mut prev: Option<char> = None;
-    let mut it = text.chars().peekable();
-    while let Some(c) = it.next() {
-        if let Some(l) = cyr_lower(c) {
-            out.push_str(l);
-        } else if let Some(u) = cyr_upper(c) {
-            if matches!(c, 'Љ' | 'Њ' | 'Џ') {
-                let next = it.peek().copied();
-                let caps = match next {
-                    Some(n) if n.is_alphabetic() => n.is_uppercase(),
-                    _ => prev.is_some_and(char::is_uppercase),
-                };
-                out.push_str(if caps { all_caps_digraph(c) } else { u });
-            } else {
-                out.push_str(u);
-            }
-        } else {
-            out.push(c);
-        }
-        prev = Some(c);
-    }
+    out.extend(cyrillic_to_latin_chars(text.chars()));
 }
 
 /// Options of [`latin_to_cyrillic_with`]. See the [module docs](self) for the policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // independent switches
 pub struct LatinToCyrillic {
     /// Copy words with letters outside the Serbian Latin alphabet unchanged (default `true`).
     pub keep_foreign: bool,
     /// Apply the morpheme-boundary exception list (default `true`).
     pub exceptions: bool,
+    /// Keep all-caps Roman numerals (`IV`, `XII`, `MCMXC`) Latin (default `true`).
+    pub keep_roman: bool,
+    /// Keep all-caps acronyms without a vowel (`PDV`, `JMBG`, `SFRJ`, 2–6 letters) Latin
+    /// (default `true`). Serbian Cyrillic style writes them in Cyrillic (`ПДВ`); turn this
+    /// off for that.
+    pub keep_acronyms: bool,
 }
 
 impl Default for LatinToCyrillic {
@@ -183,6 +235,8 @@ impl Default for LatinToCyrillic {
         Self {
             keep_foreign: true,
             exceptions: true,
+            keep_roman: true,
+            keep_acronyms: true,
         }
     }
 }
@@ -192,7 +246,10 @@ impl Default for LatinToCyrillic {
 /// ```
 /// use quail_text::translit::latin_to_cyrillic;
 /// assert_eq!(latin_to_cyrillic("Ljubljana, NJIVA, džep"), "Љубљана, ЊИВА, џеп");
-/// assert_eq!(latin_to_cyrillic("nadživeti Windows"), "надживети Windows");
+/// assert_eq!(
+///     latin_to_cyrillic("nadživeti Windows, član IV, PDV"),
+///     "надживети Windows, члан IV, PDV"
+/// );
 /// ```
 pub fn latin_to_cyrillic(text: &str) -> Cow<'_, str> {
     latin_to_cyrillic_with(text, LatinToCyrillic::default())
@@ -213,6 +270,9 @@ pub fn latin_to_cyrillic_with(text: &str, opts: LatinToCyrillic) -> Cow<'_, str>
     }
     let mut out = String::with_capacity(composed.len() * 2);
     latin_to_cyrillic_into(&composed, opts, &mut out);
+    if out == *composed {
+        return composed;
+    }
     Cow::Owned(out)
 }
 
@@ -221,7 +281,6 @@ pub fn latin_to_cyrillic_with(text: &str, opts: LatinToCyrillic) -> Cow<'_, str>
 pub fn latin_to_cyrillic_into(text: &str, opts: LatinToCyrillic, out: &mut String) {
     out.reserve(text.len() * 2);
     let mut rest = text;
-    let mut lower = String::new();
     while !rest.is_empty() {
         // Copy the non-letter run, then convert one word (maximal run of letters).
         let word_start = rest
@@ -239,13 +298,14 @@ pub fn latin_to_cyrillic_into(text: &str, opts: LatinToCyrillic, out: &mut Strin
         if word.is_empty() {
             continue;
         }
-        if opts.keep_foreign && is_foreign(word) {
+        let keep = (opts.keep_foreign && is_foreign(word))
+            || (opts.keep_roman && is_roman(word))
+            || (opts.keep_acronyms && is_acronym(word));
+        if keep {
             out.push_str(word);
-            continue;
+        } else {
+            convert_word(word, opts.exceptions, out);
         }
-        lower.clear();
-        lower.extend(word.chars().flat_map(char::to_lowercase));
-        convert_word(word, &lower, opts.exceptions, out);
     }
 }
 
@@ -257,6 +317,24 @@ fn is_foreign(word: &str) -> bool {
             && lat_single(c).is_none()
             && digraph_char(c).is_none()
     })
+}
+
+/// An all-caps Roman numeral: two or more of `I V X L C D M`, or a single one other than
+/// `I` (a lone `I` is too often the conjunction at a sentence start).
+fn is_roman(word: &str) -> bool {
+    let b = word.as_bytes();
+    !b.is_empty()
+        && b.len() <= 15
+        && b.iter().all(|c| b"IVXLCDM".contains(c))
+        && (b.len() >= 2 || b[0] != b'I')
+}
+
+/// An all-caps word of 2–6 ASCII letters without a vowel (`PDV`, `JMBG`).
+fn is_acronym(word: &str) -> bool {
+    let b = word.as_bytes();
+    (2..=6).contains(&b.len())
+        && b.iter().all(u8::is_ascii_uppercase)
+        && !b.iter().any(|c| b"AEIOU".contains(c))
 }
 
 /// Cyrillic for one Serbian Latin letter (not a digraph).
@@ -334,66 +412,57 @@ fn digraph_char(c: char) -> Option<char> {
 }
 
 const DZ_PREFIXES: [&str; 5] = ["nad", "pod", "pred", "ispod", "iznad"];
-const NJ_STEMS: [&str; 5] = ["injek", "konjug", "konjunk", "vanjez", "tanjug"];
+/// `(stem, byte offset of the "nj" in it)`.
+const NJ_STEMS: [(&str, usize); 5] = [
+    ("injek", 1),
+    ("konjug", 2),
+    ("konjunk", 2),
+    ("vanjez", 2),
+    ("tanjug", 2),
+];
 
-/// Whether the digraph whose first letter is at char index `ci` of the lowercased word
-/// is really two letters.
-fn split_digraph(lower: &str, ci: usize, first: char) -> bool {
+/// Whether the digraph starting at byte `at` of `word` is really two letters. Constant
+/// time: the prefixes and stems are ASCII, so they are compared in place.
+fn split_digraph(word: &str, at: usize, first: char) -> bool {
+    let b = word.as_bytes();
     match first {
-        'd' => DZ_PREFIXES
-            .iter()
-            .any(|p| lower.starts_with(p) && p.chars().count() == ci + 1),
-        'n' => NJ_STEMS.iter().any(|s| {
-            lower.match_indices(s).any(|(bi, _)| {
-                // char index of the 'n' of "nj" inside the stem
-                let off = s.find("nj").map_or(0, |o| s[..o].chars().count());
-                lower[..bi].chars().count() + off == ci
+        'd' | 'D' => DZ_PREFIXES.iter().any(|p| {
+            at + 1 == p.len()
+                && b.get(..p.len())
+                    .is_some_and(|w| w.eq_ignore_ascii_case(p.as_bytes()))
+        }),
+        'n' | 'N' => NJ_STEMS.iter().any(|&(s, off)| {
+            at.checked_sub(off).is_some_and(|st| {
+                b.get(st..st + s.len())
+                    .is_some_and(|w| w.eq_ignore_ascii_case(s.as_bytes()))
             })
         }),
         _ => false,
     }
 }
 
-fn convert_word(word: &str, lower: &str, exceptions: bool, out: &mut String) {
-    let chars: Vec<char> = word.chars().collect();
-    let lchars: Vec<char> = lower.chars().collect();
-    // Lowercasing can change the char count (rare: İ); then skip the exception check.
-    let aligned = chars.len() == lchars.len();
-    let mut i = 0;
-    while let Some(&c) = chars.get(i) {
+fn convert_word(word: &str, exceptions: bool, out: &mut String) {
+    let mut it = word.char_indices().peekable();
+    while let Some((i, c)) = it.next() {
         if let Some(d) = digraph_char(c) {
             out.push(d);
-            i += 1;
             continue;
         }
-        let next = chars.get(i + 1).copied();
-        let pair = if aligned {
-            (lchars.get(i).copied(), lchars.get(i + 1).copied())
-        } else {
-            (
-                c.to_lowercase().next(),
-                next.and_then(|n| n.to_lowercase().next()),
-            )
-        };
-        let digraph = match pair {
-            (Some('l'), Some('j')) => Some(('Љ', 'љ')),
-            (Some('n'), Some('j')) => Some(('Њ', 'њ')),
-            (Some('d'), Some('ž')) => Some(('Џ', 'џ')),
+        let next = it.peek().map(|&(_, n)| n);
+        let digraph = match (c, next) {
+            ('l' | 'L', Some('j' | 'J')) => Some(('Љ', 'љ')),
+            ('n' | 'N', Some('j' | 'J')) => Some(('Њ', 'њ')),
+            ('d' | 'D', Some('ž' | 'Ž')) => Some(('Џ', 'џ')),
             _ => None,
         };
-        if let Some((up, low)) = digraph {
-            let split = exceptions && aligned && pair.0.is_some_and(|f| split_digraph(lower, i, f));
-            if !split {
-                out.push(if c.is_uppercase() { up } else { low });
-                i += 2;
-                continue;
-            }
+        if let Some((up, low)) = digraph
+            && !(exceptions && split_digraph(word, i, c))
+        {
+            out.push(if c.is_uppercase() { up } else { low });
+            it.next();
+            continue;
         }
-        match lat_single(c) {
-            Some(cy) => out.push(cy),
-            None => out.push(c),
-        }
-        i += 1;
+        out.push(lat_single(c).unwrap_or(c));
     }
 }
 
@@ -436,20 +505,63 @@ mod tests {
         );
         assert_eq!(latin_to_cyrillic("konj njiva"), "коњ њива");
         assert_eq!(latin_to_cyrillic("ǅep ǉubav"), "Џеп љубав");
+        assert_eq!(
+            latin_to_cyrillic("NADŽIVETI Injekcija TANJUG"),
+            "НАДЖИВЕТИ Инјекција ТАНЈУГ"
+        );
+        assert_eq!(latin_to_cyrillic("manjina Konjic"), "мањина Коњиц");
     }
 
     #[test]
-    fn latin_to_cyrillic_keeps_foreign_and_numbers() {
+    fn latin_to_cyrillic_keeps_foreign_roman_and_acronyms() {
         assert_eq!(
-            latin_to_cyrillic("Windows, XII, broj 114/23, Exxon"),
-            "Windows, XII, број 114/23, Exxon"
+            latin_to_cyrillic("Windows, broj 114/23, Exxon"),
+            "Windows, број 114/23, Exxon"
         );
+        assert_eq!(
+            latin_to_cyrillic("Član IV i VI, glava MCMXC, PDV i JMBG, UGOVOR"),
+            "Члан IV и VI, глава MCMXC, PDV и JMBG, УГОВОР"
+        );
+        assert_eq!(latin_to_cyrillic("I tako"), "И тако");
+        let plain = LatinToCyrillic {
+            keep_roman: false,
+            keep_acronyms: false,
+            ..LatinToCyrillic::default()
+        };
+        assert_eq!(latin_to_cyrillic_with("IV PDV", plain), "ИВ ПДВ");
         let all = LatinToCyrillic {
             keep_foreign: false,
-            exceptions: true,
+            ..LatinToCyrillic::default()
         };
         // Without the foreign-word rule, letters without a Cyrillic counterpart stay Latin.
         assert_eq!(latin_to_cyrillic_with("Word", all), "Wорд");
+        assert!(matches!(latin_to_cyrillic("Windows XII"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn accents_on_digraphs() {
+        assert_eq!(cyrillic_to_latin("Њ\u{301}ива"), "N\u{301}jiva");
+        assert_eq!(cyrillic_to_latin("љ\u{300}"), "l\u{300}j");
+    }
+
+    #[test]
+    fn linear_time_on_long_words() {
+        use std::time::{Duration, Instant};
+        for unit in ["nj", "dž", "lj", "a", "Њ"] {
+            let time = |n: usize| {
+                let s = unit.repeat(n);
+                let t = Instant::now();
+                let a = latin_to_cyrillic(&s).len();
+                let b = cyrillic_to_latin(&s).len();
+                assert!(a > 0 && b > 0);
+                t.elapsed()
+            };
+            let (a, b) = (time(100_000), time(400_000));
+            assert!(
+                b < a * 10 + Duration::from_millis(50),
+                "{unit}: {a:?} vs {b:?}"
+            );
+        }
     }
 
     #[test]

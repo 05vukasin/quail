@@ -33,8 +33,8 @@
 /// Garbage ratio above which a page's text layer should be treated as unusable (OCR it).
 pub const NEEDS_OCR_RATIO: f32 = 0.10;
 
-/// Fewer non-whitespace characters than this on a page are too little to judge; callers
-/// usually treat such a page as image-only.
+/// Fewer non-whitespace characters than this on a page are too little to judge
+/// ([`TextVerdict::TooShort`]).
 pub const MIN_JUDGED_CHARS: usize = 20;
 
 /// Counts behind [`garbage_ratio`]. Counts are additive across pages via [`Self::merge`].
@@ -58,6 +58,26 @@ pub struct GarbageReport {
     pub implausible: usize,
     /// Letters of a script whose vowel share is unnatural (whole text judged at once).
     pub unnatural: usize,
+    /// Texts (pages) behind this report: 1 for a single report, summed by [`Self::merge`].
+    pub texts: usize,
+    /// Of those, texts judged [`TextVerdict::Garbage`] on their own.
+    pub garbage_texts: usize,
+    /// Of those, texts judged [`TextVerdict::TooShort`] on their own.
+    pub short_texts: usize,
+}
+
+/// What a text layer looks like, see [`GarbageReport::verdict`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextVerdict {
+    /// Enough characters, garbage ratio at most [`NEEDS_OCR_RATIO`]: use the text.
+    Clean,
+    /// Enough characters and garbage ratio above [`NEEDS_OCR_RATIO`]: the text layer is
+    /// broken, OCR the page.
+    Garbage,
+    /// Fewer than [`MIN_JUDGED_CHARS`] characters: too little to judge. Not a reason to
+    /// OCR by itself (title pages, blank pages, "Strana 2"); whether the page is a scan is
+    /// for the extractor to decide from its images.
+    TooShort,
 }
 
 impl GarbageReport {
@@ -86,8 +106,14 @@ impl GarbageReport {
         (self.garbage() as f64 / self.chars as f64).min(1.0) as f32
     }
 
-    /// Adds another report (e.g. of the next page).
+    /// Adds another report (e.g. of the next page). Character counts add up, so the merged
+    /// ratio is the document's character-weighted ratio; [`Self::texts`],
+    /// [`Self::garbage_texts`] and [`Self::short_texts`] count the merged pages by their own
+    /// verdicts.
     pub fn merge(&mut self, o: &Self) {
+        self.texts += o.texts;
+        self.garbage_texts += o.garbage_texts;
+        self.short_texts += o.short_texts;
         self.chars += o.chars;
         self.replacement += o.replacement;
         self.private_use += o.private_use;
@@ -99,9 +125,21 @@ impl GarbageReport {
         self.unnatural += o.unnatural;
     }
 
-    /// Whether this text should be treated as a broken text layer.
+    /// Verdict on the text this report covers (for a merged report: on all of it).
+    pub fn verdict(&self) -> TextVerdict {
+        if self.chars < MIN_JUDGED_CHARS {
+            TextVerdict::TooShort
+        } else if self.ratio() > NEEDS_OCR_RATIO {
+            TextVerdict::Garbage
+        } else {
+            TextVerdict::Clean
+        }
+    }
+
+    /// Whether the text layer is broken: `verdict() == TextVerdict::Garbage`. Too little
+    /// text is not a broken layer.
     pub fn needs_ocr(&self) -> bool {
-        self.chars < MIN_JUDGED_CHARS || self.ratio() > NEEDS_OCR_RATIO
+        self.verdict() == TextVerdict::Garbage
     }
 }
 
@@ -291,6 +329,12 @@ pub fn garbage_report(text: &str) -> GarbageReport {
         score_chunk(chunk, &mut r, &mut v);
     }
     r.unnatural = v.unnatural_letters();
+    r.texts = 1;
+    match r.verdict() {
+        TextVerdict::Garbage => r.garbage_texts = 1,
+        TextVerdict::TooShort => r.short_texts = 1,
+        TextVerdict::Clean => {}
+    }
     r
 }
 
@@ -382,7 +426,9 @@ fn score_chunk(chunk: &str, r: &mut GarbageReport, v: &mut VowelCounts) {
         } else if (c.is_control() && !c.is_whitespace()) || is_noncharacter(c) {
             r.control += 1;
         } else if c == '(' && chunk[i..].starts_with("(cid:") {
-            let len = chunk[i..].find(')').map_or(chunk.len() - i, |e| e + 1);
+            // "(cid:12345)": the closing parenthesis is near; without one, only the prefix.
+            let window = &chunk.as_bytes()[i..chunk.len().min(i + 16)];
+            let len = window.iter().position(|&b| b == b')').map_or(5, |e| e + 1);
             let cid_chars = chunk[i..i + len].chars().count();
             r.cid += cid_chars;
             r.chars += cid_chars - 1;
@@ -499,12 +545,57 @@ mod tests {
     #[test]
     fn reports_merge_and_empty() {
         assert!(garbage_ratio("") <= 0.0);
-        assert!(garbage_report("").needs_ocr());
+        assert!(!garbage_report("").needs_ocr());
+        assert_eq!(garbage_report("").verdict(), TextVerdict::TooShort);
         let mut a = garbage_report("abc \u{fffd}");
         let b = garbage_report("def");
         a.merge(&b);
         assert_eq!(a.chars, 7);
+        assert_eq!(a.texts, 2);
         assert_eq!(a.replacement, 1);
+    }
+
+    #[test]
+    fn verdicts() {
+        for short in ["Strana 2", "PDV JMBG", "Hello world", "", "   "] {
+            let r = garbage_report(short);
+            assert_eq!(r.verdict(), TextVerdict::TooShort, "{short:?}");
+            assert!(!r.needs_ocr());
+        }
+        assert_eq!(garbage_report(CLEAN_SR).verdict(), TextVerdict::Clean);
+        let pua: String = (0xE000u32..0xE040).filter_map(char::from_u32).collect();
+        assert_eq!(garbage_report(&pua).verdict(), TextVerdict::Garbage);
+        // Merging counts pages by their own verdicts and weighs the ratio by characters.
+        let mut doc = garbage_report(CLEAN_SR);
+        doc.merge(&garbage_report(&pua));
+        doc.merge(&garbage_report("Strana 2"));
+        assert_eq!((doc.texts, doc.garbage_texts, doc.short_texts), (3, 1, 1));
+        assert!(doc.ratio() > 0.1 && doc.ratio() < 0.5, "{}", doc.ratio());
+        // Foreign names and vowel-poor English words are not garbage.
+        let names = "Hrvatska Wrocław Szczecin Brno Plzeň, rhythm crypt nymph glyph";
+        assert!(
+            garbage_ratio(names) < NEEDS_OCR_RATIO,
+            "{:?}",
+            garbage_report(names)
+        );
+    }
+
+    #[test]
+    fn linear_time() {
+        use std::time::{Duration, Instant};
+        for unit in ["(cid:", "Ã", "aBcD", "x ", "\u{e000}"] {
+            let time = |n: usize| {
+                let s = unit.repeat(n);
+                let t = Instant::now();
+                assert!(garbage_report(&s).chars > 0);
+                t.elapsed()
+            };
+            let (a, b) = (time(50_000), time(200_000));
+            assert!(
+                b < a * 10 + Duration::from_millis(50),
+                "{unit:?}: {a:?} vs {b:?}"
+            );
+        }
     }
 
     #[test]
