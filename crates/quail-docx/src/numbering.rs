@@ -17,6 +17,8 @@ use crate::xml::{Ev, Flow, attr, name, on, val, val_int, walk};
 pub(crate) const LEVELS: usize = 9;
 /// Label of a bullet level.
 const BULLET: &str = "-";
+/// Longest level text kept, in characters.
+const MAX_LEVEL_TEXT: usize = 64;
 /// Most lists kept.
 const MAX_LISTS: usize = 20_000;
 
@@ -164,7 +166,10 @@ impl Numbering {
                             l.fmt = val(e).map(std::borrow::Cow::into_owned)
                         }),
                         "lvlText" => set(&mut cur_lvl, |l| {
-                            l.text = Some(val(e).unwrap_or_default().into_owned());
+                            // Real level texts are a few characters; a hostile one must not be
+                            // copied into every numbered paragraph.
+                            let v = val(e).unwrap_or_default();
+                            l.text = Some(v.chars().take(MAX_LEVEL_TEXT).collect());
                         }),
                         "lvlRestart" => set(&mut cur_lvl, |l| l.restart = val_int(e)),
                         "isLgl" => set(&mut cur_lvl, |l| l.legal = Some(on(e))),

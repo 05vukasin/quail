@@ -476,6 +476,23 @@ fn clm_placeholder_parties() {
     );
 }
 
+/// customXml written by third-party tools: Latin-1 bytes and control characters.
+#[test]
+fn clm_form_with_invalid_bytes() {
+    let mut form = br#"<?xml version="1.0"?><sqph:contractplaceholders xmlns:sqph="urn:x"><sqph:SecondParty><sqph:PlaceholderLegalEntityName>Caf"#.to_vec();
+    form.extend_from_slice(&[0xE9, 0x01]);
+    form.extend_from_slice(
+        b" AG</sqph:PlaceholderLegalEntityName></sqph:SecondParty></sqph:contractplaceholders>",
+    );
+    let bytes = Docx::new(&p("x")).part("customXml/item1.xml", form).build();
+    let (_, out) = extract(bytes);
+    assert_eq!(
+        fact(&out, "docx.clm_second_party"),
+        Some(&Value::text("Caf\u{e9} AG"))
+    );
+    assert!(warnings(out).is_empty());
+}
+
 /// A main part that inflates far past the budget: reading stops at the budget.
 #[test]
 fn zip_bomb_stops_at_budget() {

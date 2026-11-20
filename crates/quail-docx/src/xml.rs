@@ -6,13 +6,13 @@
 //! local names.
 
 use std::borrow::Cow;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 
 use quail_core::Emitter;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 
-use crate::package::{BUDGET_MSG, PartReader};
+use crate::package::BUDGET_MSG;
 
 /// How often (in events) the deadline is checked.
 const DEADLINE_EVERY: u32 = 2048;
@@ -68,7 +68,7 @@ impl Stop {
 
 /// Streams the events of one part to `f`. Returns `Ok` at end of input or when `f` stops.
 pub(crate) fn walk(
-    part: PartReader<'_, '_>,
+    part: impl Read,
     deadline: &Emitter,
     mut f: impl FnMut(Ev<'_>) -> Flow,
 ) -> Result<(), Stop> {

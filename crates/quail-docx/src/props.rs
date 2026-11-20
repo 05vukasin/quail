@@ -1,6 +1,8 @@
 //! File-level properties: `docProps/*`, `word/settings.xml`, `[Content_Types].xml` and the
 //! CLM placeholder form in `customXml/`.
 
+use std::io::Read;
+
 use quail_core::{Emitter, FactKey, Value};
 
 use crate::keys;
@@ -330,9 +332,13 @@ pub(crate) fn clm(pkg: &mut Package<'_>, out: &Emitter, warn: &mut Vec<String>, 
         if first.is_some() && second.is_some() {
             break;
         }
-        let Some(reader) = pkg.open_part(&item) else {
+        // customXml items are written by third-party tools and are often not valid UTF-8 or
+        // carry control bytes: decode leniently and strip what XML 1.0 forbids.
+        let Some(raw) = read_capped(pkg, &item, MAX_CUSTOM_ITEM) else {
             continue;
         };
+        let text = lenient_xml_text(&raw);
+        let reader = text.as_bytes();
         let mut marked = false;
         // Party being read (true = first) and the entity name found in it.
         let mut party: Option<(bool, usize)> = None;
@@ -400,6 +406,27 @@ pub(crate) fn clm(pkg: &mut Package<'_>, out: &Emitter, warn: &mut Vec<String>, 
     if let Some(v) = second {
         facts.push((keys::CLM_SECOND_PARTY, Value::text(v)));
     }
+}
+
+/// Largest customXml item read, in bytes.
+const MAX_CUSTOM_ITEM: u64 = 8 << 20;
+
+fn read_capped(pkg: &mut Package<'_>, part: &str, max: u64) -> Option<Vec<u8>> {
+    let reader = pkg.open_part(part)?;
+    let mut buf = Vec::new();
+    reader.take(max).read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// UTF-8 if valid, else Latin-1; XML-illegal control characters and U+FFFD dropped.
+fn lenient_xml_text(raw: &[u8]) -> String {
+    let s = match std::str::from_utf8(raw) {
+        Ok(s) => std::borrow::Cow::Borrowed(s),
+        Err(_) => std::borrow::Cow::Owned(raw.iter().map(|&b| char::from(b)).collect()),
+    };
+    s.chars()
+        .filter(|&c| !(c.is_control() && !matches!(c, '\t' | '\n' | '\r')) && c != '\u{fffd}')
+        .collect()
 }
 
 fn is_custom_item(n: &str) -> bool {
