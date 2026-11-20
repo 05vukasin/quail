@@ -275,6 +275,13 @@ pub fn fmt_value(v: &Value, max: usize) -> String {
             };
             format!("[{}{more}]", shown.join(", "))
         }
+        Value::Record(fields) => {
+            let shown: Vec<String> = fields
+                .iter()
+                .map(|(k, x)| format!("{k}: {}", fmt_value(x, 40)))
+                .collect();
+            format!("{{{}}}", shown.join(", "))
+        }
     }
 }
 

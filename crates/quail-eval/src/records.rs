@@ -85,6 +85,11 @@ pub fn value_string(v: &Value) -> String {
             .map(value_string)
             .collect::<Vec<_>>()
             .join(", "),
+        Value::Record(fields) => fields
+            .iter()
+            .map(|(k, x)| format!("{k}={}", value_string(x)))
+            .collect::<Vec<_>>()
+            .join(", "),
     }
 }
 

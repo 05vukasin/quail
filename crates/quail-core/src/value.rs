@@ -24,12 +24,38 @@ pub enum Value {
     Money(Money),
     /// Several values of one fact (e.g. the chunk hashes of a file).
     List(Vec<Value>),
+    /// Named fields of one structured fact (e.g. a cited document: kind, number, date),
+    /// in a fixed order. Written as a JSON object. Field names are lowercase snake case and
+    /// documented next to the key that uses them.
+    #[serde(with = "record")]
+    Record(Vec<(Box<str>, Value)>),
 }
 
 impl Value {
     /// Text value from anything string-like.
     pub fn text(s: impl Into<Box<str>>) -> Self {
         Self::Text(s.into())
+    }
+
+    /// Record from `(name, value)` pairs.
+    pub fn record<K: Into<Box<str>>>(fields: impl IntoIterator<Item = (K, Value)>) -> Self {
+        Self::Record(fields.into_iter().map(|(k, v)| (k.into(), v)).collect())
+    }
+
+    /// The field `name` of a record (`None` for other shapes or a missing field).
+    pub fn field(&self, name: &str) -> Option<&Value> {
+        match self {
+            Self::Record(fields) => fields.iter().find(|(k, _)| &**k == name).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
+    /// The text of a `Text` value.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(s) => Some(s),
+            _ => None,
+        }
     }
 }
 
@@ -53,6 +79,48 @@ pub struct Money {
     pub scale: u8,
     /// ISO 4217 code when known, e.g. `*b"EUR"`.
     pub currency: Option<[u8; 3]>,
+}
+
+mod record {
+    use std::fmt;
+
+    use serde::de::{MapAccess, Visitor};
+    use serde::ser::SerializeMap;
+    use serde::{Deserializer, Serializer};
+
+    use super::Value;
+
+    #[allow(clippy::ptr_arg)] // serde passes the field by reference
+    pub fn serialize<S: Serializer>(
+        fields: &Vec<(Box<str>, Value)>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut m = s.serialize_map(Some(fields.len()))?;
+        for (k, v) in fields {
+            m.serialize_entry(&**k, v)?;
+        }
+        m.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Vec<(Box<str>, Value)>, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Vec<(Box<str>, Value)>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a map of field names to values")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
+                let mut out = Vec::with_capacity(a.size_hint().unwrap_or(0));
+                while let Some((k, v)) = a.next_entry::<String, Value>()? {
+                    out.push((k.into_boxed_str(), v));
+                }
+                Ok(out)
+            }
+        }
+        d.deserialize_map(V)
+    }
 }
 
 mod hex_bytes {
@@ -82,6 +150,32 @@ mod hex_bytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_round_trips_as_an_ordered_object() {
+        let v = Value::record([
+            ("kind", Value::text("amendment")),
+            ("ordinal", Value::Int(2)),
+            (
+                "date",
+                Value::Date(Date {
+                    y: 2023,
+                    m: 9,
+                    d: 12,
+                }),
+            ),
+        ]);
+        let j = serde_json::to_string(&v).unwrap();
+        assert!(
+            j.starts_with(r#"{"t":"record","v":{"kind":{"t":"text","v":"amendment"},"ordinal""#),
+            "{j}"
+        );
+        let back: Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, v);
+        assert_eq!(v.field("ordinal"), Some(&Value::Int(2)));
+        assert_eq!(v.field("kind").and_then(Value::as_text), Some("amendment"));
+        assert_eq!(v.field("missing"), None);
+    }
 
     #[test]
     fn bytes_round_trip_as_hex() {
