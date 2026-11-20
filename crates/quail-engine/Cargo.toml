@@ -9,6 +9,15 @@ rust-version.workspace = true
 
 [dependencies]
 quail-core.workspace = true
+thiserror.workspace = true
+crossbeam-channel = "0.5.15"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "overhead"
+harness = false
 
 [lints]
 workspace = true
