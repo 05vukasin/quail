@@ -19,7 +19,8 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Process files or directory trees into JSONL records (one per file).
-    Scan(ScanArgs),
+    // Boxed: ScanArgs is ~290 bytes on Windows (larger PathBuf), far above the others.
+    Scan(Box<ScanArgs>),
     /// Process one file and pretty-print its record (and, with --text, its pages).
     Inspect(InspectArgs),
     /// List every fact key and step this build knows, with one-line docs.
