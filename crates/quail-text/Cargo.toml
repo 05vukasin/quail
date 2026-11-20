@@ -9,6 +9,23 @@ rust-version.workspace = true
 
 [dependencies]
 quail-core.workspace = true
+# Exact versions: tokens, normalization and hashes feed stored sketches, and a Unicode-table
+# or algorithm change in these crates would silently change them (see tests/golden.rs).
+unicode-normalization = "=0.1.26"
+unicode-segmentation = "=1.13.3"
+xxhash-rust = { version = "=0.8.21", features = ["xxh3"] }
+# High-accuracy models of only the languages in `lang::Lang` (about 4.5 MB of binary each).
+lingua = { version = "=1.8.0", default-features = false, features = [
+    "serbian", "croatian", "bosnian", "slovene", "macedonian", "russian",
+    "english", "german", "french", "italian", "spanish",
+] }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "throughput"
+harness = false
 
 [lints]
 workspace = true
