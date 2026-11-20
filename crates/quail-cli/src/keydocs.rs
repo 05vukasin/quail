@@ -270,3 +270,60 @@ pub const DOCX: &[KeyDoc] = &[
         doc: "Filled legal-entity name of the CLM form's Second Party (usually the supplier). Text.",
     },
 ];
+
+/// Keys of `quail_text::keys`.
+#[cfg(feature = "text")]
+pub const TEXT: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_text::keys::CHARS,
+        doc: "Characters of the document text, whitespace excluded (Int).",
+    },
+    KeyDoc {
+        key: quail_text::keys::WORDS,
+        doc: "Word-like tokens (words, numbers, codes) of the document text (Int).",
+    },
+    KeyDoc {
+        key: quail_text::keys::PAGES_WITH_TEXT,
+        doc: "Pages with at least one non-whitespace character (Int).",
+    },
+    KeyDoc {
+        key: quail_text::keys::SCRIPT,
+        doc: "Dominant script of the letters: `latin`, `cyrillic`, `greek`, `other`, or `mixed` when no script has 80 % of the letters (Text). Absent without letters.",
+    },
+    KeyDoc {
+        key: quail_text::keys::SCRIPT_LATIN,
+        doc: "Share of letters in Latin script (Float, 0..=1).",
+    },
+    KeyDoc {
+        key: quail_text::keys::SCRIPT_CYRILLIC,
+        doc: "Share of letters in Cyrillic script (Float, 0..=1).",
+    },
+    KeyDoc {
+        key: quail_text::keys::SCRIPT_GREEK,
+        doc: "Share of letters in Greek script (Float, 0..=1).",
+    },
+    KeyDoc {
+        key: quail_text::keys::SCRIPT_OTHER,
+        doc: "Share of letters in any other script (Float, 0..=1).",
+    },
+    KeyDoc {
+        key: quail_text::keys::GARBAGE_RATIO,
+        doc: "Document-level garbage ratio, see `crate::garbage` (Float, 0..=1).",
+    },
+    KeyDoc {
+        key: quail_text::keys::GARBAGE_PAGES,
+        doc: "Pages with enough text to judge whose garbage ratio exceeds `crate::garbage::NEEDS_OCR_RATIO` (Int).",
+    },
+    KeyDoc {
+        key: quail_text::keys::LANG,
+        doc: "Most likely language, ISO 639-1 (`sr`, `hr`, `en`, ...); `conf` is its score (Text).",
+    },
+    KeyDoc {
+        key: quail_text::keys::LANG_TOP,
+        doc: "Top candidates as a list of `[code, score]` pairs, best first (List).",
+    },
+    KeyDoc {
+        key: quail_text::keys::PAGE_LANG,
+        doc: "Language of one page, with the page as evidence; `conf` is its score (Text).",
+    },
+];

@@ -67,7 +67,20 @@ pub const STEPS: &[StepDoc] = &[
         doc: "Streaming OOXML reader: sections as logical pages, zones, properties, rsids.",
     },
     // TODO(quail-pdf #7): StepDoc for `pdf.extract@1` (feature "pdf").
-    // TODO(quail-text #6): StepDoc for `text.stats@1` and `text.lang@1` (feature "text").
+    #[cfg(feature = "text")]
+    StepDoc {
+        id: quail_text::TextStats::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Characters, words, scripts and garbage ratio of the extracted text.",
+    },
+    #[cfg(feature = "text")]
+    StepDoc {
+        id: quail_text::TextLang::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Document language with top candidates (lingua + sr/hr/bs layer).",
+    },
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
@@ -83,11 +96,10 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     // TODO(quail-pdf #7):
     // #[cfg(feature = "pdf")]
     // let b = b.extractor(Box::new(quail_pdf::PdfExtractor::new()));
-    // TODO(quail-text #6):
-    // #[cfg(feature = "text")]
-    // let b = b
-    //     .analyzer(Box::new(quail_text::TextStats::new()))
-    //     .analyzer(Box::new(quail_text::TextLang::new()));
+    #[cfg(feature = "text")]
+    let b = b
+        .analyzer(Box::new(quail_text::TextStats))
+        .analyzer(Box::new(quail_text::TextLang::new()));
     b
 }
 
@@ -101,7 +113,8 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     #[cfg(feature = "docx")]
     v.push(("quail-docx", keydocs::DOCX));
     // TODO(quail-pdf #7): v.push(("quail-pdf", keydocs::PDF));
-    // TODO(quail-text #6): v.push(("quail-text", keydocs::TEXT));
+    #[cfg(feature = "text")]
+    v.push(("quail-text", keydocs::TEXT));
     v
 }
 
@@ -142,6 +155,8 @@ mod tests {
             ("quail-hash", "quail-hash/src/lib.rs"),
             #[cfg(feature = "docx")]
             ("quail-docx", "quail-docx/src/keys.rs"),
+            #[cfg(feature = "text")]
+            ("quail-text", "quail-text/src/lib.rs"),
         ];
         let tables = key_tables();
         for (krate, file) in sources {

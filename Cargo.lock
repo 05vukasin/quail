@@ -887,6 +887,7 @@ dependencies = [
  "quail-eval",
  "quail-hash",
  "quail-io",
+ "quail-text",
  "serde",
  "serde_json",
  "tempfile",

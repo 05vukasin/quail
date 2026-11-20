@@ -551,7 +551,11 @@ fn keys_and_version() {
         .iter()
         .map(|s| s["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, ["engine.sniff@1", "docx.extract@1", "hash.identity@1"]);
+    let mut expected = vec!["engine.sniff@1", "docx.extract@1", "hash.identity@1"];
+    if cfg!(feature = "text") {
+        expected.extend(["text.stats@1", "text.lang@1"]);
+    }
+    assert_eq!(ids, expected);
     // Deterministic.
     let again: Json = serde_json::from_slice(&run(&["version", "--json"]).stdout).unwrap();
     assert_eq!(again["fingerprint"], v["fingerprint"]);
@@ -572,4 +576,31 @@ fn usage_errors() {
         assert!(stderr(&o).contains("zstd"));
         assert!(!o.status.success());
     }
+}
+
+/// With the text feature, an extracted DOCX also gets text statistics and a language.
+#[test]
+#[cfg(all(feature = "docx", feature = "text"))]
+fn docx_gets_text_facts() {
+    let t = tempfile::tempdir().unwrap();
+    let body = "The supplier shall deliver the services described in this agreement \
+                within thirty days of the effective date, and the customer shall pay \
+                every invoice within forty five days of receipt.";
+    let a = write(t.path(), "a.docx", &docx("Service Agreement", body));
+    let out = t.path().join("out.jsonl");
+    let o = run(&[
+        "scan",
+        a.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--quiet",
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let recs = records(&fs::read_to_string(&out).unwrap());
+    let keys: Vec<&str> = recs[0].facts.iter().map(|f| f.key.as_str()).collect();
+    for k in ["text.chars", "text.words", "text.lang"] {
+        assert!(keys.contains(&k), "{k} missing in {keys:?}");
+    }
+    let lang = recs[0].facts_for("text.lang").next().unwrap();
+    assert_eq!(lang.value, quail_core::Value::text("en"));
 }
