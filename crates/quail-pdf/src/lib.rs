@@ -3,9 +3,13 @@
 //! [`PdfExtractor`] (`pdf.extract@1`) turns a PDF into a [`Document`](quail_core::Document):
 //! one physical [`Page`](quail_core::Page) per page with its size, its text in reading order
 //! and paragraph [`Block`](quail_core::Block)s carrying boxes (points, top-left origin) and
-//! zones (header/footer by geometry and repetition, body otherwise). Each page says whether
-//! its text layer is usable or the page should be OCR'd. File-level properties go out as
-//! `pdf.*` facts, declared in [`keys`].
+//! zones (header/footer by geometry and repetition, body otherwise), and the images it draws.
+//! Each page says whether its text layer is usable or the page should be OCR'd. File-level
+//! properties go out as `pdf.*` facts, declared in [`keys`].
+//!
+//! The extractor also provides a [`Raster`](quail_core::Raster) artifact backed by
+//! [`PdfRaster`]: OCR renders pages, or takes a page's embedded scan, through the core
+//! [`PageRaster`](quail_core::PageRaster) trait without depending on this crate.
 //!
 //! The stack is pure Rust: `hayro-syntax` parses (xref repair, object streams, RC4/AES with the
 //! empty user password) and `hayro-interpret` runs content streams into a text-collecting
@@ -21,13 +25,12 @@ mod extract;
 mod layout;
 mod meta;
 mod quality;
+mod raster;
 mod raw;
 mod zones;
 
-pub use device::ImagePlacement;
 pub use extract::PdfExtractor;
-
-use quail_core::Artifact;
+pub use raster::PdfRaster;
 
 /// Keys of the facts this crate emits. All live under `pdf.*`.
 pub mod keys {
@@ -79,34 +82,4 @@ pub mod keys {
     pub const IMAGE_ONLY_PAGES: FactKey = FactKey::new("pdf.image_only_pages");
     /// Extracted pages flagged `needs_ocr`. Int.
     pub const PAGES_NEEDING_OCR: FactKey = FactKey::new("pdf.pages_needing_ocr");
-}
-
-/// Per-page image information for OCR: lets `quail-ocr` decide between extracting the
-/// embedded scan directly and rendering the page. Indexed like
-/// [`Document::pages`](quail_core::Document::pages).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PdfPages {
-    /// One entry per extracted page.
-    pub pages: Vec<PdfPageInfo>,
-}
-
-/// Image information about one page.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PdfPageInfo {
-    /// Zero-based page index.
-    pub index: u32,
-    /// Number of images drawn on the page.
-    pub image_count: u32,
-    /// Share of the page covered by images, 0..=1.
-    pub image_coverage: f32,
-    /// The page is an image with (almost) no text: a scan.
-    pub image_only: bool,
-    /// The first images drawn, with pixel size and placement.
-    pub images: Vec<ImagePlacement>,
-    /// Page rotation in degrees (0, 90, 180, 270), already applied to all coordinates.
-    pub rotation: u16,
-}
-
-impl Artifact for PdfPages {
-    const NAME: &'static str = "pdf.pages";
 }

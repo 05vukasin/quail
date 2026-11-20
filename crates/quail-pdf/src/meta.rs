@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use hayro_syntax::Pdf;
-use hayro_syntax::object::{Array, DateTime, Dict, Name, Stream};
+use hayro_syntax::object::{Array, DateTime, Dict, Name, Object, Stream};
 use hayro_syntax::page::Page;
 use quail_core::Date;
 
@@ -67,8 +67,24 @@ pub(crate) fn catalog_facts(pdf: &Pdf, raw: &[u8]) -> CatalogFacts {
         || crate::raw::find(raw, b"/JS ").is_some()
         || crate::raw::find(raw, b"/JS(").is_some()
         || crate::raw::find(raw, b"/JS<").is_some();
-    out.has_javascript = js_tree || open_js || raw_js;
+    out.has_javascript = js_tree || open_js || raw_js || js_in_objects(pdf);
     out
+}
+
+/// Objects inspected by [`js_in_objects`].
+const MAX_OBJECTS_SCANNED: usize = 200_000;
+
+/// Any dictionary that is a JavaScript action (`/S /JavaScript`) or carries a `/JS` entry.
+/// Walks every object, including those inside compressed object streams, which a byte scan
+/// cannot see. Only runs when the cheaper checks found nothing.
+fn js_in_objects(pdf: &Pdf) -> bool {
+    pdf.objects()
+        .into_iter()
+        .take(MAX_OBJECTS_SCANNED)
+        .any(|o| match o {
+            Object::Dict(d) => d.contains_key(b"JS") || is_js_action(&d),
+            _ => false,
+        })
 }
 
 fn is_js_action(a: &Dict<'_>) -> bool {

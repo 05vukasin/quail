@@ -8,7 +8,11 @@
 //! Deflate expands at most ~1032:1, so when the whole file times that ratio fits in the
 //! budget no stream can exceed it and the check is skipped (the common case for files below
 //! ~1 MB with the default 1 GiB budget). Images are never decoded by the text device, so they
-//! are not charged.
+//! are charged only when a page is rendered ([`Budget::charge_images`]).
+//!
+//! hayro also inflates object streams (`/Type /ObjStm`) while resolving objects, with no hook
+//! to cap it, so [`object_streams_fit`] measures them on the raw bytes before the file is
+//! opened. That byte scan cannot see inside encrypted object streams.
 
 use std::collections::HashSet;
 
@@ -68,6 +72,44 @@ impl Budget {
         streams.iter().all(|s| self.charge(s))
     }
 
+    /// Charges the images `page` draws directly (rendering decodes them): their declared
+    /// size at 4 bytes per pixel, plus the measured inflate of Flate-compressed ones.
+    pub fn charge_images(&mut self, page: &Page<'_>) -> bool {
+        let res = page.resources();
+        for key in res.x_objects.keys() {
+            let Some(x) = res.x_objects.get::<Stream<'_>>(&*key) else {
+                continue;
+            };
+            let d = x.dict();
+            if !d
+                .get::<Name<'_>>(b"Subtype")
+                .is_some_and(|n| n.as_str() == "Image")
+            {
+                continue;
+            }
+            if !self.seen.insert(x.obj_id()) {
+                continue;
+            }
+            let dim = |k: &[u8]| u64::try_from(d.get::<i64>(k).unwrap_or(0)).unwrap_or(0);
+            let pixels = dim(b"Width").saturating_mul(dim(b"Height"));
+            let cost = pixels.saturating_mul(4);
+            if cost > self.remaining {
+                self.remaining = 0;
+                return false;
+            }
+            self.remaining -= cost;
+            if matches!(x.filters().as_slice(), [Filter::FlateDecode]) && !self.trivially_safe {
+                let produced = bounded_inflate(&x.raw_data(), self.remaining.saturating_add(1));
+                if produced > self.remaining {
+                    self.remaining = 0;
+                    return false;
+                }
+                self.remaining -= produced;
+            }
+        }
+        true
+    }
+
     fn charge(&mut self, s: &Stream<'_>) -> bool {
         let filters = s.filters();
         let deflates = filters
@@ -113,6 +155,43 @@ fn font_programs<'a>(font: &Dict<'a>, out: &mut Vec<Stream<'a>>) {
             }
         }
     }
+}
+
+/// Whether the file's object streams inflate within `max` bytes in total. Works on raw bytes:
+/// the data of the first `stream` after each `/ObjStm` is inflated with a cap. Trivially true
+/// when the file is too small to exceed `max` at the worst deflate ratio.
+pub(crate) fn object_streams_fit(bytes: &[u8], max: u64) -> bool {
+    if (bytes.len() as u64).saturating_mul(MAX_DEFLATE_RATIO) <= max {
+        return true;
+    }
+    let mut left = max;
+    let mut from = 0usize;
+    while let Some(rel) = bytes.get(from..).and_then(|b| crate::raw::find(b, b"/ObjStm")) {
+        let at = from + rel;
+        from = at + 7;
+        // The stream keyword after the dictionary, and the data up to `endstream`.
+        let Some(kw) = bytes.get(at..).and_then(|b| crate::raw::find(b, b"stream")) else {
+            break;
+        };
+        let mut start = at + kw + 6;
+        if bytes.get(start) == Some(&b'\r') {
+            start += 1;
+        }
+        if bytes.get(start) == Some(&b'\n') {
+            start += 1;
+        }
+        let Some(data) = bytes.get(start..) else {
+            break;
+        };
+        let end = crate::raw::find(data, b"endstream").unwrap_or(data.len());
+        let produced = bounded_inflate(data.get(..end).unwrap_or(data), left.saturating_add(1));
+        if produced > left {
+            return false;
+        }
+        left -= produced;
+        from = start + end;
+    }
+    true
 }
 
 /// Inflates zlib (or raw deflate) data, stopping once `cap` bytes were produced. Returns the

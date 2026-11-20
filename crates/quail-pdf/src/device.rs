@@ -8,23 +8,14 @@ use hayro_interpret::{
     BlendMode, ClipPath, Device, DrawMode, DrawProps, Image, ImageDrawProps, SoftMask,
 };
 
+use quail_core::{BBox, PageImage};
+
 use crate::layout::Glyph;
 
 /// Glyphs kept per page; a hostile page drawing millions of glyphs is truncated.
 pub(crate) const MAX_GLYPHS_PER_PAGE: usize = 400_000;
 /// Image placements remembered per page (the count keeps going).
 const MAX_IMAGES_KEPT: usize = 64;
-
-/// One image drawn on a page.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ImagePlacement {
-    /// Pixel width of the image.
-    pub width: u32,
-    /// Pixel height of the image.
-    pub height: u32,
-    /// Where it lands on the page (points, top-left origin), clipped to the page.
-    pub bbox: quail_core::BBox,
-}
 
 /// What the device saw on one page.
 #[derive(Default)]
@@ -37,7 +28,7 @@ pub(crate) struct PageCapture {
     /// Number of image draws (including stencil masks).
     pub images: usize,
     /// The first [`MAX_IMAGES_KEPT`] placements.
-    pub placements: Vec<ImagePlacement>,
+    pub placements: Vec<PageImage>,
     /// Number of filled or stroked paths.
     pub paths: usize,
     page: Rect,
@@ -141,10 +132,9 @@ impl<'a> Device<'a> for PageCapture {
         if !(r.area().is_finite() && r.area() > 0.0) {
             return;
         }
-        self.placements.push(ImagePlacement {
-            width: w,
-            height: h,
-            bbox: quail_core::BBox {
+        self.placements.push(PageImage {
+            pixels: (w, h),
+            bbox: BBox {
                 x0: f(r.x0),
                 y0: f(r.y0),
                 x1: f(r.x1),

@@ -8,17 +8,18 @@ use std::sync::Arc;
 use hayro_interpret::kurbo::Rect;
 use hayro_interpret::util::TransformExt;
 use hayro_interpret::{Context, InterpreterCache, InterpreterSettings, interpret_page};
-use hayro_syntax::page::{Page as HPage, Rotation};
+use hayro_syntax::page::Page as HPage;
 use hayro_syntax::{DecryptionError, LoadPdfError, Pdf, PdfData, PdfVersion};
 use quail_core::{
     AnalyzerId, Blob, Block, BlockKind, Document, Emitter, Error, Extractor, Format, Limits, Page,
-    PageKind, Result, Span, TextSource, Value, Zone,
+    PageKind, Raster, Result, Span, TextSource, Value, Zone,
 };
 
 use crate::budget::Budget;
 use crate::device::PageCapture;
 use crate::quality::{Signals, garbage_ratio, judge};
-use crate::{PdfPageInfo, PdfPages, keys, layout, meta, raw, zones};
+use crate::raster::PdfRaster;
+use crate::{keys, layout, meta, raw, zones};
 
 /// The PDF extractor (`pdf.extract@1`). Stateless; one instance serves every thread.
 #[derive(Clone, Copy, Debug, Default)]
@@ -49,7 +50,7 @@ impl Extractor for PdfExtractor {
 }
 
 /// Lets hayro read the blob without copying it.
-struct BlobBytes(Blob);
+pub(crate) struct BlobBytes(pub(crate) Blob);
 
 impl AsRef<[u8]> for BlobBytes {
     fn as_ref(&self) -> &[u8] {
@@ -57,7 +58,7 @@ impl AsRef<[u8]> for BlobBytes {
     }
 }
 
-fn panic_msg(p: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_msg(p: &(dyn std::any::Any + Send)) -> String {
     p.downcast_ref::<&str>()
         .map(|s| (*s).to_owned())
         .or_else(|| p.downcast_ref::<String>().cloned())
@@ -103,6 +104,15 @@ fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> 
     );
     out.fact(keys::LINEARIZED, Value::Bool(scan.linearized));
 
+    // hayro inflates object streams while opening, without a cap: measure them first.
+    if !crate::budget::object_streams_fit(bytes, limits.max_decompressed) {
+        if let Some(v) = &scan.header_version {
+            out.fact(keys::VERSION, Value::text(v.as_str()));
+        }
+        out.fact(keys::ENCRYPTED, Value::Bool(scan.encrypt_entry));
+        return Err(Error::LimitExceeded("max_decompressed"));
+    }
+
     let data = PdfData::from(Arc::new(BlobBytes(blob.clone())));
     let pdf = match catch_unwind(AssertUnwindSafe(|| Pdf::new(data))) {
         Ok(Ok(pdf)) => pdf,
@@ -139,8 +149,10 @@ fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> 
         Err(p) => out.warn(format!("document facts skipped: {}", panic_msg(&*p))),
     }
 
-    let (doc, info) = pages(&pdf, bytes.len(), limits, out);
-    out.provide(info);
+    let doc = pages(&pdf, bytes.len(), limits, out);
+    // Later steps (OCR) get pixels through the core trait and never depend on this crate.
+    // The raster shares the file's bytes; it holds no parsed state.
+    out.provide(Raster(Arc::new(PdfRaster::new(blob.clone()))));
     Ok(doc)
 }
 
@@ -182,22 +194,13 @@ struct Pending {
     bboxes: Vec<quail_core::BBox>,
 }
 
-fn rotation_deg(r: Rotation) -> u16 {
-    match r {
-        Rotation::None => 0,
-        Rotation::Horizontal => 90,
-        Rotation::Flipped => 180,
-        Rotation::FlippedHorizontal => 270,
-    }
-}
-
 #[allow(clippy::too_many_lines)]
-fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> (Document, PdfPages) {
+fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> Document {
     let all = pdf.pages();
     out.fact(keys::PAGE_COUNT, int(all.len()));
     let max = usize::try_from(limits.max_pages).unwrap_or(usize::MAX);
     if all.len() > max {
-        out.warn(format!(
+        out.problem(format!(
             "{} pages, only the first {max} extracted (max_pages)",
             all.len()
         ));
@@ -209,16 +212,16 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> (Doc
     let mut text_left = usize::try_from(limits.max_text_bytes).unwrap_or(usize::MAX);
     let mut fonts = BTreeSet::new();
     let mut pending: Vec<Pending> = Vec::new();
-    let mut info = PdfPages::default();
+    let mut image_only_pages = 0usize;
 
     for (i, page) in all.iter().take(max).enumerate() {
         let index = u32::try_from(i).unwrap_or(u32::MAX);
         if out.check_deadline().is_err() {
-            out.warn(format!("timeout: stopped before page {index}"));
+            out.problem(format!("timeout: stopped before page {index}"));
             break;
         }
         if !budget.charge_page(page) {
-            out.warn(format!(
+            out.problem(format!(
                 "max_decompressed reached: stopped before page {index}"
             ));
             break;
@@ -226,12 +229,11 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> (Doc
         let _ = catch_unwind(AssertUnwindSafe(|| meta::page_fonts(page, &mut fonts)));
 
         let (w, h) = page.render_dimensions();
-        let rotation = rotation_deg(page.rotation());
         let captured = catch_unwind(AssertUnwindSafe(|| capture(page, &cache, &settings, w, h)));
         let cap = match captured {
             Ok(c) => c,
             Err(p) => {
-                out.warn(format!(
+                out.problem(format!(
                     "page {index}: interpreter failed: {}",
                     panic_msg(&*p)
                 ));
@@ -239,20 +241,11 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> (Doc
                 cache = InterpreterCache::new();
                 pending.push(Pending {
                     page: Page {
-                        index,
-                        kind: PageKind::Physical,
                         size: Some((w, h)),
-                        text: String::new(),
-                        blocks: Vec::new(),
-                        text_source: TextSource::None,
                         needs_ocr: true,
+                        ..Page::new(index, PageKind::Physical)
                     },
                     bboxes: Vec::new(),
-                });
-                info.pages.push(PdfPageInfo {
-                    index,
-                    rotation,
-                    ..PdfPageInfo::default()
                 });
                 continue;
             }
@@ -291,7 +284,7 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> (Doc
             kept.push((span, b.bbox));
         }
         if truncated_text {
-            out.warn(format!(
+            out.problem(format!(
                 "max_text_bytes reached on page {index}: text truncated"
             ));
         }
@@ -326,24 +319,18 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> (Doc
             .collect();
         pending.push(Pending {
             page: Page {
-                index,
-                kind: PageKind::Physical,
                 size: Some((w, h)),
                 text,
                 blocks: blocks_out,
                 text_source,
                 needs_ocr: verdict.needs_ocr,
+                images: placements,
+                image_coverage: coverage,
+                ..Page::new(index, PageKind::Physical)
             },
             bboxes: kept.into_iter().map(|(_, b)| b).collect(),
         });
-        info.pages.push(PdfPageInfo {
-            index,
-            image_count: u32::try_from(images).unwrap_or(u32::MAX),
-            image_coverage: coverage,
-            image_only: verdict.image_only,
-            images: placements,
-            rotation,
-        });
+        image_only_pages += usize::from(verdict.image_only);
     }
 
     // Zones need every page: repetition is a cross-page signal.
@@ -381,16 +368,16 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> (Doc
     );
     out.fact(
         keys::IMAGE_ONLY_PAGES,
-        int(info.pages.iter().filter(|p| p.image_only).count()),
+        int(image_only_pages),
     );
     out.fact(
         keys::PAGES_NEEDING_OCR,
         int(doc.pages.iter().filter(|p| p.needs_ocr).count()),
     );
-    (doc, info)
+    doc
 }
 
-fn capture<'a>(
+pub(crate) fn capture<'a>(
     page: &HPage<'a>,
     cache: &InterpreterCache<'a>,
     settings: &InterpreterSettings,

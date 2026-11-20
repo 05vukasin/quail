@@ -13,6 +13,8 @@ quail-core.workspace = true
 # interpreter. The same stack renders pages (crate `hayro`) for OCR later.
 hayro-syntax = "0.9.0"
 hayro-interpret = "0.9.0"
+# Renderer behind the `PageRaster` the extractor provides (same interpreter as above).
+hayro = "0.9.0"
 # Bounded inflate for the `max_decompressed` guard.
 miniz_oxide = "0.8.9"
 
