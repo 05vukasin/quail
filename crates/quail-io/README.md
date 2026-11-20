@@ -25,8 +25,10 @@ walked). Unsorted mode holds even less.
 ## Errors and limits
 
 Nothing ends a source except running out of input. An unreadable file, a directory that cannot
-be listed, a missing root, a symlink loop or a bad manifest line is one `Err` item: an
-`Error::Io` whose message starts with the path (or manifest line), keeping the I/O error kind.
+be listed, a missing root, a symlink loop or a bad manifest line is one `Err` item, keeping
+the I/O error kind. A file that cannot be read (or is over the size cap) is
+`Error::at(locator, Error::Io(..))`, so the engine writes a `Failed` record under its locator;
+the other cases are an `Error::Io` whose message starts with the path (or manifest line).
 
 Large files: by default every file is read whole and the engine applies `Limits::max_bytes`
 (memory is bounded by the engine's in-flight limit). `ReadOptions::max_file_bytes(Some(cap))`

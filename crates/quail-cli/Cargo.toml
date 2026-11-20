@@ -1,0 +1,42 @@
+[package]
+name = "quail-cli"
+description = "The `quail` command: scan files into JSONL records, inspect one file, list keys and steps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "quail"
+path = "src/main.rs"
+
+[features]
+default = ["docx"]
+# Extractors and analyzers wired in by `registry.rs`, one feature per crate.
+docx = ["dep:quail-docx"]
+# TODO(quail-pdf #7): pdf = ["dep:quail-pdf"]
+# TODO(quail-text #6): text = ["dep:quail-text"]
+# zstd-compressed output (`--zstd`). Links the C zstd library, so it is not in the default build.
+zstd = ["quail-io/zstd"]
+
+[dependencies]
+quail-core.workspace = true
+quail-engine = { path = "../quail-engine" }
+quail-io = { path = "../quail-io" }
+quail-hash = { path = "../quail-hash" }
+quail-docx = { path = "../quail-docx", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+clap = { version = "4.6", features = ["derive"] }
+ctrlc = "3.5"
+
+[dev-dependencies]
+tempfile = "3.27"
+# The dump format is the one quail-eval reads: tested against its own reader.
+quail-eval = { path = "../quail-eval" }
+# Writes the generated DOCX fixtures (stored entries only, no compressor needed).
+zip = { version = "9.0.5", default-features = false }
+
+[lints]
+workspace = true
