@@ -9,6 +9,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use quail_core::{FileRecord, Format, Status, Value};
+use quail_eval::inspect::{DocumentSource, Sidecar};
 use serde_json::Value as Json;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -310,6 +311,13 @@ fn dump_documents_writes_sidecar_lines() {
         Status::Ok,
         "the tap adds no problem without a document"
     );
+
+    // quail-eval reads the dump back and finds each record's document.
+    let sidecar = Sidecar::load(&dump, None).unwrap();
+    for r in &recs {
+        let doc = sidecar.document(r).unwrap();
+        assert_eq!(doc.is_some(), r.format == Format::Docx, "{}", r.locator);
+    }
 }
 
 #[test]

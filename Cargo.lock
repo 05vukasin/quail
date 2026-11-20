@@ -884,6 +884,7 @@ dependencies = [
  "quail-core",
  "quail-docx",
  "quail-engine",
+ "quail-eval",
  "quail-hash",
  "quail-io",
  "serde",
