@@ -1,0 +1,3 @@
+//! PDF extractor.
+//!
+//! Namespace: `pdf.*`.

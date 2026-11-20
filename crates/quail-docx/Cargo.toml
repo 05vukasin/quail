@@ -1,0 +1,14 @@
+[package]
+name = "quail-docx"
+description = "DOCX extractor: streaming OOXML parse with zones, properties and revision ids"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+
+[lints]
+workspace = true

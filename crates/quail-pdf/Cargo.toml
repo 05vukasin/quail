@@ -1,0 +1,14 @@
+[package]
+name = "quail-pdf"
+description = "PDF extractor: text with positions, page structure and file-level PDF facts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+
+[lints]
+workspace = true

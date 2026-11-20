@@ -1,0 +1,27 @@
+/target*
+**/*.rs.bk
+# Documents and data never go into git; corpora live in ../testdata, notes in ../lab
+*.pdf
+*.PDF
+*.docx
+*.DOCX
+*.doc
+*.tif
+*.tiff
+*.png
+!/assets/**/*.png
+*.jpg
+*.csv
+*.parquet
+*.jsonl
+*.onnx
+/models-cache/
+# Generated eval output
+/eval/runs/
+/eval/inspect/
+# local secrets
+.env
+.env.*
+!.env.example
+/.claude/*
+!/.claude/skills/

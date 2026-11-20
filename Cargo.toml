@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/05vukasin/quail"
+rust-version = "1.97"
+
+[workspace.dependencies]
+quail-core = { path = "crates/quail-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+
+# Unwinding, not abort: a panic on a hostile file must end only that file (catch_unwind in
+# quail-engine), never the process. Portable: no target-cpu=native anywhere; SIMD paths are
+# selected at runtime.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+opt-level = 3
+
+[profile.profiling]
+inherits = "release"
+debug = true
+lto = "thin"
+codegen-units = 16
+
+# Dev builds keep dependencies optimized so tests over real files stay fast.
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,3 @@
+//! DOCX extractor.
+//!
+//! Namespace: `docx.*`.

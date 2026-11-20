@@ -1,0 +1,1 @@
+doc-valid-idents = ["SimHash", "MinHash", "FastCDC", "BLAKE3", "OOXML", "DOCX", "PDFium", "OCR", "ONNX", "JSONL", "TLSH", "..",]
