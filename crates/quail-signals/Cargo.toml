@@ -1,0 +1,22 @@
+[package]
+name = "quail-signals"
+description = "Rule-based candidates for formatted business data: identifiers with checksums, dates, money, contacts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+quail-text = { path = "../quail-text" }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "scan"
+harness = false
