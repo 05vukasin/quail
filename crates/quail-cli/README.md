@@ -113,7 +113,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `signals` (default) | quail-signals | `signal.scan@1` |
 | `refs` (default) | quail-refs | `ref.references@1` |
 | `parties` (default) | quail-parties | `party.candidates@1` |
-| `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); `sketch.page_phash@1` needs the PDF raster, wired with `pdf` |
+| `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); `sketch.page_phash@1` not wired: needs the `raster` artifact, which the engine cannot see an extractor provide yet |
 | `zstd` | (quail-io) | `--zstd` output |
 
 Key docs (`src/keydocs.rs`) are generated from each crate's `keys` module by

@@ -151,8 +151,11 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "Byte-compatible port of the reference service's MinHash and template sketches.",
     },
-    // TODO(quail-pdf #7): `sketch.page_phash@1` needs the `raster` artifact, which only the
-    // PDF extractor provides; register it (StepDoc + builder) with `all(sketch, pdf)`.
+    // TODO(engine): `sketch.page_phash@1` requires the `raster` artifact. The PDF extractor
+    // (quail-pdf #7) inserts it at run time, but `EngineBuilder::build` only accepts
+    // `BUILTIN_ARTIFACTS` (`document`) or an analyzer's `provides()`, so the build fails with
+    // `Unsatisfied { artifact: "raster" }` even with quail-pdf. Register it (StepDoc + builder,
+    // `all(sketch, pdf)`) once extractors can declare the artifacts they provide.
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
