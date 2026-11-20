@@ -20,7 +20,7 @@ All require the `document` artifact.
 | `sketch.layout@1` | Fast | `sketch.layout`, `sketch.layout_blocks` | U64, Int | `hamming` | ≤ 6 same layout (PDF geometry) |
 | | | `sketch.structure` | U64 | `hamming` | ≤ 8 same structure (headings, lists, tables) |
 | | | `sketch.headings` | U64 | equality | same heading skeleton |
-| `sketch.invoice_layout@1` | Fast | `sketch.invoice_layout`, `sketch.invoice_labels`, `sketch.invoice_number_patterns` | U64, Int, Int | equality (and labels ≥ 3 to call it an invoice) | |
+| `sketch.invoice_layout@1` | Fast | `sketch.invoice_layout`, `sketch.invoice_labels`, `sketch.invoice_number_patterns` | U64, Int, Int | equality | gate on `invoice_labels` ≥ 4 to treat the file as an invoice |
 | `sketch.text_key@1` | Fast | `sketch.text_key` | Bytes, 16 (XXH3-128) | equality | same words (≥ 400 chars) |
 | `sketch.minhash_sada@1` | Standard | `sketch.sada_minhash`, `sketch.sada_minhash_bands`, `sketch.sada_shingles`, `sketch.sada_template` | Bytes 128 × u64 LE, List of Text, Int, U64 | as the Python service | see below |
 | `sketch.page_phash@1` | Standard (needs `raster`) | `sketch.page_phash`, `sketch.page_phash_pages` | List of U64, List of Int | `hamming` per page | ≤ 8 per page, all pages, equal counts |
@@ -82,7 +82,7 @@ bucket strings `"band:hex"`, template SimHash over entity-masked unigrams, invoi
 number shapes, heading skeleton). Python's `\w`, `\s`, `\b` and case-insensitive `i` are
 emulated exactly. Given the same text the values are identical: checked on the text of 380
 private PDF/DOCX files (352 version signatures, 352 bucket lists, 352 template
-fingerprints, 276 invoice fingerprints: 100 % equal) and on 90 000 random strings over a
+fingerprints, 276 invoice fingerprints: 100 % equal) and on 120 000 random strings over a
 pool of tricky Unicode (marks, superscripts, `İ ı ſ K`, U+001C–U+001F, NBSP, U+2028, …).
 The Python service's thresholds: version ≥ 0.90, ≥ 0.75 with an identity tie, near-dup
 ≥ 0.60, another rendering of one invoice < 0.40, template within 8 bits, scanned page within
@@ -97,9 +97,12 @@ The Python service's thresholds: version ≥ 0.90, ≥ 0.75 with an identity tie
 |---|---|---|
 | MinHash J ≥ 0.6 / ≥ 0.75 / ≥ 0.9 | 580 / 135 / 36 | 98 % / 90 % / 72 %¹ |
 | LSH bands: candidate pairs | 3 915 (6 % of pairs), recall of J ≥ 0.6 pairs 580/580 | |
-| SimHash text ≤ 6 | see `simhash` docs: all 36 J ≥ 0.9 pairs within 5 bits | |
+| SimHash text ≤ 6 | 74 (72 with J ≥ 0.6, none below 0.3; all 36 J ≥ 0.9 pairs within 5 bits) | 82 % |
 | Template ≤ 8 | 3 429 | 100 % |
-| Layout ≤ 6 | 3 434 | 98 % (99 % same document kind) |
+| Layout ≤ 6 (345 PDFs) | 3 434 (≤ 10: 6 207, 85 %) | 98 % (99 % same document kind) |
+| Structure ≤ 8 (10 DOCX, no versions among them) | 0 (closest pair 13 bits) | |
+| Invoice layout (≥ 1 label: 276 docs) | 87 distinct values, 40 groups; ≥ 4 labels: 178 of 207 invoices vs 9 of 161 other files | |
+| Text key | 18 groups of identical words covering 41 docs | |
 
 ¹ exact copies filed under several folders. Spot checks (looked at by hand): of the 36 pairs
 with J ≥ 0.9, 34 are copies, re-uploads, renderings or versions of one document and 2 are
@@ -113,17 +116,17 @@ Cost per document (laptop, shared machine, `profiling` build), median / p95 / ma
 
 | analyzer | µs | peak heap |
 |---|---|---|
-| `sketch.minhash` | 345 / 11 900 / 39 900 | median 5 KB, max 1.2 MB |
-| `sketch.simhash_text` | 190 / 7 600 / 30 200 | max 1.2 MB |
-| `sketch.simhash_template` | 180 / 7 100 / 20 500 | max 1.2 MB |
-| `sketch.layout` | 16 / 89 / 1 700 | max 0.35 MB |
-| `sketch.invoice_layout` | 480 / 20 200 / 61 200 | max 1.5 MB |
-| `sketch.text_key` | 150 / 6 600 / 23 000 | max 0.6 MB |
-| `sketch.minhash_sada` | 1 440 / 57 600 / 155 000 | max 3.6 MB |
-| `sketch.page_phash` (47 docs, 290 pages) | 155 000 / 767 000 / 1 556 000 | median 12 MB, max 29 MB (one decoded scan) |
+| `sketch.minhash` | 420 / 15 900 / 53 300 | median 5 KB, max 1.2 MB |
+| `sketch.simhash_text` | 230 / 8 900 / 24 700 | max 1.2 MB |
+| `sketch.simhash_template` | 210 / 8 100 / 23 100 | max 1.2 MB |
+| `sketch.layout` | 19 / 94 / 1 900 | max 0.35 MB |
+| `sketch.invoice_layout` | 590 / 23 200 / 59 400 | max 1.5 MB |
+| `sketch.text_key` | 180 / 6 900 / 22 200 | max 0.6 MB |
+| `sketch.minhash_sada` | 1 670 / 60 400 / 197 000 | max 3.6 MB |
+| `sketch.page_phash` (47 docs, 290 pages) | 156 000 / 770 000 / 1 578 000 | median 12 MB, max 29 MB (one decoded scan) |
 
 The text sketches are linear in the text; the largest document's MinHash (about 100 000
-shingles) takes 40 ms. `cargo bench -p quail-sketch` measures throughput on generated text.
+shingles) takes about 50 ms. For comparison, `pdf.extract` takes 6 ms median on the same files. `cargo bench -p quail-sketch` measures throughput on generated text.
 
 ## Limits and robustness
 
