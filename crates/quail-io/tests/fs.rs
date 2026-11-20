@@ -207,20 +207,11 @@ fn size_cap_turns_big_files_into_errors() {
         .read_options(ReadOptions::new().max_file_bytes(Some(10)))
         .build()
         .unwrap();
-    let Some(Err(err)) = src.next_item() else {
+    let Some(Err(Error::Io(e))) = src.next_item() else {
         panic!("big should fail")
     };
-    assert_eq!(
-        err.locator(),
-        Some(&*t.path().join("big").to_string_lossy())
-    );
-    let Error::Source { source, .. } = err else {
-        panic!("expected a located error")
-    };
-    let Error::Io(e) = *source else {
-        panic!("expected io")
-    };
     assert_eq!(e.kind(), io::ErrorKind::FileTooLarge);
+    assert!(e.to_string().contains("big"), "{e}");
     assert_eq!(src.next_item().unwrap().unwrap().blob.len(), 10);
     assert!(src.next_item().is_none());
 }
@@ -248,12 +239,9 @@ fn unreadable_file_is_an_error_item_and_the_walk_continues() {
     while let Some(item) = src.next_item() {
         match item {
             Ok(it) => seen.push(it.blob.as_bytes().to_vec()),
-            Err(Error::Source { locator, source }) => {
-                assert_eq!(locator, b.to_string_lossy());
-                let Error::Io(e) = *source else {
-                    panic!("expected io, got {source}")
-                };
+            Err(Error::Io(e)) => {
                 assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
+                assert!(e.to_string().contains(&*b.to_string_lossy()), "{e}");
                 seen.push(b"ERR".to_vec());
             }
             Err(e) => panic!("unexpected {e}"),

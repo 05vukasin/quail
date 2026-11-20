@@ -1,0 +1,154 @@
+# quail-parties
+
+Per-file **candidates** for the companies a document is about, and the roles it gives them.
+Namespace `party.*`. It never decides which company owns a file and never compares files: a
+resolution service joins the keys across files (union-find on `party.company_key`, plus the
+`party.alias_of` pairs) and assigns documents to suppliers.
+
+Out of scope (sibling crates): identifiers, dates, money and e-mail domains (`quail-signals`);
+document numbers, references and titles (`quail-refs`).
+
+- Analyzer: `party.candidates@1` (`PartyCandidates`), profile `Fast`, requires `document`.
+- Public API: `PartyCandidates`, `keys::*`, and the pure helpers in `names`
+  (`normalize_name`, `normalized_key`, `core_key`, `squashed_key`, `meaningful_words`,
+  `core_words`, `score_name_match`, `are_names_similar`, `acronym_key`,
+  `lone_word_across_jurisdictions`, `contains_aligned`), `quality` (`classify`, `verdict`,
+  `is_role_term`, `is_name_fragment`, `names_a_product`, `is_person_shaped`), `forms::FORMS`,
+  `roles::role_of_word`, `scan::domain_labels`.
+
+## How it works
+
+Per page, on the normalized text (`quail_text::normalize_mapped`, spans mapped back to the page
+text), tokens with folded keys (`quail_text` fold: Serbian Cyrillic → Latin, no diacritics):
+
+1. **Legal forms** anchor a name: `d.o.o.`/`doo`/`DOO`/`д.о.о.`, `a.d.`, `d.d.`, `DOOEL`, `JP`,
+   `JKP`, `PR`/`preduzetnik`, `Javno preduzeće`, `Akcionarsko društvo`, `LLC`, `Inc.`, `Corp.`,
+   `Ltd`, `Limited`, `plc`, `LLP`, `GmbH`, `AG`, `KG`, `S.A.`, `SAS`, `SARL`, `S.r.l.`, `S.p.A.`,
+   `B.V.`, `N.V.`, `AB`, `A/S`, `ApS`, `Oy`, `Kft.`, `Zrt.`, `s.r.o.`, `Sp. z o.o.`, `Pty`,
+   `OOO`, ... (dotted, spaced, any script). Weak spellings that are also words (`AS`, `AD`, `SA`,
+   `Co.`, `Company`, `Group`) must be written like a form and score lower. The name is the run
+   of capitalised words on the same line before (suffix forms) or after (prefix forms) the form,
+   at most 8 words, one interior comma allowed ("Brenwick, Dalton and Company"); it stops at
+   document words, prepositions, labels, role words, clause references ("Article 12") and
+   lowercase prose. A seat city after the form ("ACME d.o.o. Beograd") stays in the surface and
+   leaves the key. A sole trader (`PR`) needs a two- or three-word personal name before the form
+   and no digits.
+2. **Role labels** (`Dobavljač:`, `Izvršilac:`, `Naručilac:`, `Kupac:`, `Supplier:`, `Vendor:`,
+   `Customer:`, `Bill to:`, `Ship to:`, `Remit to:`, `Consignee`, ...) give the next name its role;
+   without a legal form, the name must fill the line, have at least two words and no person's
+   shape in any letter case. Side-by-side label columns ("Remit To: Ship To:") assign nothing.
+3. **Brands spelled by a domain**: one to three capitalised words that spell a second-level label
+   of an e-mail or web domain in the same document ("KESTRELON" + `www.kestrelon.com`).
+   Free-mail and platform hosts are ignored. (The domains themselves are `quail-signals`' facts.)
+4. **Name statements**: `formerly`, `previously known as`, `f/k/a`, `now known as`, `n/k/a`,
+   `renamed`, `trading as`, `t/a`, `d/b/a`, `doing business as`, `prethodno`, `ranije`,
+   `bivše` between a found name and the next → `party.alias_of`.
+5. **Context** per mention: parties clause (an opener such as `između`, `between`, `entered
+   into` before it on the first page, or registration details such as `sa sedištem`, `PIB`,
+   `matični broj`, `registered office`, `incorporated`, `represented by` after it); defined terms
+   (`(u daljem tekstu: Naručilac)`, `(hereinafter the "Supplier")`, `("Company")`); letterhead
+   (header zone, or the first 6 lines of page 1 when the extractor gives no zones); footer;
+   signature block (`For and on behalf of X`, `Za X`, `Za i u ime X`, or after a signature cue
+   on the last two pages); bank in payment details (lower confidence, no issuer role).
+
+Every surface passes the reference name-quality gates (ported from the owner's
+`name_quality.py`): length (2–120 chars, ≤ 10 words), no line break, e-mail/URL, addressee label,
+postal code (five-digit codes, so Serbian addresses too), digits plus an address word, personal
+title, "Name, Role", prose fragments, a bare role, a product tail, and no distinctive word
+("Republika Srbija", "Group Ltd", "a Florida Corporation").
+
+## Keys
+
+Facts of one mention share one `Evidence` (page, zone, source span) and are joined on it.
+
+| key | value |
+|---|---|
+| `party.company` | surface form (whitespace, quotes, dashes normalized) |
+| `party.company_key` | core key: legal forms, connectors and seat city dropped; folded (Cyrillic → Latin, no diacritics, `đ → dj`) |
+| `party.company_norm` | reference `normalized_key`: NFKD, marks and punctuation deleted, case-folded; `sym-` + BLAKE2s-64 when nothing is left |
+| `party.company_quality` | `ok` or `suspect` (two bare Titlecase words: person or brand) |
+| `party.legal_form` | canonical form: `d.o.o.`, `a.d.`, `PR`, `JP`, `LLC`, `Inc.`, `Ltd`, `GmbH`, `S.A.`, ... |
+| `party.jurisdiction` | ISO 3166 alpha-2 (lowercase), several joined by `\|`; from a country or seat word in the name, Cyrillic script, else the form |
+| `party.role` | `supplier`, `customer`, `issuer`, `bill_to`, `ship_to`, `signatory`, `party`, `mentioned` (one fact per role) |
+| `party.defined_term` | the term a clause defines for it |
+
+Document level: `party.candidates` (top 10 keys by noisy-or of their mentions' confidence:
+`[key, best surface, score, [roles]]`), `party.alias_of` (`[current, other, kind]`, kind
+`former_name` / `trading_name` / `dba`, evidence spans both names), `party.signatory_title`
+(titles such as `Direktor`, `Managing Director`, with evidence), `party.signatory_count` (lines of
+signature blocks naming a signatory by title or by a `Name:` / `By:` / `Ime i prezime` label).
+
+**Person names** are never emitted on their own: signature blocks give titles and a count, a
+formless name with a person's shape is dropped. The exception is a sole trader's registered
+business name (`Ime Prezime PR Naziv`), which is the legal name of the business.
+
+## Confidence
+
+`conf` estimates the probability that the mention is a real company that is a party to, or the
+issuer of, the document:
+
+| evidence | conf |
+|---|---|
+| base: strong legal form / weak form / formless (domain brand, name statement, label) | 0.75 / 0.40 / 0.65, 0.60, 0.55 |
+| parties clause | +0.12 |
+| defined term stating a role / any other defined term | +0.10 / +0.05 |
+| letterhead or header / footer | +0.06 / +0.03 |
+| signature block | +0.15 |
+| after a role label (with a legal form) | +0.30 |
+| heading | +0.05 |
+| bank in payment details | −0.30 |
+| clamp | 0.05 … 0.97 |
+
+Role facts carry `conf × weight` (0.95 for a defined term or a Bill/Ship-to label, 0.9 supplier /
+customer / party, 0.85 signatory, 0.8 issuer from a letterhead, 0.6 issuer from a footer).
+
+## Measured
+
+Aggregates only; the private corpus never leaves the machine.
+
+**Private business corpus** (380 PDF/DOCX files, PDFs through `pdftotext`, DOCX through
+`quail-docx`; gold = the supplier names the owner's system recorded per file, 354 files, 330 of
+them with a text layer; the tenant's own entities removed from the candidates before scoring):
+
+| metric | value |
+|---|---|
+| true supplier at rank 1 / in top 3 / anywhere | 0.833 / 0.862 / 0.862 (files with text: 0.894 / 0.924) |
+| top-1 precision (files with a non-tenant candidate, n = 307) | 0.961 |
+| files with at least one candidate | 335 / 380 (misses are scans without text, brand-only mentions) |
+
+Mention precision per confidence band, counting a mention correct only when it is the gold
+supplier or the tenant (a lower bound: other real companies count as wrong; a hand-checked
+random sample of the "wrong" ones was about 85 % real company names):
+
+| conf | mentions | party precision |
+|---|---|---|
+| 0.4–0.5 (weak form mid-text, banks) | 231 | 0.28 |
+| 0.5–0.6 | 58 | 0.90 |
+| 0.6–0.7 | 260 | 0.84 |
+| 0.7–0.8 | 948 | 0.86 |
+| 0.8–0.9 | 403 | 0.86 |
+| 0.9–1.0 | 202 | 0.96 |
+
+**Kleister-NDA** (train + dev, 337 public NDAs, gold `party=`; scored on the 468 gold parties
+with a legal form, persons are never emitted): recall 0.968 among all mentions, 0.902 in the top
+2, 0.959 in the top 5; precision of the top-1 candidate 0.903, top-2 0.801.
+
+**CUAD v1** (499 contracts, gold "Parties" answers; 1 118 answers with a legal form): recall
+0.860 among all mentions, 0.662 in the top 2, 0.769 in the top 5; top-1 precision 0.889, top-2
+0.838.
+
+**Speed** (`cargo bench -p quail-parties --bench parties`, thin LTO, shared laptop; generated
+pages dense with parties clauses): whole analyzer 5.2 MiB/s sr-Latn, 4.9 MiB/s en, 2.9 MiB/s
+sr-Cyrl (normalization + tokens 8–17 MiB/s, the scan itself 10–15 MiB/s). On the private
+corpus: median 0.8 ms per file, p95 22 ms. Robustness: 0 errors, 0 panics on 380 + 836 files;
+one file partial (mention cap).
+
+## Limits and cost
+
+- Linear per page: every rule looks a bounded number of tokens around an anchor (walks ≤ 8 words,
+  defined terms ≤ 80 tokens, clause windows 25/15 words).
+- At most 200 mentions per page (then a `problem`), 3 mentions per key and 32 keys per document
+  (the strongest; a `problem` when more), 16 name statements, 8 titles, 10 ranked candidates.
+- Reads at most `Limits::max_text_bytes` (and 16 MiB) of text; a `problem` when it stops early.
+  Checks the deadline per page and keeps what it found. Skips `needs_ocr` pages.
+- Vocabulary tables are built once (read-only).

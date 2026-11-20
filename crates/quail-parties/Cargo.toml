@@ -1,0 +1,27 @@
+[package]
+name = "quail-parties"
+description = "Per-file company and role candidates: legal forms, name-quality gates, parties clauses, letterheads, signatures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+quail-text = { path = "../quail-text" }
+# `normalized_key` reproduces the reference system's opaque key (`sym-` + BLAKE2s-64), so
+# keys written by both stay comparable.
+blake2 = { version = "0.11.0", default-features = false }
+unicode-normalization = "=0.1.26"
+
+[dev-dependencies]
+serde_json.workspace = true
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "parties"
+harness = false
+
+[lints]
+workspace = true

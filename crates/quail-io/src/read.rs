@@ -62,30 +62,23 @@ fn unix_seconds(t: SystemTime) -> Option<i64> {
 /// Reads one file into a [`SourceItem`] whose locator is the path (lossily converted to
 /// UTF-8: a non-UTF-8 name gets U+FFFD replacement characters).
 ///
-/// Fails when the file cannot be opened or read, is not a regular file, or is larger than
-/// [`ReadOptions::max_file_bytes`] (also when it grows past the cap while being read). The
-/// error is `Error::at(locator, Error::Io(..))`
-/// ([`Error::Source`](quail_core::Error::Source)), keeping the I/O error kind, so the engine
-/// writes a `Failed` record for the file instead of only counting it.
+/// Fails, with the path in the message, when the file cannot be opened or read, is not a
+/// regular file, or is larger than [`ReadOptions::max_file_bytes`] (also when it grows past
+/// the cap while being read).
 pub fn read_file(path: &Path, opts: &ReadOptions) -> Result<SourceItem> {
-    read_io(path, opts).map_err(|e| Error::at(path.to_string_lossy(), Error::Io(e)))
-}
-
-/// [`read_file`] with the bare I/O error, for callers that choose the locator.
-pub(crate) fn read_io(path: &Path, opts: &ReadOptions) -> io::Result<SourceItem> {
-    let file = File::open(path)?;
-    let meta = file.metadata()?;
+    let file = File::open(path).map_err(|e| io_error(path, &e))?;
+    let meta = file.metadata().map_err(|e| io_error(path, &e))?;
     if !meta.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "not a regular file",
+        return Err(io_error(
+            path,
+            &io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"),
         ));
     }
     let len = meta.len();
     if let Some(cap) = opts.max_file_bytes
         && len > cap
     {
-        return Err(too_large(len, cap));
+        return Err(too_large(path, len, cap));
     }
     let modified = meta.modified().ok().and_then(unix_seconds);
 
@@ -94,11 +87,11 @@ pub(crate) fn read_io(path: &Path, opts: &ReadOptions) -> io::Result<SourceItem>
         && len >= min
         && len > 0
     {
-        let map = crate::mmap::map(&file)?;
+        let map = crate::mmap::map(&file).map_err(|e| io_error(path, &e))?;
         return Ok(item(path, Blob::new(map), modified));
     }
 
-    let blob = read_all(file, len, opts.max_file_bytes)?;
+    let blob = read_all(file, len, opts.max_file_bytes).map_err(|e| io_error(path, &e))?;
     Ok(item(path, blob, modified))
 }
 
@@ -110,10 +103,13 @@ fn item(path: &Path, blob: Blob, modified: Option<i64>) -> SourceItem {
     }
 }
 
-fn too_large(len: u64, cap: u64) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::FileTooLarge,
-        format!("{len} bytes exceeds the source cap of {cap} bytes"),
+fn too_large(path: &Path, len: u64, cap: u64) -> Error {
+    io_error(
+        path,
+        &io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!("{len} bytes exceeds the source cap of {cap} bytes"),
+        ),
     )
 }
 

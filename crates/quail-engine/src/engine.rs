@@ -173,30 +173,6 @@ impl Engine {
 
     /// [`process`](Self::process) for a blob held elsewhere.
     pub fn process_blob(&self, locator: String, blob: &Blob) -> FileRecord {
-        self.process_parts(locator, blob).0
-    }
-
-    /// [`process`](Self::process), then `f` with the record and every artifact the steps
-    /// produced (the extracted [`Document`](quail_core::Document) under `document`, a page
-    /// raster, ...) before they are dropped. Use it to keep what a record does not carry, e.g.
-    /// to dump documents, without registering an analyzer (which would show up in `steps`).
-    ///
-    /// `f` runs on the calling thread after the record is complete and cannot change it. It is
-    /// the caller's own code, so a panic in it is not contained here; in [`Engine::run`] the
-    /// same hook ([`RunOptions::on_artifacts`](crate::RunOptions::on_artifacts)) is.
-    pub fn process_with(
-        &self,
-        item: SourceItem,
-        f: impl FnOnce(&FileRecord, &Artifacts),
-    ) -> FileRecord {
-        let SourceItem { locator, blob, .. } = item;
-        let (record, artifacts) = self.process_parts(locator, &blob);
-        f(&record, &artifacts);
-        record
-    }
-
-    /// The record of one file and the artifacts its steps produced.
-    pub(crate) fn process_parts(&self, locator: String, blob: &Blob) -> (FileRecord, Artifacts) {
         let start = Instant::now();
         let deadline = start.checked_add(self.limits.timeout);
         let size = blob.len() as u64;
@@ -274,7 +250,7 @@ impl Engine {
                 problems: st.problems,
             },
         };
-        let record = FileRecord {
+        FileRecord {
             schema: SCHEMA_VERSION,
             locator,
             size,
@@ -285,8 +261,7 @@ impl Engine {
             timings: st.timings,
             status,
             warnings: st.warnings,
-        };
-        (record, st.artifacts)
+        }
     }
 
     /// Runs the extractor; returns the page count when it produced a document.

@@ -1,0 +1,508 @@
+//! End-to-end tests on documents built in code. Every company, person and address here is
+//! invented.
+
+use std::time::{Duration, Instant};
+
+use quail_core::{
+    Analyzer, Artifacts, Blob, Block, BlockKind, Ctx, Document, Emitter, Evidence, Fact, Format,
+    Limits, Page, PageKind, Profile, Span, Value, Zone,
+};
+use quail_parties::{PartyCandidates, keys};
+
+fn page_of(index: u32, parts: &[(&str, Zone)]) -> Page {
+    let mut text = String::new();
+    let mut blocks = Vec::new();
+    for (t, z) in parts {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        let start = u32::try_from(text.len()).unwrap();
+        text.push_str(t);
+        blocks.push(Block {
+            span: Span {
+                start,
+                end: u32::try_from(text.len()).unwrap(),
+            },
+            kind: BlockKind::Paragraph,
+            zone: *z,
+            bbox: None,
+        });
+    }
+    Page {
+        text,
+        blocks,
+        ..Page::new(index, PageKind::Logical)
+    }
+}
+
+/// Pages without zones (as a PDF text layer arrives).
+fn plain(pages: &[&str]) -> Document {
+    Document {
+        pages: pages
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Page {
+                text: (*t).to_owned(),
+                ..Page::new(u32::try_from(i).unwrap(), PageKind::Physical)
+            })
+            .collect(),
+    }
+}
+
+fn run_with(doc: Document, limits: &Limits, deadline: Option<Instant>) -> (Vec<Fact>, Vec<String>) {
+    let mut artifacts = Artifacts::new();
+    artifacts.insert(doc);
+    let blob = Blob::from(Vec::new());
+    let ctx = Ctx {
+        blob: &blob,
+        format: Format::Pdf,
+        locator: "mem://test",
+        artifacts: &artifacts,
+        facts: &[],
+        limits,
+        profile: Profile::Fast,
+    };
+    let mut out = match deadline {
+        Some(d) => Emitter::with_deadline(PartyCandidates::ID, d),
+        None => Emitter::new(PartyCandidates::ID),
+    };
+    PartyCandidates.run(&ctx, &mut out).unwrap();
+    let problems = out.take_problems();
+    (out.into_parts().0, problems)
+}
+
+fn run(doc: Document) -> Vec<Fact> {
+    run_with(doc, &Limits::default(), None).0
+}
+
+fn text(v: &Value) -> &str {
+    match v {
+        Value::Text(t) => t,
+        _ => "",
+    }
+}
+
+/// One emitted mention, joined on its evidence.
+#[derive(Debug)]
+struct M {
+    surface: String,
+    key: String,
+    conf: f32,
+    roles: Vec<String>,
+    term: Option<String>,
+    form: Option<String>,
+    jurisdiction: Option<String>,
+    evidence: Evidence,
+}
+
+fn mentions(facts: &[Fact]) -> Vec<M> {
+    let same = |a: &Fact, ev: &Evidence| a.evidence.as_ref() == Some(ev);
+    facts
+        .iter()
+        .filter(|f| f.key == keys::COMPANY)
+        .map(|c| {
+            let ev = c.evidence.clone().unwrap();
+            let pick = |k: &quail_core::FactKey| {
+                facts
+                    .iter()
+                    .find(|f| &f.key == k && same(f, &ev))
+                    .map(|f| text(&f.value).to_owned())
+            };
+            M {
+                surface: text(&c.value).to_owned(),
+                key: pick(&keys::COMPANY_KEY).unwrap(),
+                conf: c.conf,
+                roles: facts
+                    .iter()
+                    .filter(|f| f.key == keys::ROLE && same(f, &ev))
+                    .map(|f| text(&f.value).to_owned())
+                    .collect(),
+                term: pick(&keys::DEFINED_TERM),
+                form: pick(&keys::LEGAL_FORM),
+                jurisdiction: pick(&keys::JURISDICTION),
+                evidence: ev,
+            }
+        })
+        .collect()
+}
+
+fn by_key<'a>(ms: &'a [M], key: &str) -> Vec<&'a M> {
+    ms.iter().filter(|m| m.key == key).collect()
+}
+
+fn has_role(ms: &[M], key: &str, role: &str) -> bool {
+    by_key(ms, key)
+        .iter()
+        .any(|m| m.roles.iter().any(|r| r == role))
+}
+
+fn keys_of(ms: &[M]) -> Vec<&str> {
+    let mut k: Vec<&str> = ms.iter().map(|m| m.key.as_str()).collect();
+    k.sort_unstable();
+    k.dedup();
+    k
+}
+
+const SR_LATIN: &str = "UGOVOR O PRUŽANJU USLUGA\n\
+Zaključen u Beogradu dana 12.03.2024. godine između:\n\
+1. ALFATEK d.o.o. Beograd, sa sedištem u Beogradu, ulica Nemanjina 4, matični broj 12345678, PIB 100200300, koga zastupa direktor (u daljem tekstu: Naručilac)\n\
+i\n\
+2. Betasoft DOO, Novi Sad, sa sedištem u Novom Sadu, Bulevar oslobođenja 10 (u daljem tekstu: Dobavljač)\n\
+Član 1.\n\
+Predmet ovog ugovora je pružanje usluga održavanja softvera.";
+
+#[test]
+fn serbian_latin_parties_clause() {
+    let ms = mentions(&run(plain(&[SR_LATIN])));
+    assert_eq!(keys_of(&ms), ["alfatek", "betasoft"], "{ms:#?}");
+    let a = by_key(&ms, "alfatek")[0];
+    assert_eq!(a.surface, "ALFATEK d.o.o. Beograd");
+    assert_eq!(a.form.as_deref(), Some("d.o.o."));
+    assert_eq!(a.jurisdiction.as_deref(), Some("rs"));
+    assert_eq!(a.term.as_deref(), Some("Naručilac"));
+    assert!(has_role(&ms, "alfatek", "customer"));
+    assert!(has_role(&ms, "betasoft", "supplier"));
+    assert_eq!(
+        by_key(&ms, "betasoft")[0].term.as_deref(),
+        Some("Dobavljač")
+    );
+    assert!(a.conf >= 0.9, "{}", a.conf);
+}
+
+#[test]
+fn serbian_cyrillic_parties_clause() {
+    let t = "УГОВОР\nЗакључен између:\nГАМА ПРОЈЕКТ д.о.о. Београд, са седиштем у Београду, ПИБ 100200301 (у даљем тексту: Наручилац)\nи\nДЕЛТА ИНЖЕЊЕРИНГ ДОО (у даљем тексту: Извршилац)";
+    let ms = mentions(&run(plain(&[t])));
+    assert_eq!(
+        keys_of(&ms),
+        ["delta inzenjering", "gama projekt"],
+        "{ms:#?}"
+    );
+    assert!(has_role(&ms, "gama projekt", "customer"));
+    assert!(has_role(&ms, "delta inzenjering", "supplier"));
+    let g = by_key(&ms, "gama projekt")[0];
+    assert_eq!(g.jurisdiction.as_deref(), Some("rs"));
+    assert_eq!(g.surface, "ГАМА ПРОЈЕКТ д.о.о. Београд");
+}
+
+#[test]
+fn english_by_and_between() {
+    let t = "MASTER SERVICES AGREEMENT\nThis Master Services Agreement is entered into by and between Northwind Analytics Inc., a Delaware corporation with its principal office at 1 Example Plaza (the \"Customer\"), and Bluefin Data Ltd, a company registered in England (hereinafter \"Supplier\").";
+    let ms = mentions(&run(plain(&[t])));
+    assert_eq!(
+        keys_of(&ms),
+        ["bluefin data", "northwind analytics"],
+        "{ms:#?}"
+    );
+    assert!(has_role(&ms, "northwind analytics", "customer"));
+    assert!(has_role(&ms, "bluefin data", "supplier"));
+    let n = by_key(&ms, "northwind analytics")[0];
+    assert_eq!(n.surface, "Northwind Analytics Inc.");
+    assert_eq!(n.jurisdiction.as_deref(), Some("us|ca"));
+}
+
+#[test]
+fn letterhead_and_bill_to_ship_to() {
+    let t = "KAPPA SYSTEMS GmbH\nHauptstrasse 5, 10115 Berlin\n\nINVOICE No. 2024-17\n\nBill to:\nOmega Retail LLC\n55 Sample Road\nShip to: Omega Warehouse Services LLC\n\nItem Qty Price\nConsulting 10 100.00\nTotal 1000.00";
+    let ms = mentions(&run(plain(&[t])));
+    assert_eq!(
+        keys_of(&ms),
+        ["kappa systems", "omega retail", "omega warehouse services"],
+        "{ms:#?}"
+    );
+    assert!(has_role(&ms, "kappa systems", "issuer"));
+    assert_eq!(by_key(&ms, "kappa systems")[0].evidence.zone, Zone::Header);
+    assert!(has_role(&ms, "omega retail", "bill_to"));
+    assert!(!has_role(&ms, "omega retail", "issuer"));
+    assert!(has_role(&ms, "omega warehouse services", "ship_to"));
+    let k = by_key(&ms, "kappa systems")[0];
+    let o = by_key(&ms, "omega retail")[0];
+    assert!(k.conf > 0.8 && o.conf > 0.8);
+}
+
+#[test]
+fn labels_without_a_legal_form() {
+    let t = "PONUDA\nDobavljač: Sunčani Sistemi Plus\nKupac: Petar Petrović\nNaručilac: PETAR PETROVIĆ\nVendor: Acme Robotics Works\nCustomer: the Customer";
+    let ms = mentions(&run(plain(&["x\nx\nx\nx\nx\nx\nx", t])));
+    // A formless name is taken after a label; a person's shape and a role word are not.
+    assert_eq!(
+        keys_of(&ms),
+        ["acme robotics works", "suncani sistemi plus"],
+        "{ms:#?}"
+    );
+    assert!(has_role(&ms, "suncani sistemi plus", "supplier"));
+    assert!(has_role(&ms, "acme robotics works", "supplier"));
+    assert!(ms.iter().all(|m| m.conf < 0.7));
+}
+
+#[test]
+fn docx_zones_are_used() {
+    let doc = Document {
+        pages: vec![page_of(
+            0,
+            &[
+                ("Delta Consulting d.o.o.", Zone::Header),
+                ("Ugovor o saradnji", Zone::Title),
+                (
+                    "Predmet ugovora je saradnja sa firmom Omikron Trade d.o.o. na projektu.",
+                    Zone::Body,
+                ),
+                (
+                    "Delta Consulting d.o.o., Kralja Petra 1, Beograd",
+                    Zone::Footer,
+                ),
+            ],
+        )],
+    };
+    let ms = mentions(&run(doc));
+    let d = by_key(&ms, "delta consulting");
+    assert_eq!(d.len(), 2, "{ms:#?}");
+    assert!(d.iter().any(|m| m.evidence.zone == Zone::Header));
+    assert!(d.iter().any(|m| m.evidence.zone == Zone::Footer));
+    let o = by_key(&ms, "omikron trade")[0];
+    assert_eq!(o.evidence.zone, Zone::Body);
+    assert_eq!(o.roles, ["mentioned"]);
+    assert!(d[0].conf > o.conf);
+}
+
+#[test]
+fn signature_block_titles_without_names() {
+    let p1 = "This Agreement is made between Northwind Analytics Inc. (\"Customer\") and Bluefin Data Ltd (\"Supplier\").";
+    let p2 = "IN WITNESS WHEREOF the parties have executed this Agreement.\nFor and on behalf of Northwind Analytics Inc.\nBy: ________\nName: John Example\nTitle: Managing Director\n\nZa Dobavljača\nBetasoft DOO\nDirektor\nMarko Primerović";
+    let facts = run(plain(&[p1, p2]));
+    let ms = mentions(&facts);
+    let sig: Vec<&M> = ms.iter().filter(|m| m.evidence.page == Some(1)).collect();
+    assert!(
+        sig.iter()
+            .any(|m| m.key == "northwind analytics" && m.roles.iter().any(|r| r == "signatory")),
+        "{ms:#?}"
+    );
+    assert!(sig.iter().all(|m| m.evidence.zone == Zone::Signature));
+    let titles: Vec<&str> = facts
+        .iter()
+        .filter(|f| f.key == keys::SIGNATORY_TITLE)
+        .map(|f| text(&f.value))
+        .collect();
+    assert!(
+        titles.contains(&"Managing Director") && titles.contains(&"Direktor"),
+        "{titles:?}"
+    );
+    let count = facts
+        .iter()
+        .find(|f| f.key == keys::SIGNATORY_COUNT)
+        .map(|f| f.value.clone());
+    assert!(matches!(count, Some(Value::Int(n)) if n >= 2), "{count:?}");
+    // No fact carries a person's name.
+    for f in &facts {
+        let s = format!("{:?}", f.value);
+        assert!(!s.contains("John") && !s.contains("Marko"), "{s}");
+    }
+}
+
+#[test]
+fn name_statements() {
+    let t = "Zeta Labs Ltd (formerly Old Zeta Research Ltd) shall deliver.\nAcme Holdings LLC d/b/a Rocket Foods agrees.\nSigma Trade d.o.o. (prethodno: Sigma Commerce d.o.o.) je dobavljač.\nNova Mreža d.o.o., now known as Mreža Plus d.o.o., pays.";
+    let facts = run(plain(&["x\nx\nx\nx\nx\nx\nx", t]));
+    let pairs: Vec<Vec<String>> = facts
+        .iter()
+        .filter(|f| f.key == keys::ALIAS_OF)
+        .map(|f| match &f.value {
+            Value::List(v) => v.iter().map(|x| text(x).to_owned()).collect(),
+            _ => vec![],
+        })
+        .collect();
+    let want = [
+        ["Zeta Labs Ltd", "Old Zeta Research Ltd", "former_name"],
+        ["Acme Holdings LLC", "Rocket Foods", "dba"],
+        ["Sigma Trade d.o.o.", "Sigma Commerce d.o.o.", "former_name"],
+        ["Mreža Plus d.o.o.", "Nova Mreža d.o.o.", "former_name"],
+    ];
+    for w in want {
+        assert!(pairs.iter().any(|p| p == &w), "{w:?} not in {pairs:?}");
+    }
+    // The statement's evidence covers both names.
+    let ev = facts
+        .iter()
+        .find(|f| f.key == keys::ALIAS_OF)
+        .unwrap()
+        .evidence
+        .clone()
+        .unwrap();
+    let span = ev.span.unwrap();
+    let src = &plain(&["x\nx\nx\nx\nx\nx\nx", t]).pages[1].text;
+    assert_eq!(
+        span.slice(src),
+        "Zeta Labs Ltd (formerly Old Zeta Research Ltd"
+    );
+    let ms = mentions(&facts);
+    assert!(!by_key(&ms, "rocket foods").is_empty());
+}
+
+#[test]
+fn false_positive_traps() {
+    let t = "x\nx\nx\nx\nx\nx\nx\n\
+Republika Srbija, Ministarstvo finansija\n\
+Adresa: Bulevar Mihajla Pupina 10, 11000 Beograd\n\
+Supplier: the Supplier\n\
+Dobavljač:\n\
+Microsoft Office 365 License\n\
+Ship to: Warehouse 5, 123 Main Street\n\
+5. LIMITED WARRANTY\n\
+SUCH COMPANY SHALL NOT\n\
+The Company shall pay as follows.\n\
+Ltd\n\
+the parties agree that the supplier and the customer\n\
+Naručilac i Dobavljač su saglasni.";
+    let ms = mentions(&run(plain(&[t])));
+    assert!(ms.is_empty(), "{ms:#?}");
+}
+
+#[test]
+fn english_name_shapes() {
+    let t = "x\nx\nx\nx\nx\nx\nx\n\
+The Hershey Example Company agrees with Build-A-Bear Sample, Inc. and L.E.K. Sample Consulting LLC.\n\
+Brenwick, Dalton and Company shall deliver.\n\
+Samplecorp, a Florida Corporation, and Article 12 Limited apply.\n\
+Promptly notify the Company, Section 5 Company.";
+    let ms = mentions(&run(plain(&[t])));
+    let ks = keys_of(&ms);
+    assert_eq!(
+        ks,
+        [
+            "brenwick dalton",
+            "buildabear sample",
+            "hershey example",
+            "lek sample consulting"
+        ],
+        "{ms:#?}"
+    );
+}
+
+#[test]
+fn code_and_product_traps() {
+    let t = "x\nx\nx\nx\nx\nx\nx\n\
+Part AV-W-AD replaced.\n\
+HYPAK PR 1MLL PP NATURAL 100 pcs\n\
+D1532C00057 - NCI A/B\n\
+Bank: Example Bank plc, IBAN GB00 0000 0000 0000 0000 00";
+    let ms = mentions(&run(plain(&[t])));
+    assert!(ms.iter().all(|m| m.key == "example bank"), "{ms:#?}");
+    assert!(
+        ms.iter().all(|m| m.conf < 0.5 && m.roles == ["mentioned"]),
+        "{ms:#?}"
+    );
+}
+
+#[test]
+fn brand_spelled_by_a_domain() {
+    let t = "KESTRELONX\nQuotation 17\nContact: sales@kestrelonx.example.com, www.kestrelonx.com\nPrices valid 30 days.";
+    let ms = mentions(&run(plain(&[t])));
+    let h = by_key(&ms, "kestrelonx");
+    assert!(!h.is_empty(), "{ms:#?}");
+    assert!(has_role(&ms, "kestrelonx", "issuer"));
+    // Without the domain the same word is nothing.
+    let ms = mentions(&run(plain(&[
+        "KESTRELONX\nQuotation 17\nPrices valid 30 days.",
+    ])));
+    assert!(ms.is_empty(), "{ms:#?}");
+}
+
+#[test]
+fn spans_point_into_the_source_text() {
+    // NBSP, a ligature and a soft line break before the name: spans must still cut the
+    // name out of the page text as extracted.
+    let t = "Ugovor\u{00a0}o\u{00a0}saradnji\nﬁrma:  Kraljević   d.o.o.\u{00a0}Beograd i ostali";
+    let doc = plain(&["x\nx\nx\nx\nx\nx\nx", t]);
+    let src = doc.pages[1].text.clone();
+    let ms = mentions(&run(doc));
+    let k = by_key(&ms, "kraljevic")[0];
+    assert_eq!(k.surface, "Kraljević d.o.o. Beograd");
+    assert_eq!(
+        k.evidence.span.unwrap().slice(&src),
+        "Kraljević   d.o.o.\u{00a0}Beograd"
+    );
+}
+
+#[test]
+fn prefix_and_infix_forms() {
+    let t = "x\nx\nx\nx\nx\nx\nx\nIsporučilac je JP Elektromreža Srbije, Beograd.\nIzvođač radova: Marko Marković PR Molerski Radovi Cvet\nOOO Romashka Trade ist ein Kunde.\nAkcionarsko društvo Fabrika Sunce ima sedište u Nišu.";
+    let ms = mentions(&run(plain(&[t])));
+    let ks = keys_of(&ms);
+    assert!(ks.contains(&"elektromreza srbije"), "{ms:#?}");
+    assert!(
+        ks.contains(&"marko markovic molerski radovi cvet"),
+        "{ms:#?}"
+    );
+    assert!(ks.contains(&"romashka trade"), "{ms:#?}");
+    assert!(ks.contains(&"fabrika sunce"), "{ms:#?}");
+}
+
+#[test]
+fn many_mentions_are_capped_with_a_problem() {
+    let mut t = String::new();
+    for i in 0..400 {
+        use std::fmt::Write as _;
+        let _ = writeln!(t, "Firma{i} Alfa d.o.o.");
+    }
+    let (facts, problems) = run_with(plain(&[&t]), &Limits::default(), None);
+    let companies = facts.iter().filter(|f| f.key == keys::COMPANY).count();
+    assert!(companies <= quail_parties::MAX_KEYS * quail_parties::MAX_MENTIONS_PER_KEY);
+    assert!(!problems.is_empty());
+}
+
+#[test]
+fn hostile_input_is_fast_and_safe() {
+    // Garbage, long runs of forms and capitalised words, odd Unicode.
+    let mut t = String::new();
+    for i in 0..20_000u32 {
+        let c = char::from_u32(0x20 + (i * 7919) % 0x2fff).unwrap_or(' ');
+        t.push(c);
+        if i % 13 == 0 {
+            t.push_str(" d.o.o. ");
+        }
+        if i % 17 == 0 {
+            t.push_str(" Ltd (formerly X Y Z) ( u daljem tekstu: ");
+        }
+    }
+    let big = "Alfa Beta Gama ".repeat(60_000) + " d.o.o.";
+    let start = Instant::now();
+    let _ = run(plain(&[&t, &big, "", "\u{feff}\u{200b}"]));
+    assert!(start.elapsed() < Duration::from_secs(20));
+}
+
+#[test]
+fn deadline_stops_with_a_problem() {
+    let (_, problems) = run_with(
+        plain(&["ALFATEK d.o.o."; 5]),
+        &Limits::default(),
+        Some(Instant::now()),
+    );
+    assert!(problems.iter().any(|p| p.contains("deadline")));
+}
+
+#[test]
+fn text_limit_is_respected() {
+    let limits = Limits {
+        max_text_bytes: 10,
+        ..Limits::default()
+    };
+    let (facts, problems) = run_with(
+        plain(&["x", "ALFATEK d.o.o. Beograd sa sedištem"]),
+        &limits,
+        None,
+    );
+    assert!(facts.iter().all(|f| f.key != keys::COMPANY));
+    assert!(!problems.is_empty());
+}
+
+#[test]
+fn ranked_candidates() {
+    let facts = run(plain(&[SR_LATIN]));
+    let ranked = facts.iter().find(|f| f.key == keys::CANDIDATES).unwrap();
+    let Value::List(items) = &ranked.value else {
+        panic!()
+    };
+    assert_eq!(items.len(), 2);
+    let json = serde_json::to_string(&ranked.value).unwrap();
+    assert!(json.contains("alfatek") && json.contains("betasoft"));
+}

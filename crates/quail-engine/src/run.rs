@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
-use quail_core::{Artifacts, FileRecord, RecordSink, Source, SourceItem, Status};
+use quail_core::{FileRecord, RecordSink, Source, SourceItem, Status};
 
 use crate::engine::{Engine, failed_record};
 use crate::panic::contain;
@@ -22,15 +22,8 @@ pub const DEFAULT_STACK_SIZE: usize = 32 << 20;
 /// Default byte budget of files in flight: 1 GiB.
 pub const DEFAULT_MAX_IN_FLIGHT_BYTES: u64 = 1 << 30;
 
-/// A callback that sees each file's record and artifacts (see
-/// [`RunOptions::on_artifacts`]).
-pub type ArtifactsHook = Arc<HookFn>;
-
-/// The function behind an [`ArtifactsHook`].
-type HookFn = dyn Fn(&FileRecord, &Artifacts) + Send + Sync;
-
 /// How [`Engine::run`] schedules work.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RunOptions {
     /// Worker threads. `0` is treated as 1.
     pub threads: usize,
@@ -59,29 +52,6 @@ pub struct RunOptions {
     /// cannot be caught like a panic, so workers get a large stack. It is virtual memory,
     /// committed only as it is used.
     pub stack_size: usize,
-    /// Called on the worker thread for every processed file, with its finished record and
-    /// the artifacts its steps produced (the `document`, rasters, ...), just before the
-    /// artifacts are dropped, as [`Engine::process_with`] does for one file. Not called for
-    /// the `Failed` records of source errors or of a worker's own failure, which have no
-    /// artifacts. Runs concurrently on all workers, in completion order; it cannot change the
-    /// record. A panic in it is caught and counted in [`RunStats::hook_panics`]; the record
-    /// is written as usual.
-    pub on_artifacts: Option<ArtifactsHook>,
-}
-
-impl fmt::Debug for RunOptions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RunOptions")
-            .field("threads", &self.threads)
-            .field("max_in_flight", &self.max_in_flight)
-            .field("max_in_flight_bytes", &self.max_in_flight_bytes)
-            .field("ordered", &self.ordered)
-            .field("stop_on_sink_error", &self.stop_on_sink_error)
-            .field("cancel", &self.cancel)
-            .field("stack_size", &self.stack_size)
-            .field("on_artifacts", &self.on_artifacts.as_ref().map(|_| "Fn"))
-            .finish()
-    }
 }
 
 impl Default for RunOptions {
@@ -100,7 +70,6 @@ impl Default for RunOptions {
             stop_on_sink_error: true,
             cancel: None,
             stack_size: DEFAULT_STACK_SIZE,
-            on_artifacts: None,
         }
     }
 }
@@ -139,10 +108,6 @@ pub struct RunStats {
     pub stalls: u64,
     /// The writer thread died (a bug); counts above are those it reached.
     pub writer_panicked: bool,
-    /// Panics caught in [`RunOptions::on_artifacts`] (the records were still written).
-    pub hook_panics: u64,
-    /// The first such panic message, for the log.
-    pub first_hook_panic: Option<String>,
     /// Wall time of the run.
     pub elapsed: Duration,
 }
@@ -189,9 +154,6 @@ impl fmt::Display for RunStats {
                 "; {} source errors, {} sink errors",
                 self.source_errors, self.sink_errors
             )?;
-        }
-        if self.hook_panics > 0 {
-            write!(f, "; {} artifact hook panics", self.hook_panics)?;
         }
         if self.cancelled {
             f.write_str("; cancelled")?;
@@ -332,18 +294,17 @@ impl Engine {
         let mut was_cancelled = false;
 
         let writer_ok = thread::scope(|s| {
-            let shared = &shared;
-            let hook = opts.on_artifacts.as_deref();
             for i in 0..threads {
                 let rx = work_rx.clone();
                 let tx = done_tx.clone();
                 thread::Builder::new()
                     .name(format!("quail-worker-{i}"))
                     .stack_size(opts.stack_size)
-                    .spawn_scoped(s, move || self.work(&rx, &tx, hook, shared))
+                    .spawn_scoped(s, move || self.work(&rx, &tx))
                     .expect("spawn worker thread");
             }
             drop(work_rx);
+            let shared = &shared;
             // The writer owns its channel ends, so if it dies the reader sees `freed`
             // disconnect and the workers see `done` disconnect.
             let writer = thread::Builder::new()
@@ -384,13 +345,7 @@ impl Engine {
         stats
     }
 
-    fn work(
-        &self,
-        rx: &Receiver<(u64, SourceItem)>,
-        tx: &Sender<Done>,
-        hook: Option<&HookFn>,
-        shared: &Shared,
-    ) {
+    fn work(&self, rx: &Receiver<(u64, SourceItem)>, tx: &Sender<Done>) {
         for (seq, item) in rx {
             let size = item.blob.len() as u64;
             let mut guard = Guard {
@@ -400,22 +355,8 @@ impl Engine {
                 tx,
             };
             // Last-resort net for a bug in the engine itself: the file still gets a record.
-            let processed = contain(self.is_quiet(), || {
-                let SourceItem { locator, blob, .. } = item;
-                self.process_parts(locator, &blob)
-            });
-            let record = match processed {
-                Ok((r, artifacts)) => {
-                    if let Some(f) = hook
-                        && let Err(e) = contain(self.is_quiet(), || f(&r, &artifacts))
-                    {
-                        let mut st = shared.stats.lock().unwrap_or_else(PoisonError::into_inner);
-                        st.hook_panics += 1;
-                        st.first_hook_panic
-                            .get_or_insert_with(|| format!("{}: {e}", r.locator));
-                    }
-                    r
-                }
+            let record = match contain(self.is_quiet(), || self.process(item)) {
+                Ok(r) => r,
                 Err(e) => failed_record(
                     guard.locator.take().unwrap_or_default(),
                     size,

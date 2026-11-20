@@ -39,28 +39,6 @@ fn manifest_file_resolves_relative_paths_and_keeps_locators() {
 }
 
 #[test]
-fn unreadable_entry_carries_its_locator_and_path() {
-    let t = tempfile::tempdir().unwrap();
-    let manifest = "id-9\tgone/missing.pdf\n";
-    let mut src = ListSource::from_reader(Cursor::new(manifest), Some(t.path().to_path_buf()));
-    let err = src.next_item().unwrap().unwrap_err();
-    assert_eq!(err.locator(), Some("id-9"));
-    let msg = err.to_string();
-    assert!(
-        msg.starts_with("id-9: ") && msg.contains("gone/missing.pdf"),
-        "{msg}"
-    );
-    let quail_core::Error::Source { source, .. } = err else {
-        unreachable!()
-    };
-    assert!(
-        matches!(*source, quail_core::Error::Io(ref e) if e.kind() == std::io::ErrorKind::NotFound),
-        "{source}"
-    );
-    assert!(src.next_item().is_none());
-}
-
-#[test]
 fn reader_with_base_and_invalid_utf8_line() {
     let t = tempfile::tempdir().unwrap();
     fs::write(t.path().join("x"), b"x").unwrap();
