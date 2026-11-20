@@ -27,10 +27,16 @@
 //! Python's `\b`, `\s` and `\d` are emulated exactly where Rust's differ (`\s` also matches
 //! U+001C–U+001F in Python; `\b` uses Python's `\w`), and so is its case-insensitive `i`,
 //! which also matches `İ` and `ı`.
+//!
+//! The four patterns that need lookarounds never run as unanchored searches on
+//! `fancy-regex`'s backtracking VM: candidates are found with the linear `regex` crate and
+//! each is tried anchored, with a backtracking limit of [`backtrack_limit`] (linear in the
+//! text). An attempt past it returns [`RegexLimit`], and the analyzers then warn and skip
+//! that sketch.
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 use crate::coeffs::{A, B};
 use crate::minhash::{BANDS, P, PERMUTATIONS, ROWS, permute};
@@ -46,42 +52,205 @@ const W: &str = r"[\p{L}\p{N}_]";
 /// Python's `\s` (str patterns): Unicode white space plus the separators U+001C–U+001F.
 const S: &str = r"[\s\x1C-\x1F]";
 
-fn compile(pattern: &str) -> fancy_regex::Regex {
-    // The patterns are constants, covered by the tests.
-    fancy_regex::Regex::new(pattern).expect("valid constant pattern")
+/// Fewest backtracking steps one anchored attempt of a `fancy-regex` pattern may take before
+/// it gives up with [`RegexLimit`] (see the module docs and the README, "Limits").
+pub const BACKTRACK_LIMIT: usize = 100_000;
+/// Backtracking steps allowed per byte of the text after the attempt's start.
+pub const BACKTRACK_PER_BYTE: usize = 4;
+
+/// The backtracking limit of an attempt over `len` bytes: max([`BACKTRACK_LIMIT`],
+/// [`BACKTRACK_PER_BYTE`] × `len` rounded up to a power of two).
+pub fn backtrack_limit(len: usize) -> usize {
+    let scaled = len
+        .saturating_mul(BACKTRACK_PER_BYTE)
+        .checked_next_power_of_two()
+        .unwrap_or(usize::MAX);
+    scaled.max(BACKTRACK_LIMIT)
 }
 
-/// `\b` in front of a word character / after one.
-fn bounded(body: &str) -> String {
-    format!(r"(?<!{W}){body}(?!{W})")
+/// A Python pattern of the form `\b<body>` whose body needs lookarounds (Python's `\b`), so it
+/// runs on `fancy-regex`'s backtracking VM — but never as an unanchored search, which would
+/// try every start position inside the VM.
+///
+/// Instead the scan is done here, as Python's `re` does it: a match can only start on a
+/// character of the body's first class (`first`, found with the linear `regex` crate) whose
+/// previous character is not a word character (the leading `\b`, checked directly). At each
+/// such candidate the body's lookaround-free core is tried anchored with the linear `regex`
+/// crate first (no core match, no match: most candidates end here), and only then the full
+/// body **anchored** (`\A(?:body)`, compiled anchored by `fancy-regex`) on the rest of the
+/// text. A body whose only lookaround is a trailing general `\b` (`\b\d[\d,.]*\b`) needs no
+/// VM at all: its match is the longest prefix of the greedy core match that ends on a word
+/// boundary, which is what backtracking finds. After a match the scan resumes at its end,
+/// after a miss at the next character. That is exactly Python's leftmost, non-overlapping search, in
+/// time linear in the text for these patterns, and each attempt carries an explicit
+/// backtracking limit ([`backtrack_limit`] of the remaining length): an attempt past it is
+/// [`RegexLimit`] and the caller skips the sketch with a warning.
+pub(crate) struct Bounded {
+    first: regex::Regex,
+    core: regex::Regex,
+    /// The body is `core` followed by a general `\b` (no VM needed).
+    core_then_boundary: bool,
+    pattern: String,
+    tiers: [OnceLock<fancy_regex::Regex>; 64],
 }
+
+impl Bounded {
+    /// `\b<body>` whose matches start on `first` and contain a match of `core` from their start.
+    pub(crate) fn new(first: &str, core: &str, body: &str) -> Self {
+        Self::build(first, core, body, false)
+    }
+
+    /// `\b<core>\b` with a general closing `\b` after a greedy core.
+    fn core_then_boundary(first: &str, core: &str) -> Self {
+        Self::build(
+            first,
+            core,
+            &format!(r"{core}(?:(?<={W})(?!{W})|(?<!{W})(?={W}))"),
+            true,
+        )
+    }
+
+    fn build(first: &str, core: &str, body: &str, core_then_boundary: bool) -> Self {
+        let b = Self {
+            first: regex::Regex::new(first).expect("valid constant pattern"),
+            core: regex::Regex::new(&format!(r"\A(?:{core})")).expect("valid constant pattern"),
+            core_then_boundary,
+            pattern: format!(r"\A(?:{body})"),
+            tiers: [const { OnceLock::new() }; 64],
+        };
+        let _ = b.anchored(0); // validates the constant pattern eagerly
+        b
+    }
+
+    fn anchored(&self, len: usize) -> &fancy_regex::Regex {
+        let limit = backtrack_limit(len);
+        let tier = (limit.ilog2() as usize).min(63);
+        self.tiers[tier].get_or_init(|| {
+            // The patterns are constants, covered by the tests.
+            fancy_regex::RegexBuilder::new(&self.pattern)
+                .backtrack_limit(limit)
+                .build()
+                .expect("valid constant pattern")
+        })
+    }
+
+    /// Byte ranges of the non-overlapping matches, left to right.
+    pub(crate) fn matches(&self, text: &str) -> Result<Vec<(usize, usize)>, RegexLimit> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while let Some(c) = self.first.find_at(text, pos) {
+            let start = c.start();
+            let after_word = text[..start].chars().next_back().is_some_and(is_word);
+            if !after_word && let Some(end) = self.attempt(text, start)? {
+                out.push((start, end));
+                pos = end;
+                continue;
+            }
+            pos = c.end();
+        }
+        Ok(out)
+    }
+
+    /// End of the match starting at `start` (a candidate), if any.
+    fn attempt(&self, text: &str, start: usize) -> Result<Option<usize>, RegexLimit> {
+        let rest = &text[start..];
+        let Some(core) = self.core.find(rest) else {
+            return Ok(None);
+        };
+        if self.core_then_boundary {
+            // Longest prefix of the greedy core match ending on a boundary.
+            let mut next = text[start + core.end()..].chars().next();
+            for (i, c) in rest[..core.end()].char_indices().rev() {
+                if is_word(c) != next.is_some_and(is_word) {
+                    return Ok(Some(start + i + c.len_utf8()));
+                }
+                next = Some(c);
+            }
+            return Ok(None);
+        }
+        let found = self
+            .anchored(rest.len())
+            .find(rest)
+            .map_err(|_| RegexLimit)?;
+        Ok(found.filter(|m| m.end() > 0).map(|m| start + m.end()))
+    }
+
+    /// Python's `re.sub(pattern, with, text)`.
+    pub(crate) fn replace_all<'t>(
+        &self,
+        text: &'t str,
+        with: &str,
+    ) -> Result<Cow<'t, str>, RegexLimit> {
+        let found = self.matches(text)?;
+        if found.is_empty() {
+            return Ok(Cow::Borrowed(text));
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0;
+        for (a, b) in found {
+            out.push_str(&text[last..a]);
+            out.push_str(with);
+            last = b;
+        }
+        out.push_str(&text[last..]);
+        Ok(Cow::Owned(out))
+    }
+}
+
+/// Python's `\w` for one character.
+pub(crate) fn is_word(c: char) -> bool {
+    static WORD_CHAR: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(&format!(r"\A{W}\z")).expect("valid constant pattern"));
+    if c.is_ascii() {
+        return c.is_ascii_alphanumeric() || c == '_';
+    }
+    let mut buf = [0u8; 4];
+    WORD_CHAR.is_match(c.encode_utf8(&mut buf))
+}
+
+/// The first character of the digit patterns.
+const DIGIT: &str = r"\p{Nd}";
+/// After a word character: `\b` at the end of a body that ends on one.
+const END: &str = r"(?![\p{L}\p{N}_])";
 
 static WORD: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(&format!(r"<{W}+>|{W}+")).expect("valid constant pattern"));
 static WHITESPACE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(&format!("{S}+")).expect("valid constant pattern"));
-static EMAIL: LazyLock<fancy_regex::Regex> =
-    LazyLock::new(|| compile(r"[\p{L}\p{N}_.%+-]+@[\p{L}\p{N}_.-]+\.[A-Za-z]{2,}"));
-static PARTY_NAME: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
-    compile(
+// No lookarounds: the linear `regex` crate gives Python's leftmost-first matches directly.
+static EMAIL: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"[\p{L}\p{N}_.%+-]+@[\p{L}\p{N}_.-]+\.[A-Za-z]{2,}")
+        .expect("valid constant pattern")
+});
+static PARTY_NAME: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
         r"(?:[A-Z][\p{L}\p{N}_&.'-]*[\s\x1C-\x1F,]+){1,6}(?:Ltd|Limited|Inc|Incorporated|LLC|LLP|PLC|Corp|Corporation|Company|GmbH|AG|S\.?A\.?|B\.?V\.?|N\.?V\.?|S\.?r\.?l\.?|Pty|Oy|AB|A/S)\.?",
     )
+    .expect("valid constant pattern")
 });
-static MONTH_DATE: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
+static MONTH_DATE: LazyLock<Bounded> = LazyLock::new(|| {
     // Case-insensitive only inside the month names: under `(?i)` Rust would also fold the
     // `\w` class of the lookarounds (U+0345 folds to a Greek letter), Python does not.
-    compile(&bounded(&format!(
-        r"\p{{Nd}}{{1,2}}{S}+(?i:january|february|march|apr[iİı]l|may|june|july|august|september|october|november|december){S}+\p{{Nd}}{{2,4}}"
-    )))
+    Bounded::new(
+        DIGIT,
+        &format!(
+            r"\p{{Nd}}{{1,2}}{S}+(?i:january|february|march|apr[iİı]l|may|june|july|august|september|october|november|december){S}+\p{{Nd}}{{2,4}}"
+        ),
+        &format!(
+            r"\p{{Nd}}{{1,2}}{S}+(?i:january|february|march|apr[iİı]l|may|june|july|august|september|october|november|december){S}+\p{{Nd}}{{2,4}}{END}"
+        ),
+    )
 });
-static DATE: LazyLock<fancy_regex::Regex> =
-    LazyLock::new(|| compile(&bounded(r"\p{Nd}{1,4}[./-]\p{Nd}{1,2}[./-]\p{Nd}{2,4}")));
+static DATE: LazyLock<Bounded> = LazyLock::new(|| {
+    Bounded::new(
+        DIGIT,
+        r"\p{Nd}{1,4}[./-]\p{Nd}{1,2}[./-]\p{Nd}{2,4}",
+        &format!(r"\p{{Nd}}{{1,4}}[./-]\p{{Nd}}{{1,2}}[./-]\p{{Nd}}{{2,4}}{END}"),
+    )
+});
 // `\b\d[\d,.]*\b`: the run may end on `,` or `.`, so the closing `\b` is the general one.
-static NUMBER: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
-    compile(&format!(
-        r"(?<!{W})\p{{Nd}}[\p{{Nd}},.]*(?:(?<={W})(?!{W})|(?<!{W})(?={W}))"
-    ))
-});
+static NUMBER: LazyLock<Bounded> =
+    LazyLock::new(|| Bounded::core_then_boundary(DIGIT, r"\p{Nd}[\p{Nd},.]*"));
 static HEADING_NUMBER: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(&format!(
         r"(?i)\A{S}*(?:\p{{Nd}}+[.)]?|[ivxlcdmİı]+[.)]|[a-zİı][.)]){S}+"
@@ -100,15 +269,6 @@ impl std::fmt::Display for RegexLimit {
 }
 
 impl std::error::Error for RegexLimit {}
-
-pub(crate) fn replace_all<'t>(
-    re: &fancy_regex::Regex,
-    text: &'t str,
-    with: &str,
-) -> Result<Cow<'t, str>, RegexLimit> {
-    re.try_replacen(text, 0, fancy_regex::NoExpand(with))
-        .map_err(|_| RegexLimit)
-}
 
 /// BLAKE2b-64 with the personalization `b"sada-fp-v1"`.
 pub fn digest(value: &str) -> [u8; 8] {
@@ -207,11 +367,11 @@ pub fn lsh_buckets(signature: &[u64]) -> Vec<String> {
 
 /// `mask_entities(text)` without caller-supplied entities.
 pub fn mask_entities(text: &str) -> Result<String, RegexLimit> {
-    let t = replace_all(&EMAIL, text, "<email>")?;
-    let t = replace_all(&PARTY_NAME, &t, "<party> ")?;
-    let t = replace_all(&MONTH_DATE, &t, "<date>")?;
-    let t = replace_all(&DATE, &t, "<date>")?;
-    Ok(replace_all(&NUMBER, &t, "<num>")?.into_owned())
+    let t = EMAIL.replace_all(text, regex::NoExpand("<email>"));
+    let t = PARTY_NAME.replace_all(&t, regex::NoExpand("<party> "));
+    let t = MONTH_DATE.replace_all(&t, "<date>")?;
+    let t = DATE.replace_all(&t, "<date>")?;
+    Ok(NUMBER.replace_all(&t, "<num>")?.into_owned())
 }
 
 /// `template_fp(text)`: SimHash of the set of masked unigrams; 0 for no tokens.
@@ -269,6 +429,28 @@ mod tests {
             "due <date>, ref <num>a"
         );
         assert_eq!(mask_entities("x12 3.").unwrap(), "x12 <num>.");
+    }
+
+    #[test]
+    fn limits_scale_with_the_text() {
+        assert_eq!(backtrack_limit(0), BACKTRACK_LIMIT);
+        assert_eq!(backtrack_limit(1 << 20), 4 << 20);
+        assert_eq!(backtrack_limit(usize::MAX), usize::MAX);
+        // An attempt past its limit is an error, not a panic.
+        let tiny = fancy_regex::RegexBuilder::new(r"\A(?:[a-z]+-[a-z]+(?![a-z]))")
+            .backtrack_limit(10)
+            .build()
+            .unwrap();
+        assert!(tiny.find(&"a".repeat(1000)).is_err());
+    }
+
+    #[test]
+    fn scan_matches_python_leftmost_search() {
+        // A candidate after a word character is no start (`\b`); a miss moves one character on.
+        let m = NUMBER.matches("a12 3, x1 45a 6.").unwrap();
+        let got: Vec<&str> = m.iter().map(|&(a, b)| &"a12 3, x1 45a 6."[a..b]).collect();
+        assert_eq!(got, ["3", "6"]);
+        assert!(is_word('\u{b2}') && !is_word('\u{301}') && is_word('_') && !is_word('-'));
     }
 
     #[test]

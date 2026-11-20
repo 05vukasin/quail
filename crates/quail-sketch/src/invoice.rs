@@ -11,7 +11,7 @@
 
 use std::sync::LazyLock;
 
-use crate::sada::{RegexLimit, digest_int};
+use crate::sada::{Bounded, RegexLimit, digest_int};
 
 /// Invoice field labels, lowercase and space-separated.
 pub const LABELS: [&str; 16] = [
@@ -33,11 +33,12 @@ pub const LABELS: [&str; 16] = [
     "balance due",
 ];
 
-static INVOICE_NUMBER: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
-    fancy_regex::Regex::new(
-        r"(?<![\p{L}\p{N}_])[A-Za-z]{2,}(?:[-/][A-Za-z0-9]+){1,4}(?![\p{L}\p{N}_])",
+static INVOICE_NUMBER: LazyLock<Bounded> = LazyLock::new(|| {
+    Bounded::new(
+        "[A-Za-z]",
+        r"[A-Za-z]{2,}(?:[-/][A-Za-z0-9]+){1,4}",
+        r"[A-Za-z]{2,}(?:[-/][A-Za-z0-9]+){1,4}(?![\p{L}\p{N}_])",
     )
-    .expect("valid constant pattern")
 });
 static DIGIT_RUN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\p{Nd}+").expect("valid constant pattern"));
@@ -73,8 +74,8 @@ impl InvoiceFeatures {
 /// `invoice_number_patterns(text)`.
 pub fn number_patterns(text: &str) -> Result<Vec<String>, RegexLimit> {
     let mut out: Vec<String> = Vec::new();
-    for m in INVOICE_NUMBER.find_iter(text) {
-        let token = m.map_err(|_| RegexLimit)?.as_str();
+    for (a, b) in INVOICE_NUMBER.matches(text)? {
+        let token = &text[a..b];
         if !DIGIT_RUN.is_match(token) {
             continue;
         }

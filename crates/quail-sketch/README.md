@@ -22,7 +22,7 @@ All require the `document` artifact.
 | | | `sketch.headings` | U64 | equality | same heading skeleton |
 | `sketch.invoice_layout@1` | Fast | `sketch.invoice_layout`, `sketch.invoice_labels`, `sketch.invoice_number_patterns` | U64, Int, Int | equality | gate on `invoice_labels` ≥ 4 to treat the file as an invoice |
 | `sketch.text_key@1` | Fast | `sketch.text_key` | Bytes, 16 (XXH3-128) | equality | same words (≥ 400 chars) |
-| `sketch.minhash_sada@1` | Standard | `sketch.sada_minhash`, `sketch.sada_minhash_bands`, `sketch.sada_shingles`, `sketch.sada_template` | Bytes 128 × u64 LE, List of Text, Int, U64 | as the Python service | see below |
+| `sketch.minhash_sada@1` | Standard only (backtracking regexes, see Limits) | `sketch.sada_minhash`, `sketch.sada_minhash_bands`, `sketch.sada_shingles`, `sketch.sada_template` | Bytes 128 × u64 LE, List of Text, Int, U64 | as the Python service | see below |
 | `sketch.page_phash@1` | Standard (needs `raster`) | `sketch.page_phash`, `sketch.page_phash_pages` | List of U64, List of Int | `hamming` per page | ≤ 8 per page, all pages, equal counts |
 
 Pure helpers: `hamming(a, b)`, `jaccard_estimate(sig_a, sig_b)` (works on both signature
@@ -120,9 +120,9 @@ Cost per document (laptop, shared machine, `profiling` build), median / p95 / ma
 | `sketch.simhash_text` | 230 / 8 900 / 24 700 | max 1.2 MB |
 | `sketch.simhash_template` | 210 / 8 100 / 23 100 | max 1.2 MB |
 | `sketch.layout` | 19 / 94 / 1 900 | max 0.35 MB |
-| `sketch.invoice_layout` | 590 / 23 200 / 59 400 | max 1.5 MB |
+| `sketch.invoice_layout` | 170 / 7 100 / 17 300 | max 1.5 MB |
 | `sketch.text_key` | 180 / 6 900 / 22 200 | max 0.6 MB |
-| `sketch.minhash_sada` | 1 670 / 60 400 / 197 000 | max 3.6 MB |
+| `sketch.minhash_sada` | 440 / 14 600 / 34 400 | max 3.6 MB |
 | `sketch.page_phash` (47 docs, 290 pages) | 156 000 / 770 000 / 1 578 000 | median 12 MB, max 29 MB (one decoded scan) |
 
 The text sketches are linear in the text; the largest document's MinHash (about 100 000
@@ -134,7 +134,25 @@ shingles) takes about 50 ms. For comparison, `pdf.extract` takes 6 ms median on 
   shingling. Pages needing OCR are skipped by the text sketches.
 - Structure: at most 20 000 blocks; layout: first 8 pages; pHash: 16 pages (warning beyond),
   render refused by the raster over `max_render_pixels`, failures per page are warnings.
-- The `sada` port's regexes run on `fancy-regex` with its backtracking limit: hitting it is a
-  problem on the record (sketch skipped), never a panic.
+- **Backtracking regexes (why `sketch.minhash_sada` is Standard-profile only).** The `sada`
+  port must reproduce Python's `\b`, so four patterns (month date, numeric date, number,
+  invoice number) need lookarounds, which only `fancy-regex`'s **backtracking** VM offers. They
+  are never run as unanchored VM searches (one VM attempt per start position, superlinear on
+  hostile text). Instead `sada::Bounded` scans like Python's `re`: candidates are found with
+  the linear `regex` crate (first character of the pattern, previous character not a word
+  character), a lookaround-free core must match there (linear `regex`), and only then the full
+  pattern runs **anchored** in the VM with an explicit `backtrack_limit`
+  (`sada::backtrack_limit`: max(100 000, 4 × remaining bytes)). The number pattern needs no VM
+  at all (longest prefix of the greedy core that ends on a boundary). E-mail and party-name
+  masking have no lookarounds and run on `regex`. A VM attempt past its limit returns
+  `RegexLimit`: the analyzer adds a warning and skips that sketch (nothing emitted); it never
+  panics or hangs. `tests/adversarial.rs` feeds 18 kinds of 1 MB hostile text (`aa-aa-…`,
+  `1.1.…`, `1/1/1/…`, unterminated word and digit runs, `a@a@…`, capitalized runs without a
+  legal form, month/date near-misses, Cyrillic with `İ ı`, combining marks). Per input, in a
+  debug build: the patterns alone take ≤ 0.65 s, and the whole `minhash_sada` +
+  `invoice_layout` path ≤ 1.0 s. The bound asserted is 2 s. Even so, the Python-compatible
+  path costs several times the native sketches (BLAKE2b per shingle, regex masking), so it
+  stays out of `Fast`. `sketch.invoice_layout` keeps `Fast`: it has one pattern behind the
+  same scan.
 - No `unsafe`, no panics on content (tests feed control characters, combining marks, 1 MB
   words, long `1,1,1,…` and `A A A … Ltd` runs).

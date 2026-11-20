@@ -230,7 +230,7 @@ impl InvoiceLayout {
                 out.fact(keys::INVOICE_NUMBER_PATTERNS, int(f.patterns.len()));
             }
             Ok(_) => {}
-            Err(e) => out.problem(format!("{}: {e}", Self::ID)),
+            Err(e) => out.warn(format!("{}: {e}, sketch skipped", Self::ID)),
         }
         Ok(())
     }
@@ -281,7 +281,9 @@ pub fn text_key(normalized: &str) -> Option<[u8; 16]> {
 /// signature [`keys::SADA_MINHASH`] with its buckets [`keys::SADA_MINHASH_BANDS`] and
 /// [`keys::SADA_SHINGLES`] (nothing below 40 shingles), and the template fingerprint
 /// [`keys::SADA_TEMPLATE`]. Reads the text as extracted (not normalized), as the original.
-/// Standard: `BLAKE2b` per shingle and regex masking cost about 10× the native sketches.
+/// Standard only: `BLAKE2b` per shingle and backtracking (`fancy-regex`) masking cost several
+/// times the native sketches; a pattern that hits `sada::backtrack_limit` is a warning and
+/// that sketch is skipped.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SadaMinHash;
 
@@ -318,7 +320,7 @@ impl SadaMinHash {
         if !text.trim().is_empty() {
             match sada::template_fp(&text) {
                 Ok(fp) => out.fact(keys::SADA_TEMPLATE, Value::U64(fp)),
-                Err(e) => out.problem(format!("{}: {e}", Self::ID)),
+                Err(e) => out.warn(format!("{}: {e}, sketch skipped", Self::ID)),
             }
         }
         Ok(())
