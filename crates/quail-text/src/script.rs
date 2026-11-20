@@ -38,6 +38,12 @@ pub fn script_of(c: char) -> Option<Script> {
     if c.is_ascii() {
         return c.is_ascii_alphabetic().then_some(Script::Latin);
     }
+    // Fast paths for the blocks that dominate our text (no table lookup).
+    match c as u32 {
+        0x00C0..=0x00D6 | 0x00D8..=0x00F6 | 0x00F8..=0x024F => return Some(Script::Latin),
+        0x0400..=0x0481 | 0x048A..=0x052F => return Some(Script::Cyrillic),
+        _ => {}
+    }
     if !c.is_alphabetic() {
         return None;
     }

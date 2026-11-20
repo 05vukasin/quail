@@ -173,7 +173,7 @@ impl Detection {
 pub struct DetectorOptions {
     /// Characters sampled for the backend (default 3 000).
     pub max_chars: usize,
-    /// Characters scanned for sr/hr/bs markers (default 50 000).
+    /// Characters scanned for sr/hr/bs markers and script counts (default 20 000).
     pub max_marker_chars: usize,
     /// Fewer letters than this: no detection (default 8).
     pub min_letters: u64,
@@ -186,7 +186,7 @@ impl Default for DetectorOptions {
     fn default() -> Self {
         Self {
             max_chars: 3_000,
-            max_marker_chars: 50_000,
+            max_marker_chars: 20_000,
             min_letters: 8,
             hbs_prior: [1.0, 1.0, 1.0],
         }
@@ -248,7 +248,8 @@ impl LanguageDetector {
     /// Like [`Self::detect`], sampling at most `max_chars` characters for the backend
     /// (e.g. a smaller sample per page).
     pub fn detect_limited(&self, text: &str, max_chars: usize) -> Option<Detection> {
-        let scripts = ScriptCounts::of(text);
+        let marker_text = prefix_chars(text, self.opts.max_marker_chars);
+        let scripts = ScriptCounts::of(marker_text);
         if scripts.letters() < self.opts.min_letters {
             return None;
         }
@@ -266,8 +267,15 @@ impl LanguageDetector {
             .map(|(_, s)| s)
             .sum();
         if mass > 0.0 {
-            let marker_text = prefix_chars(text, self.opts.max_marker_chars);
-            let m = self.markers.scan(marker_text);
+            // Cyrillic text is Serbian anyway (see `split_cluster`): skip the scan.
+            let m = if scripts.cyrillic * 10 > scripts.letters() * 3 {
+                HbsMarkers {
+                    cyrillic: true,
+                    ..HbsMarkers::default()
+                }
+            } else {
+                self.markers.scan(marker_text)
+            };
             let get = |l: Lang| scores.iter().find(|x| x.0 == l).map_or(0.0, |x| x.1);
             let split = split_cluster(
                 [get(Lang::Sr), get(Lang::Hr), get(Lang::Bs)],

@@ -437,7 +437,9 @@ impl<S: Sink> Pipeline<'_, S> {
 /// Whether `d` continues the cluster that ends with `last` (NFKC may merge them).
 #[inline]
 fn continues_cluster(last: char, d: char) -> bool {
-    canonical_combining_class(d) != 0 || compose(last, d).is_some()
+    // Starters that compose with a preceding starter (Hangul jamo, a few Indic vowel signs)
+    // all sit at U+0900 and above, so most text skips the composition lookup.
+    canonical_combining_class(d) != 0 || (d >= '\u{900}' && compose(last, d).is_some())
 }
 
 fn run<S: Sink>(text: &str, opts: NormalizeOptions, sink: &mut S) {

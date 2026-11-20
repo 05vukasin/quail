@@ -239,8 +239,10 @@ fn is_vowel(c: char) -> bool {
             | 'і'
             | 'ї'
             | 'є'
-    ) || crate::script::script_of(c)
-        .is_some_and(|s| s != crate::script::Script::Latin && s != crate::script::Script::Cyrillic)
+    ) || (!c.is_ascii()
+        && crate::script::script_of(c).is_some_and(|s| {
+            s != crate::script::Script::Latin && s != crate::script::Script::Cyrillic
+        }))
 }
 
 /// Scores one letter run; returns how many of its letters are implausible.
