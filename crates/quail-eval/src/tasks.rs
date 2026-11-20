@@ -1,0 +1,128 @@
+//! The task map: which fact keys answer which gold task, and how their values are normalized.
+//!
+//! ```toml
+//! [task.party]
+//! keys = ["signal.party", "signal.company"]
+//! normalize = "company"
+//! multi = true
+//! min_conf = 0.3
+//! description = "Contracting parties"
+//! ```
+//!
+//! The committed default is `tasks.toml` in this crate ([`TaskMap::builtin`]).
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::normalize::Normalizer;
+use crate::{Error, Result};
+
+/// How one task is predicted.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskSpec {
+    /// Fact keys whose values are predictions for the task (all of them are pooled).
+    pub keys: Vec<String>,
+    /// Normalizer applied to gold and predicted values.
+    #[serde(default)]
+    pub normalize: Normalizer,
+    /// Multi-valued (set semantics: every value is scored) or single-valued (only the most
+    /// confident prediction counts).
+    #[serde(default)]
+    pub multi: bool,
+    /// Predictions below this confidence are treated as abstentions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_conf: Option<f32>,
+    /// What the task is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TasksFile {
+    #[serde(default)]
+    task: BTreeMap<String, TaskSpec>,
+}
+
+/// All tasks, by name.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TaskMap {
+    /// Task name → spec.
+    pub tasks: BTreeMap<String, TaskSpec>,
+}
+
+/// The committed default task map.
+pub const BUILTIN_TOML: &str = include_str!("../tasks.toml");
+
+impl TaskMap {
+    /// Parses a TOML task map. `origin` names it in errors.
+    pub fn from_toml(text: &str, origin: &Path) -> Result<Self> {
+        let f: TasksFile = toml::from_str(text).map_err(|e| Error::parse(origin, e))?;
+        for (name, spec) in &f.task {
+            if spec.keys.is_empty() {
+                return Err(Error::parse(origin, format!("task {name}: keys is empty")));
+            }
+            if let Some(c) = spec.min_conf
+                && !(0.0..=1.0).contains(&c)
+            {
+                return Err(Error::parse(
+                    origin,
+                    format!("task {name}: min_conf outside [0, 1]"),
+                ));
+            }
+        }
+        Ok(Self { tasks: f.task })
+    }
+
+    /// Reads a TOML task map from a file.
+    pub fn load(path: &Path) -> Result<Self> {
+        Self::from_toml(&crate::read_to_string(path)?, path)
+    }
+
+    /// The committed `tasks.toml`.
+    pub fn builtin() -> Self {
+        // The file is tested below; a broken one fails the build's tests, not users.
+        Self::from_toml(BUILTIN_TOML, Path::new("tasks.toml")).unwrap_or_default()
+    }
+
+    /// The spec of a task.
+    pub fn get(&self, task: &str) -> Option<&TaskSpec> {
+        self.tasks.get(task)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_parses() {
+        let m = TaskMap::from_toml(BUILTIN_TOML, Path::new("tasks.toml")).unwrap();
+        for t in [
+            "doc_type",
+            "party",
+            "effective_date",
+            "iban",
+            "language",
+            "is_scanned",
+        ] {
+            assert!(m.get(t).is_some(), "{t}");
+        }
+        assert!(m.get("party").unwrap().multi);
+        assert_eq!(m.get("party").unwrap().normalize, Normalizer::Company);
+    }
+
+    #[test]
+    fn rejects_bad_maps() {
+        let p = Path::new("t.toml");
+        assert!(TaskMap::from_toml("[task.a]\nkeys = []\n", p).is_err());
+        assert!(
+            TaskMap::from_toml("[task.a]\nkeys = [\"x.y\"]\nnormalize = \"nope\"\n", p).is_err()
+        );
+        assert!(TaskMap::from_toml("[task.a]\nkeys = [\"x.y\"]\nmin_conf = 2.0\n", p).is_err());
+        assert!(TaskMap::from_toml("[task.a]\nkeys = [\"x.y\"]\ntypo = 1\n", p).is_err());
+    }
+}
