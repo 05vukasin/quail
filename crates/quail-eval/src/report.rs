@@ -95,6 +95,10 @@ pub fn markdown(sb: &Scoreboard) -> String {
         "\n## Tasks\n\n| task | support | docs | absent docs | TP | FP | FN | P | R | F1 | abstain | pred. on absent | ECE |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     );
     for (name, t) in &sb.tasks {
+        let name = match &t.pending {
+            Some(why) => format!("{name} (pending: {why})"),
+            None => name.clone(),
+        };
         let _ = writeln!(
             s,
             "| {name} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",

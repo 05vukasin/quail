@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::gold::{GoldDoc, Split};
 use crate::normalize::label_matches;
-use crate::records::{MatchedBy, RecordIndex, Records, value_strings};
+use crate::records::{MatchedBy, RecordIndex, Records, field_strings};
 use crate::tasks::{TaskMap, TaskSpec};
 use crate::{Error, Result};
 
@@ -166,6 +166,9 @@ pub struct TaskScore {
     pub by_dataset: BTreeMap<String, Counts>,
     /// Per split.
     pub by_split: BTreeMap<String, Counts>,
+    /// Copied from the task map: why the task has no producer yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<String>,
 }
 
 /// Status distribution.
@@ -439,7 +442,7 @@ pub fn predictions(
         if !spec.keys.iter().any(|k| k == f.key.as_str()) {
             continue;
         }
-        for v in value_strings(&f.value) {
+        for v in field_strings(&f.value, spec.field.as_deref()) {
             if f.conf < threshold {
                 dropped += 1;
                 continue;
@@ -646,6 +649,7 @@ pub fn score(
             };
             dt.below_min_conf = dropped;
             let ts = sb.tasks.entry(name.clone()).or_default();
+            ts.pending.clone_from(&spec.pending);
             ts.counts.add(dt.tp, dt.fp, dt.fn_);
             ts.by_dataset
                 .entry(doc.dataset.clone())
@@ -706,6 +710,8 @@ mod tests {
             normalize,
             multi,
             min_conf: None,
+            field: None,
+            pending: None,
             description: None,
         }
     }
@@ -786,6 +792,35 @@ mod tests {
         let dt = score_doc_task(&doc, "party", &s, preds).unwrap();
         assert_eq!((dt.tp, dt.fp, dt.fn_), (1, 1, 1));
         assert_eq!(dt.missed, vec!["Beta LLC"]);
+    }
+
+    #[test]
+    fn record_field_predictions() {
+        let mut s = spec("p.company", true, Normalizer::Company);
+        s.field = Some("surface".into());
+        let doc = gold(
+            1,
+            vec![Label::text("party", "Alpha Inc.", MatchMode::Normalized)],
+            &[],
+        );
+        let company = |surface: &str, conf| Fact {
+            value: Value::record([
+                ("surface", Value::text(surface)),
+                ("key", Value::text("ignored")),
+            ]),
+            ..fact("p.company", "", conf)
+        };
+        let rec = record(
+            1,
+            vec![company("ALPHA INC", 0.9), company("Gamma Ltd", 0.4)],
+            Status::Ok,
+            1,
+        );
+        let (preds, _) = predictions(&rec, &s, None);
+        let values: Vec<&str> = preds.iter().map(|p| p.value.as_str()).collect();
+        assert_eq!(values, ["ALPHA INC", "Gamma Ltd"]);
+        let dt = score_doc_task(&doc, "party", &s, preds).unwrap();
+        assert_eq!((dt.tp, dt.fp, dt.fn_), (1, 1, 0));
     }
 
     #[test]

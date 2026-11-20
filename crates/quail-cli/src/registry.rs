@@ -179,6 +179,35 @@ mod tests {
         }
     }
 
+    /// Every key the evaluation task map reads exists in this build, unless the task is
+    /// pending or the key's namespace belongs to a crate this build does not have (`pdf.*`
+    /// before quail-pdf is wired). Catches a task pointing at a misspelled or renamed key.
+    #[test]
+    fn eval_tasks_read_real_keys() {
+        let tables = key_tables();
+        let known: BTreeSet<&str> = tables
+            .iter()
+            .flat_map(|(_, t)| t.iter().map(|k| k.key.as_str()))
+            .collect();
+        let namespaces: BTreeSet<&str> = tables
+            .iter()
+            .flat_map(|(_, t)| t.iter().map(|k| k.key.namespace()))
+            .collect();
+        let map = quail_eval::tasks::TaskMap::builtin();
+        assert!(!map.tasks.is_empty());
+        for (name, spec) in &map.tasks {
+            if spec.pending.is_some() {
+                continue;
+            }
+            for key in &spec.keys {
+                let ns = key.split('.').next().unwrap_or("");
+                if namespaces.contains(ns) {
+                    assert!(known.contains(key.as_str()), "task {name}: no key {key}");
+                }
+            }
+        }
+    }
+
     /// Every `FactKey::new("...")` in a crate's sources appears in its table: the tables
     /// are generated, this catches a key added without regenerating.
     #[test]

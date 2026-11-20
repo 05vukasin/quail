@@ -75,8 +75,10 @@ One JSON file per document, in a dataset directory outside the repository:
 
 Committed in this crate and compiled in (override with `--tasks`). Per task: `keys` (fact
 keys pooled as predictions), `normalize` (`none`, `text`, `company`, `date`, `identifier`,
-`number`, `bool`, `language`), `multi` (set semantics) and `min_conf`. Keys of crates not
-merged yet are the planned names: fix them here when the crate lands. Tasks: `doc_type`,
+`number`, `bool`, `language`), `multi` (set semantics), `min_conf`, `field` (for record
+values: the field that is the prediction, e.g. `surface` of `party.company`, `raw` of
+`ref.doc_number`; lists of records are flattened) and `pending` (why the task has no producer
+yet; its keys are the planned names, it is scored as abstentions and flagged in the report). Tasks: `doc_type`,
 `doc_title`, `party`, `effective_date`, `agreement_date`, `expiration_date`,
 `jurisdiction`, `term`, `contract_number`, `iban`, `amount_total`, `language`,
 `is_scanned`, `near_duplicate_of`.
