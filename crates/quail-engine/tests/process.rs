@@ -396,3 +396,30 @@ fn extractor_problem_makes_record_partial_and_keeps_document() {
         other => panic!("expected Partial, got {other:?}"),
     }
 }
+
+#[test]
+fn process_with_sees_the_record_and_the_document() {
+    let engine = EngineBuilder::new()
+        .extractor(MockExtractor::text(ExtractMode::Pages(2)))
+        .build()
+        .unwrap();
+    let mut seen = None;
+    let rec = engine.process_with(item("x.txt", b"hello"), |r, artifacts| {
+        let doc = artifacts.get::<quail_core::Document>().expect("document");
+        seen = Some((r.locator.clone(), doc.pages.len(), r.steps.len()));
+    });
+    assert_eq!(seen, Some(("x.txt".to_owned(), 2, rec.steps.len())));
+    // Same record as `process`, timings aside.
+    let plain = engine.process(item("x.txt", b"hello"));
+    assert_eq!(
+        (rec.steps, rec.facts, rec.status),
+        (plain.steps, plain.facts, plain.status)
+    );
+
+    // No extractor for the format: the hook still runs, without a document.
+    let mut had_doc = None;
+    engine.process_with(item("x.bin", &[0, 1, 2, 0xff]), |_, a| {
+        had_doc = Some(a.get::<quail_core::Document>().is_some());
+    });
+    assert_eq!(had_doc, Some(false));
+}

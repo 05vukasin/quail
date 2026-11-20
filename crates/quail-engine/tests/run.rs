@@ -3,13 +3,15 @@
 
 mod common;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::*;
-use quail_core::{Error, FactKey, FileRecord, Limits, RecordSink, Result, Status, Value};
-use quail_engine::{Engine, EngineBuilder, RunOptions};
+use quail_core::{
+    Artifacts, Error, FactKey, FileRecord, Limits, RecordSink, Result, Status, Value,
+};
+use quail_engine::{ArtifactsHook, Engine, EngineBuilder, RunOptions};
 
 fn jittery_engine() -> Engine {
     // Variable work per file so completion order differs from source order.
@@ -284,4 +286,70 @@ fn default_options_are_sane() {
     assert!(o.stop_on_sink_error);
     assert_eq!(o.stack_size, 32 << 20);
     assert_eq!(o.max_in_flight_bytes, 1 << 30);
+}
+
+#[test]
+fn on_artifacts_runs_per_file_and_its_panics_are_counted() {
+    let engine = jittery_engine();
+    let calls = Arc::new(AtomicU64::new(0));
+    let docs = Arc::new(AtomicU64::new(0));
+    let (c, d) = (Arc::clone(&calls), Arc::clone(&docs));
+    let hook: ArtifactsHook = Arc::new(move |rec: &FileRecord, a: &Artifacts| {
+        c.fetch_add(1, Ordering::Relaxed);
+        if a.get::<quail_core::Document>().is_some() {
+            d.fetch_add(1, Ordering::Relaxed);
+        }
+        if rec.locator.ends_with('7') {
+            panic!("hook bug");
+        }
+    });
+    let mut src = MockSource::new(100);
+    let mut sink = VecSink::default();
+    let o = RunOptions {
+        on_artifacts: Some(hook),
+        ..opts(4, 8, true)
+    };
+    let stats = engine.run(&mut src, &mut sink, &o);
+    assert_eq!(calls.load(Ordering::Relaxed), 100);
+    assert_eq!(docs.load(Ordering::Relaxed), 100);
+    // mem/7, mem/17, ..., mem/97: ten panics, every record still written and ok.
+    assert_eq!(stats.hook_panics, 10);
+    assert!(
+        stats
+            .first_hook_panic
+            .as_deref()
+            .unwrap()
+            .contains("hook bug")
+    );
+    assert_eq!((stats.files, stats.ok), (100, 100));
+    assert_eq!(sink.records.len(), 100);
+    assert!(stats.to_string().contains("10 artifact hook panics"));
+    assert!(format!("{o:?}").contains("on_artifacts: Some"));
+}
+
+#[test]
+fn on_artifacts_is_not_called_for_source_error_records() {
+    let engine = jittery_engine();
+    let calls = Arc::new(AtomicU64::new(0));
+    let c = Arc::clone(&calls);
+    let mut src = MockSource::new(10);
+    src.fault = |i| {
+        if i % 2 == 0 {
+            Fault::LocatedError
+        } else {
+            Fault::None
+        }
+    };
+    let mut sink = VecSink::default();
+    let o = RunOptions {
+        on_artifacts: Some(Arc::new(move |_: &FileRecord, _: &Artifacts| {
+            c.fetch_add(1, Ordering::Relaxed);
+        })),
+        ..opts(2, 4, false)
+    };
+    let stats = engine.run(&mut src, &mut sink, &o);
+    assert_eq!(sink.records.len(), 10);
+    assert_eq!(stats.source_error_records, 5);
+    assert_eq!(calls.load(Ordering::Relaxed), 5);
+    assert_eq!(stats.hook_panics, 0);
 }
