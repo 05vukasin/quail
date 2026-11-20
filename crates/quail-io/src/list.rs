@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use quail_core::{Error, Result, Source, SourceItem};
 
-use crate::read::{ReadOptions, io_error, read_file};
+use crate::read::{ReadOptions, io_error, read_io};
 
 /// Yields the files named by a manifest, in manifest order. Used by eval to run fixed splits.
 ///
@@ -21,8 +21,10 @@ use crate::read::{ReadOptions, io_error, read_file};
 /// directory) otherwise. Locators are kept as written, so records stay comparable when the
 /// corpus moves.
 ///
-/// Lazy: the manifest is read one line per item. A bad line (invalid UTF-8, empty path) or a
-/// file that cannot be read yields one error item naming the line or path; the list goes on.
+/// Lazy: the manifest is read one line per item. A bad line (invalid UTF-8, empty path) yields
+/// one error item naming the line; a file that cannot be read yields
+/// `Error::at(locator, Error::Io(..))` naming the resolved path, so the engine writes a
+/// `Failed` record under the entry's locator. The list goes on either way.
 /// A read error on the manifest itself yields one error item and ends the source.
 #[derive(Debug)]
 pub struct ListSource<R = BufReader<File>> {
@@ -132,9 +134,17 @@ fn parse_line(raw: &[u8]) -> std::result::Result<Option<(&str, &str)>, &'static 
 impl<R: BufRead + Send> Source for ListSource<R> {
     fn next_item(&mut self) -> Option<Result<SourceItem>> {
         Some(self.next_entry()?.and_then(|(locator, path)| {
-            let mut item = read_file(&path, &self.read)?;
-            item.locator = locator;
-            Ok(item)
+            match read_io(&path, &self.read) {
+                Ok(mut item) => {
+                    item.locator = locator;
+                    Ok(item)
+                }
+                // The locator may be an id: keep the resolved path in the message.
+                Err(e) => {
+                    let e = io::Error::new(e.kind(), format!("{}: {e}", path.display()));
+                    Err(Error::at(locator, Error::Io(e)))
+                }
+            }
         }))
     }
 }

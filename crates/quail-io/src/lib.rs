@@ -11,9 +11,10 @@
 //! # Errors never end a source
 //!
 //! An unreadable file, a directory that cannot be listed or a symlink loop becomes one
-//! `Some(Err(..))` item and the walk goes on. The error is an [`Error::Io`](quail_core::Error)
-//! whose message starts with the offending path, because the core `Source` contract has no
-//! locator on error items.
+//! `Some(Err(..))` item and the walk goes on. A file that cannot be read (or is over the size
+//! cap) is `Error::at(locator, Error::Io(..))`, so the engine writes a `Failed` record naming
+//! it; a directory that cannot be listed or a loop is a plain [`Error::Io`](quail_core::Error)
+//! whose message starts with the offending path. The I/O error kind is kept either way.
 //!
 //! # Large files
 //!
