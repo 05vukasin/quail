@@ -19,13 +19,8 @@ impl Extractor for NoopExtractor {
     fn extract(&self, _: &Blob, _: &Limits, _: &mut Emitter) -> Result<Document> {
         Ok(Document {
             pages: vec![Page {
-                index: 0,
-                kind: PageKind::Logical,
-                size: None,
-                text: String::new(),
-                blocks: Vec::new(),
                 text_source: TextSource::Native,
-                needs_ocr: false,
+                ..Page::new(0, PageKind::Logical)
             }],
         })
     }

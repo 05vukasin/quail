@@ -13,13 +13,9 @@ use quail_core::{
 
 pub fn page(text: &str) -> Page {
     Page {
-        index: 0,
-        kind: PageKind::Logical,
-        size: None,
         text: text.to_owned(),
-        blocks: Vec::new(),
         text_source: TextSource::Native,
-        needs_ocr: false,
+        ..Page::new(0, PageKind::Logical)
     }
 }
 

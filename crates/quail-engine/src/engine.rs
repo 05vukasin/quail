@@ -277,6 +277,11 @@ impl Engine {
         let r = contain(self.quiet, || ext.extract(blob, &self.limits, &mut out)).and_then(|r| r);
         st.step(id, t);
         // The emitter survives an error: what the extractor said before failing is kept.
+        st.problems.extend(
+            out.take_problems()
+                .into_iter()
+                .map(|p| format!("{id}: {p}")),
+        );
         let (facts, artifacts, warnings) = out.into_parts();
         st.facts.extend(facts);
         st.artifacts.absorb(artifacts);
@@ -363,6 +368,11 @@ impl Engine {
             }
             Ok(Some(Ok(()))) => {
                 st.step(id, t);
+                st.problems.extend(
+                    out.take_problems()
+                        .into_iter()
+                        .map(|p| format!("{id}: {p}")),
+                );
                 let (facts, artifacts, warnings) = out.into_parts();
                 st.facts.extend(facts);
                 st.artifacts.absorb(artifacts);
@@ -370,6 +380,11 @@ impl Engine {
             }
             Ok(Some(Err(e))) | Err(e) => {
                 st.step(id, t);
+                st.problems.extend(
+                    out.take_problems()
+                        .into_iter()
+                        .map(|p| format!("{id}: {p}")),
+                );
                 let (_, _, warnings) = out.into_parts();
                 st.warnings(id, warnings);
                 st.problems.push(format!("{id}: {e}"));

@@ -355,3 +355,44 @@ fn not_applicable_is_not_a_step() {
     assert_eq!(rec.status, Status::Ok);
     assert_eq!(rec.steps, [SNIFF_ID]);
 }
+
+/// An extractor that stops early reports a problem: the record is Partial and keeps its pages.
+#[test]
+fn extractor_problem_makes_record_partial_and_keeps_document() {
+    use quail_core::{AnalyzerId, Blob, Document, Emitter, Extractor, Format, Limits, Result};
+    struct Stops;
+    impl Extractor for Stops {
+        fn id(&self) -> AnalyzerId {
+            AnalyzerId::new("stops.extract", 1)
+        }
+        fn formats(&self) -> &'static [Format] {
+            &[Format::Text]
+        }
+        fn extract(&self, _: &Blob, _: &Limits, out: &mut Emitter) -> Result<Document> {
+            out.problem("stopped after page 1: deadline");
+            Ok(Document {
+                pages: vec![common::page("first page")],
+            })
+        }
+    }
+    let engine = quail_engine::EngineBuilder::new()
+        .extractor(Box::new(Stops))
+        .build()
+        .unwrap();
+    let rec = engine.process(quail_core::SourceItem {
+        locator: "a.txt".into(),
+        blob: Blob::from(b"plain text file\n".to_vec()),
+        modified: None,
+    });
+    assert_eq!(rec.pages, Some(1));
+    match rec.status {
+        quail_core::Status::Partial { problems } => {
+            assert!(
+                problems
+                    .iter()
+                    .any(|p| p.contains("stops.extract@1: stopped"))
+            );
+        }
+        other => panic!("expected Partial, got {other:?}"),
+    }
+}

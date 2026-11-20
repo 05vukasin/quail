@@ -57,7 +57,12 @@ tools/           scripts (dataset fetchers, model fetchers)
   comes from content, `Evidence` (page, zone, span, box).
 - Hostile input: no `unwrap`/`expect`/indexing that can panic on file content; respect every
   `Limits` field; call `Emitter::check_deadline` in per-page and per-chunk loops; prefer a
-  partial result plus `Emitter::warn` over an error.
+  partial result over an error. `Emitter::warn` is a note that changes nothing;
+  `Emitter::problem` says the step stopped short (limit, deadline, broken page) and makes the
+  record `Partial` while keeping everything it produced.
+- Build `Page` values as `Page { text, blocks, ..Page::new(i, kind) }` so new fields never
+  break extractors. Formats with geometry provide a `Raster` artifact (`PageRaster`) so OCR
+  and inspection can render pages without depending on the extractor crate.
 - Memory: stream or work page by page; never hold more than one rendered page per worker.
 - Portability: never `target-cpu=native`. SIMD only behind runtime feature detection with a
   scalar fallback, tested on x86_64 and aarch64. CI runs Linux, macOS, Windows and Linux ARM.
