@@ -1,14 +1,34 @@
 [package]
 name = "quail-io"
-description = "Sources (filesystem walk, memory-mapped) and sinks (JSONL) for quail"
+description = "Sources (filesystem walk, manifest lists) and sinks (JSONL) for quail"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# Memory-map large files instead of reading them (needs `unsafe`, see src/mmap.rs).
+mmap = ["dep:memmap2"]
+# zstd-compressed JSONL output. Links the C zstd library, so it is not in the default build.
+zstd = ["dep:zstd"]
+
 [dependencies]
 quail-core.workspace = true
+serde_json.workspace = true
+walkdir = "2.5"
+globset = { version = "0.4", default-features = false }
+memmap2 = { version = "0.9", optional = true }
+zstd = { version = "0.13", optional = true, default-features = false }
+
+[dev-dependencies]
+tempfile = "3.27"
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "walk"
+harness = false
 
 [lints]
 workspace = true
