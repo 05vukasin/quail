@@ -163,7 +163,7 @@ impl Numbering {
                         }
                         "start" => set(&mut cur_lvl, |l| l.start = val_int(e)),
                         "numFmt" => set(&mut cur_lvl, |l| {
-                            l.fmt = val(e).map(std::borrow::Cow::into_owned)
+                            l.fmt = val(e).map(std::borrow::Cow::into_owned);
                         }),
                         "lvlText" => set(&mut cur_lvl, |l| {
                             // Real level texts are a few characters; a hostile one must not be
@@ -174,7 +174,7 @@ impl Numbering {
                         "lvlRestart" => set(&mut cur_lvl, |l| l.restart = val_int(e)),
                         "isLgl" => set(&mut cur_lvl, |l| l.legal = Some(on(e))),
                         "pStyle" => set(&mut cur_lvl, |l| {
-                            l.style = val(e).map(std::borrow::Cow::into_owned)
+                            l.style = val(e).map(std::borrow::Cow::into_owned);
                         }),
                         "numStyleLink" => {
                             if let Some((_, a)) = cur_abs.as_mut() {

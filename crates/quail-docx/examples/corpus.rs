@@ -8,7 +8,7 @@
 //! `--dump` writes each document's `full_text()` as `<n>.txt` (numbered in walk order) for
 //! comparison against another extractor.
 
-#![allow(missing_docs, clippy::cast_precision_loss)]
+#![allow(missing_docs, clippy::cast_precision_loss, clippy::too_many_lines)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

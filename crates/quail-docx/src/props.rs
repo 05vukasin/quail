@@ -240,7 +240,7 @@ pub(crate) fn settings(
                     None => bad += 1,
                 },
                 "attachedTemplate" => {
-                    template_rid = attr(e, "id").map(std::borrow::Cow::into_owned)
+                    template_rid = attr(e, "id").map(std::borrow::Cow::into_owned);
                 }
                 "trackRevisions" => track = on(e),
                 "documentProtection" => {
@@ -425,7 +425,7 @@ fn lenient_xml_text(raw: &[u8]) -> String {
         Err(_) => std::borrow::Cow::Owned(raw.iter().map(|&b| char::from(b)).collect()),
     };
     s.chars()
-        .filter(|&c| !(c.is_control() && !matches!(c, '\t' | '\n' | '\r')) && c != '\u{fffd}')
+        .filter(|&c| (!c.is_control() || matches!(c, '\t' | '\n' | '\r')) && c != '\u{fffd}')
         .collect()
 }
 
