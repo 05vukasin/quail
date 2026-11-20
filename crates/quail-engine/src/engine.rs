@@ -10,7 +10,7 @@ use quail_core::{
 use crate::builder::ExtractorTable;
 use crate::keys;
 use crate::panic::contain;
-use crate::sniff::detect;
+use crate::sniff::{Sniff, detect};
 
 /// Id of the sniffing step, the source of `engine.format` and `engine.mime`.
 pub const SNIFF_ID: AnalyzerId = AnalyzerId::new("engine.sniff", 1);
@@ -18,11 +18,30 @@ pub const SNIFF_ID: AnalyzerId = AnalyzerId::new("engine.sniff", 1);
 /// Runs extractors and analyzers over files. Built by
 /// [`EngineBuilder`](crate::EngineBuilder); immutable and shared between worker threads.
 ///
-/// Deadlines are cooperative: the engine hands every step the file's deadline through
-/// [`Emitter::with_deadline`] and stops starting new steps once it has passed, but it cannot
-/// preempt a step that never calls [`Emitter::check_deadline`]. A native library that hangs
-/// inside one call holds its worker thread until it returns; only a separate process can be
-/// killed, so process isolation (a watchdog that restarts workers) is the service's job.
+/// # Status of a record
+///
+/// | what happened                                                        | status    |
+/// |----------------------------------------------------------------------|-----------|
+/// | every step that applied succeeded (warnings or not)                  | `Ok`      |
+/// | file over `max_bytes` (no extraction, generic analyzers still run)   | `Partial` |
+/// | extractor returned `Encrypted` or `LimitExceeded` (its facts kept)   | `Partial` |
+/// | extractor returned any other error, panicked or timed out (facts kept) | `Failed` |
+/// | an analyzer errored, panicked or timed out (its facts dropped)       | `Partial` |
+/// | an applicable analyzer skipped because a provider of its input failed | `Partial` |
+/// | the deadline passed before all analyzers ran                         | `Partial` |
+///
+/// Warnings never change the status; they go to [`FileRecord::warnings`] prefixed with the
+/// step id. An analyzer skipped because its input was never produced (its provider did not
+/// apply, e.g. no extractor for the format) is silently skipped. `Failed` wins over
+/// `Partial`: its message lists the other problems after the extractor's.
+///
+/// # Deadlines are cooperative
+///
+/// The engine hands every step the file's deadline through [`Emitter::with_deadline`] and
+/// stops starting new steps once it has passed, but it cannot preempt a step that never calls
+/// [`Emitter::check_deadline`]. A native library that hangs inside one call holds its worker
+/// thread until it returns; only a separate process can be killed, so process isolation (a
+/// watchdog that restarts workers) is the service's job.
 pub struct Engine {
     profile: Profile,
     limits: Limits,
@@ -39,6 +58,10 @@ struct FileState {
     steps: Vec<AnalyzerId>,
     timings: Vec<Timing>,
     problems: Vec<String>,
+    warnings: Vec<String>,
+    /// Artifact names whose producer applied but failed (or was itself skipped for that
+    /// reason): a consumer missing one of these is a problem, not a silent skip.
+    failed: Vec<&'static str>,
     fatal: Option<String>,
 }
 
@@ -52,8 +75,32 @@ impl FileState {
     }
 
     fn warnings(&mut self, id: AnalyzerId, warnings: Vec<String>) {
-        self.problems
+        self.warnings
             .extend(warnings.into_iter().map(|w| format!("{id}: {w}")));
+    }
+
+    fn fail_provides(&mut self, names: &[&'static str]) {
+        for n in names {
+            if !self.failed.contains(n) {
+                self.failed.push(n);
+            }
+        }
+    }
+}
+
+/// A `Failed` record without any step, for a file the engine could not even start on.
+pub(crate) fn failed_record(locator: String, size: u64, error: String) -> FileRecord {
+    FileRecord {
+        schema: SCHEMA_VERSION,
+        locator,
+        size,
+        format: Format::Unknown,
+        pages: None,
+        facts: Vec::new(),
+        steps: Vec::new(),
+        timings: Vec::new(),
+        status: Status::Failed { error },
+        warnings: Vec::new(),
     }
 }
 
@@ -113,15 +160,12 @@ impl Engine {
     }
 
     /// Processes one file. Never panics on file content and never returns an error: every
-    /// problem ends up in [`FileRecord::status`].
+    /// problem ends up in [`FileRecord::status`] (see the table on [`Engine`]).
     ///
     /// Steps: sniff (`engine.format`, `engine.mime`), size check against
-    /// [`Limits::max_bytes`] (too big: no extraction, the record is partial, analyzers that
-    /// do not require `document` still run), the format's extractor (its document becomes
-    /// the `document` artifact), then every analyzer of the plan whose requirements exist
-    /// and that [`applies`](Analyzer::applies). Extractor and analyzers run under
-    /// `catch_unwind`; a step that errs or panics loses its facts and artifacts, keeps its
-    /// warnings, and marks the file partial. A failed extractor marks it failed.
+    /// [`Limits::max_bytes`], the format's extractor (its document becomes the `document`
+    /// artifact), then every analyzer of the plan that [`applies`](Analyzer::applies) and
+    /// whose required artifacts exist. Every step runs under `catch_unwind`.
     pub fn process(&self, item: SourceItem) -> FileRecord {
         let SourceItem { locator, blob, .. } = item;
         self.process_blob(locator, &blob)
@@ -139,6 +183,8 @@ impl Engine {
             steps: Vec::with_capacity(cap),
             timings: Vec::with_capacity(cap),
             problems: Vec::new(),
+            warnings: Vec::new(),
+            failed: Vec::new(),
             fatal: None,
         };
         let emitter = |id| match deadline {
@@ -147,7 +193,13 @@ impl Engine {
         };
         let expired = || deadline.is_some_and(|d| Instant::now() >= d);
 
-        let sniff = detect(blob.as_bytes());
+        let sniff = contain(self.quiet, || detect(blob.as_bytes())).unwrap_or_else(|e| {
+            st.problems.push(format!("{SNIFF_ID}: {e}"));
+            Sniff {
+                format: Format::Unknown,
+                mime: "application/octet-stream",
+            }
+        });
         for (key, value) in [
             (keys::FORMAT, Value::text(sniff.format.as_str())),
             (keys::MIME, Value::text(sniff.mime)),
@@ -168,24 +220,9 @@ impl Engine {
                 "engine: file is {size} bytes, over max_bytes {}; extraction skipped",
                 self.limits.max_bytes
             ));
+            st.fail_provides(&["document"]);
         } else if let Some(ext) = self.extractor(sniff.format) {
-            let t = Instant::now();
-            let id = ext.id();
-            let mut out = emitter(id);
-            let r =
-                contain(self.quiet, || ext.extract(blob, &self.limits, &mut out)).and_then(|r| r);
-            st.step(id, t);
-            let (facts, artifacts, warnings) = out.into_parts();
-            st.warnings(id, warnings);
-            match r {
-                Ok(doc) => {
-                    pages = Some(u32::try_from(doc.pages.len()).unwrap_or(u32::MAX));
-                    st.facts.extend(facts);
-                    st.artifacts.absorb(artifacts);
-                    st.artifacts.insert(doc);
-                }
-                Err(e) => st.fatal = Some(format!("{id}: {e}")),
-            }
+            pages = self.extract(&mut st, ext, blob, emitter(ext.id()));
         }
 
         for (i, a) in self.plan.iter().enumerate() {
@@ -223,6 +260,43 @@ impl Engine {
             steps: st.steps,
             timings: st.timings,
             status,
+            warnings: st.warnings,
+        }
+    }
+
+    /// Runs the extractor; returns the page count when it produced a document.
+    fn extract(
+        &self,
+        st: &mut FileState,
+        ext: &dyn Extractor,
+        blob: &Blob,
+        mut out: Emitter,
+    ) -> Option<u32> {
+        let t = Instant::now();
+        let id = ext.id();
+        let r = contain(self.quiet, || ext.extract(blob, &self.limits, &mut out)).and_then(|r| r);
+        st.step(id, t);
+        // The emitter survives an error: what the extractor said before failing is kept.
+        let (facts, artifacts, warnings) = out.into_parts();
+        st.facts.extend(facts);
+        st.artifacts.absorb(artifacts);
+        st.warnings(id, warnings);
+        match r {
+            Ok(doc) => {
+                let pages = u32::try_from(doc.pages.len()).unwrap_or(u32::MAX);
+                st.artifacts.insert(doc);
+                Some(pages)
+            }
+            Err(e @ (Error::Encrypted | Error::LimitExceeded(_))) => {
+                st.problems.push(format!("{id}: {e}"));
+                st.fail_provides(&["document"]);
+                None
+            }
+            Err(e) => {
+                st.fatal = Some(format!("{id}: {e}"));
+                st.fail_provides(&["document"]);
+                None
+            }
         }
     }
 
@@ -254,22 +328,40 @@ impl Engine {
                 profile: self.profile,
             };
             contain(self.quiet, || {
-                if !a.applies(&ctx) {
+                if missing.is_some() || !a.applies(&ctx) {
+                    // Not applicable, or input never produced: `applies` only matters when
+                    // the input failed, so it is asked below in that case alone.
                     None
-                } else if missing.is_some() {
-                    Some(Ok(false))
                 } else {
-                    Some(a.run(&ctx, &mut out).map(|()| true))
+                    Some(a.run(&ctx, &mut out))
                 }
             })
         };
         match ran {
-            Ok(None) => {}
-            Ok(Some(Ok(false))) => st.problems.push(format!(
-                "{id}: skipped, missing artifact `{}`",
-                missing.unwrap_or_default()
-            )),
-            Ok(Some(Ok(true))) => {
+            Ok(None) => {
+                let Some(m) = missing else { return };
+                if !st.failed.contains(&m) {
+                    return; // provider did not apply: a silent skip
+                }
+                let applies = {
+                    let ctx = Ctx {
+                        blob,
+                        format,
+                        locator,
+                        artifacts: &st.artifacts,
+                        facts: &st.facts,
+                        limits: &self.limits,
+                        profile: self.profile,
+                    };
+                    contain(self.quiet, || a.applies(&ctx)).unwrap_or(false)
+                };
+                if applies {
+                    st.problems
+                        .push(format!("{id}: skipped, input `{m}` unavailable: an earlier step failed or hit a limit"));
+                    st.fail_provides(a.provides());
+                }
+            }
+            Ok(Some(Ok(()))) => {
                 st.step(id, t);
                 let (facts, artifacts, warnings) = out.into_parts();
                 st.facts.extend(facts);
@@ -281,6 +373,7 @@ impl Engine {
                 let (_, _, warnings) = out.into_parts();
                 st.warnings(id, warnings);
                 st.problems.push(format!("{id}: {e}"));
+                st.fail_provides(a.provides());
             }
         }
     }

@@ -11,6 +11,9 @@ use crate::panic::install_quiet_panic_hook;
 
 /// Artifact names the engine itself provides, usable in [`Analyzer::requires`] without any
 /// analyzer providing them.
+///
+/// Requirements are matched by [`Artifact::NAME`](quail_core::Artifact::NAME), so each name
+/// must belong to exactly one artifact type across all registered crates.
 pub const BUILTIN_ARTIFACTS: &[&str] = &["document"];
 
 /// Why [`EngineBuilder::build`] refused a configuration.
@@ -33,8 +36,8 @@ pub enum BuildError {
         /// Their common priority.
         priority: i32,
     },
-    /// The same analyzer id is registered twice.
-    #[error("analyzer {0} is registered twice")]
+    /// Two analyzers share a name (whatever their versions); the id of the second is given.
+    #[error("analyzer name `{name}` is registered twice ({0})", name = .0.name)]
     DuplicateAnalyzer(AnalyzerId),
     /// An analyzer requires an artifact nobody active provides.
     #[error(
@@ -141,7 +144,7 @@ impl EngineBuilder {
 
         let mut seen = HashSet::new();
         for a in &self.analyzers {
-            if !seen.insert(a.id()) {
+            if !seen.insert(a.id().name) {
                 return Err(BuildError::DuplicateAnalyzer(a.id()));
             }
         }
