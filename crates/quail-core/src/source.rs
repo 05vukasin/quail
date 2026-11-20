@@ -16,7 +16,8 @@ pub struct SourceItem {
 /// Where files come from: a directory walk, an S3 listing, a test fixture list. The engine
 /// pulls from it at its own pace, which is the backpressure that bounds memory.
 pub trait Source: Send {
-    /// The next file, `None` when done. An error skips one item, it does not end the source.
+    /// The next file, `None` when done. An error skips one item, it does not end the source;
+    /// wrap it with [`Error::at`](crate::Error::at) when the item's locator is known.
     fn next_item(&mut self) -> Option<Result<SourceItem>>;
 }
 

@@ -66,6 +66,11 @@ fn record(i: u32) -> FileRecord {
         } else {
             Status::Ok
         },
+        warnings: if i.is_multiple_of(4) {
+            vec!["test.gen@1: odd font".into()]
+        } else {
+            Vec::new()
+        },
     }
 }
 
