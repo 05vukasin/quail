@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::io::{self, Cursor, Read};
 
-use quail_core::{Error, Format, Limits, Result};
+use quail_core::{Emitter, Error, Format, Limits, Result};
 use zip::ZipArchive;
 
 /// Most zip entries accepted. Real DOCX files have tens to a few hundred.
@@ -31,17 +31,29 @@ pub(crate) struct Package<'a> {
     budget: u64,
     used: u64,
     exhausted: bool,
+    /// Entries whose name repeats an earlier one (exactly or by case).
+    pub duplicates: usize,
     /// Problems found while reading the package.
     pub warnings: Vec<String>,
 }
 
 impl<'a> Package<'a> {
     /// Opens the archive and vets its directory.
-    pub fn open(bytes: &'a [u8], limits: &Limits) -> Result<Self> {
+    pub fn open(bytes: &'a [u8], limits: &Limits, deadline: &Emitter) -> Result<Self> {
         if bytes.starts_with(&CFB_MAGIC) {
             // Encrypted OOXML is an OLE container holding the encrypted package.
             return Err(Error::Encrypted);
         }
+        // Refuse a huge directory before the zip crate parses (and allocates) all of it.
+        let raw_count = match declared_entries(bytes) {
+            Some((count, cd_size)) => {
+                if count > MAX_ENTRIES as u64 || cd_size / 46 > MAX_ENTRIES as u64 {
+                    return Err(Error::LimitExceeded("zip entries"));
+                }
+                usize::try_from(count).unwrap_or(0)
+            }
+            None => 0,
+        };
         let zip = ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Malformed {
             format: Format::Docx,
             msg: format!("zip: {e}"),
@@ -54,9 +66,15 @@ impl<'a> Package<'a> {
         let mut names = Vec::with_capacity(zip.len());
         let mut warnings = Vec::new();
         let mut rejected = 0usize;
+        // The zip crate keys entries by name: of exactly repeated names it keeps the LAST
+        // entry. Only the count survives, from the directory's own entry count.
+        let exact_dupes = raw_count.saturating_sub(zip.len());
         let mut duplicates = 0usize;
         let mut declared: u128 = 0;
         for i in 0..zip.len() {
+            if i % 1024 == 1023 {
+                deadline.check_deadline()?;
+            }
             let Ok(entry) = meta.entry(i) else {
                 rejected += 1;
                 continue;
@@ -86,11 +104,18 @@ impl<'a> Package<'a> {
                 "{rejected} zip entries with unsafe or unreadable names ignored"
             ));
         }
-        if duplicates > 0 {
+        if exact_dupes > 0 {
             warnings.push(format!(
-                "{duplicates} duplicate zip entries ignored (first one kept)"
+                "{exact_dupes} zip entries repeat an earlier name exactly (the last one is read)"
             ));
         }
+        if duplicates > 0 {
+            warnings.push(format!(
+                "{duplicates} zip entries repeat an earlier name in another case (the first one \
+                 is read)"
+            ));
+        }
+        let duplicates = duplicates + exact_dupes;
         if declared > u128::from(limits.max_decompressed) {
             warnings.push(format!(
                 "zip declares {declared} uncompressed bytes, over the {} byte budget",
@@ -104,6 +129,7 @@ impl<'a> Package<'a> {
             budget: limits.max_decompressed,
             used: 0,
             exhausted: false,
+            duplicates,
             warnings,
         })
     }
@@ -196,6 +222,45 @@ impl Read for PartReader<'_, '_> {
         *self.used += got as u64;
         Ok(got)
     }
+}
+
+/// Entry count and central directory size declared by the end-of-central-directory record
+/// (and the ZIP64 record when present), read without parsing the directory.
+fn declared_entries(b: &[u8]) -> Option<(u64, u64)> {
+    let u16_at = |i: usize| {
+        b.get(i..i + 2)
+            .and_then(|x| <[u8; 2]>::try_from(x).ok())
+            .map(|x| u64::from(u16::from_le_bytes(x)))
+    };
+    let u32_at = |i: usize| {
+        b.get(i..i + 4)
+            .and_then(|x| <[u8; 4]>::try_from(x).ok())
+            .map(|x| u64::from(u32::from_le_bytes(x)))
+    };
+    let u64_at = |i: usize| {
+        b.get(i..i + 8)
+            .and_then(|x| <[u8; 8]>::try_from(x).ok())
+            .map(u64::from_le_bytes)
+    };
+    let lowest = b.len().saturating_sub(22 + 0xFFFF);
+    let mut i = b.len().checked_sub(22)?;
+    while b.get(i..i + 4)? != [0x50, 0x4b, 0x05, 0x06] {
+        if i <= lowest {
+            return None;
+        }
+        i -= 1;
+    }
+    let mut count = u16_at(i + 10)?;
+    let mut size = u32_at(i + 12)?;
+    if let Some(loc) = i.checked_sub(20)
+        && b.get(loc..loc + 4) == Some(&[0x50, 0x4b, 0x06, 0x07][..])
+        && let Some(off) = u64_at(loc + 8).and_then(|o| usize::try_from(o).ok())
+        && b.get(off..off + 4) == Some(&[0x50, 0x4b, 0x06, 0x06][..])
+    {
+        count = count.max(u64_at(off + 32)?);
+        size = size.max(u64_at(off + 40)?);
+    }
+    Some((count, size))
 }
 
 /// A part name is usable when it is relative, has no `..` or empty components, no

@@ -12,7 +12,7 @@ mod common;
 
 use common::*;
 use quail_core::{
-    Blob, BlockKind, Document, Emitter, Error, Extractor, Limits, Page, PageKind, Value, Zone,
+    Blob, BlockKind, Date, Document, Emitter, Error, Extractor, Limits, Page, PageKind, Value, Zone,
 };
 use quail_docx::DocxExtractor;
 
@@ -362,10 +362,21 @@ fn document_properties() {
     assert_eq!(t("docx.creator"), Some(Value::text("Writer One")));
     assert_eq!(t("docx.last_modified_by"), Some(Value::text("Writer Two")));
     assert_eq!(t("docx.revision"), Some(Value::Int(17)));
-    assert_eq!(t("docx.created"), Some(Value::text("2021-05-04T08:00:00Z")));
+    assert_eq!(
+        t("docx.created"),
+        Some(Value::Date(Date {
+            y: 2021,
+            m: 5,
+            d: 4
+        }))
+    );
     assert_eq!(
         t("docx.modified"),
-        Some(Value::text("2022-01-02T03:04:05Z"))
+        Some(Value::Date(Date {
+            y: 2022,
+            m: 1,
+            d: 2
+        }))
     );
     assert_eq!(t("docx.keywords"), Some(Value::text("k1, k2")));
     assert_eq!(t("docx.category"), Some(Value::text("Legal")));
@@ -649,7 +660,8 @@ fn page_and_text_limits() {
     };
     let (doc, out) = extract_with(Docx::new(&body).build(), &limits);
     assert_eq!(doc.pages.len(), 2);
-    assert_eq!(fact(&out, "docx.sections"), Some(&Value::Int(3)));
+    // The body stops at the section limit.
+    assert_eq!(fact(&out, "docx.sections"), Some(&Value::Int(2)));
     assert!(warnings(out).iter().any(|w| w.contains("max_pages")));
 
     let limits = Limits {

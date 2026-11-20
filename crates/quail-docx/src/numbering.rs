@@ -19,6 +19,8 @@ pub(crate) const LEVELS: usize = 9;
 const BULLET: &str = "-";
 /// Longest level text kept, in characters.
 const MAX_LEVEL_TEXT: usize = 64;
+/// Longest label kept, in characters.
+const MAX_LABEL: usize = 32;
 /// Most lists kept.
 const MAX_LISTS: usize = 20_000;
 
@@ -155,13 +157,13 @@ impl Numbering {
                         }
                         "startOverride" => {
                             if let Some((_, _, s)) = cur_ovr.as_mut() {
-                                *s = val_int(e);
+                                *s = val_int(e).map(clamp_start);
                             }
                         }
                         "lvl" if start => {
                             cur_lvl = ilvl_attr(e).map(|i| (i, RawLevel::default()));
                         }
-                        "start" => set(&mut cur_lvl, |l| l.start = val_int(e)),
+                        "start" => set(&mut cur_lvl, |l| l.start = val_int(e).map(clamp_start)),
                         "numFmt" => set(&mut cur_lvl, |l| {
                             l.fmt = val(e).map(std::borrow::Cow::into_owned);
                         }),
@@ -203,7 +205,12 @@ impl Numbering {
                     }
                     "lvlOverride" => {
                         if let (Some(o), Some((_, n))) = (cur_ovr.take(), cur_num.as_mut()) {
-                            n.overrides.push(o);
+                            // Word keeps one override per level: the last one counts.
+                            if let Some(slot) = n.overrides.iter_mut().find(|x| x.0 == o.0) {
+                                *slot = o;
+                            } else {
+                                n.overrides.push(o);
+                            }
                         }
                     }
                     "abstractNum" => {
@@ -298,6 +305,11 @@ impl Numbering {
             ilvl: ilvl.min(LEVELS - 1),
         })
     }
+}
+
+/// Word accepts start values 0..=32767; anything else is clamped into that range.
+fn clamp_start(v: i64) -> i64 {
+    v.clamp(0, 32_767)
 }
 
 fn set(cur: &mut Option<(usize, RawLevel)>, f: impl FnOnce(&mut RawLevel)) {
@@ -410,7 +422,8 @@ fn label(inst: &Instance, ilvl: usize, values: &[i64]) -> String {
             out.push(c);
         }
     }
-    out.trim().to_owned()
+    // A label is a few characters; a hostile level text is cut.
+    out.trim().chars().take(MAX_LABEL).collect()
 }
 
 fn formatted(v: i64, fmt: &str) -> String {

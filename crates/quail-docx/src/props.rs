@@ -3,7 +3,7 @@
 
 use std::io::Read;
 
-use quail_core::{Emitter, FactKey, Value};
+use quail_core::{Date, Emitter, FactKey, Value};
 
 use crate::keys;
 use crate::package::Package;
@@ -89,9 +89,21 @@ pub(crate) fn core(
             "subject" => keys::SUBJECT,
             "creator" => keys::CREATOR,
             "lastModifiedBy" => keys::LAST_MODIFIED_BY,
-            "created" => keys::CREATED,
-            "modified" => keys::MODIFIED,
-            "lastPrinted" => keys::LAST_PRINTED,
+            "created" | "modified" | "lastPrinted" => {
+                let key = match n.as_str() {
+                    "created" => keys::CREATED,
+                    "modified" => keys::MODIFIED,
+                    _ => keys::LAST_PRINTED,
+                };
+                match parse_date(&v) {
+                    Some(d) => facts.push((key, Value::Date(d))),
+                    None if !v.trim().is_empty() => {
+                        warn.push(format!("{part}: {n} is not a W3CDTF date: {:?}", clean(&v)));
+                    }
+                    None => {}
+                }
+                continue;
+            }
             "keywords" => keys::KEYWORDS,
             "category" => keys::CATEGORY,
             "description" => keys::DESCRIPTION,
@@ -147,9 +159,17 @@ pub(crate) fn custom(
     let mut props: Vec<(String, String)> = Vec::new();
     let mut cur: Option<(String, String)> = None;
     let mut count = 0i64;
+    let mut depth = 0usize;
     let r = walk(reader, out, |ev| {
+        if let Ev::Start(_) = ev {
+            depth += 1;
+        }
         match ev {
-            Ev::Start(e) | Ev::Empty(e) if name(e) == "property" => {
+            // Only the root's own children are properties.
+            Ev::Start(e) | Ev::Empty(e)
+                if name(e) == "property"
+                    && depth == 1 + usize::from(matches!(ev, Ev::Start(_))) =>
+            {
                 count += 1;
                 let n = clean(&attr_exact(e, "name").unwrap_or_default());
                 if matches!(ev, Ev::Start(_)) {
@@ -165,12 +185,15 @@ pub(crate) fn custom(
                     v.push_str(t);
                 }
             }
-            Ev::End("property") => {
-                if let Some(p) = cur.take()
+            Ev::End(n) => {
+                if n == "property"
+                    && depth == 2
+                    && let Some(p) = cur.take()
                     && props.len() < MAX_LIST
                 {
                     props.push(p);
                 }
+                depth = depth.saturating_sub(1);
             }
             _ => {}
         }
@@ -197,6 +220,32 @@ pub(crate) fn custom(
     }
 }
 
+/// Most rsids kept (real documents have tens to a few thousand).
+const MAX_RSIDS: usize = 100_000;
+
+/// The calendar date of a W3CDTF value (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, optionally
+/// followed by `Thh:mm...`). Missing month or day count as 1.
+pub(crate) fn parse_date(v: &str) -> Option<Date> {
+    let v = v.trim();
+    let date = v.split(['T', ' ']).next()?;
+    let mut it = date.split('-');
+    let y: i16 = it.next().filter(|y| y.len() == 4)?.parse().ok()?;
+    let m: u8 = match it.next() {
+        Some(m) if m.len() == 2 => m.parse().ok()?,
+        Some(_) => return None,
+        None => 1,
+    };
+    let d: u8 = match it.next() {
+        Some(d) if d.len() == 2 => d.parse().ok()?,
+        Some(_) => return None,
+        None => 1,
+    };
+    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some(Date { y, m, d })
+}
+
 /// An rsid as Word writes it: exactly eight hex digits.
 pub(crate) fn parse_rsid(v: &str) -> Option<u64> {
     let v = v.trim();
@@ -219,6 +268,7 @@ pub(crate) fn settings(
     let mut rsids: Vec<Value> = Vec::new();
     let mut root: Option<u64> = None;
     let mut bad = 0usize;
+    let mut dropped = 0usize;
     let mut in_rsids = false;
     let mut template_rid: Option<String> = None;
     let mut track = false;
@@ -233,8 +283,10 @@ pub(crate) fn settings(
                 },
                 "rsid" if in_rsids => match val(e).as_deref().and_then(parse_rsid) {
                     Some(v) => {
-                        if rsids.len() < 1_000_000 {
+                        if rsids.len() < MAX_RSIDS {
                             rsids.push(Value::U64(v));
+                        } else {
+                            dropped += 1;
                         }
                     }
                     None => bad += 1,
@@ -259,6 +311,11 @@ pub(crate) fn settings(
     });
     if let Err(stop) = r {
         warn.push(stop.describe(part));
+    }
+    if dropped > 0 {
+        warn.push(format!(
+            "{part}: more than {MAX_RSIDS} rsids, {dropped} dropped"
+        ));
     }
     if bad > 0 {
         warn.push(format!(
@@ -449,6 +506,24 @@ mod tests {
         assert_eq!(parse_rsid("00A1B2C3D"), None);
         assert_eq!(parse_rsid("00A1B2CG"), None);
         assert!(is_custom_item("customXml/item12.xml"));
+        assert_eq!(
+            parse_date("2021-05-04T08:00:00Z"),
+            Some(Date {
+                y: 2021,
+                m: 5,
+                d: 4
+            })
+        );
+        assert_eq!(
+            parse_date("2021"),
+            Some(Date {
+                y: 2021,
+                m: 1,
+                d: 1
+            })
+        );
+        assert_eq!(parse_date("2021-13-01"), None);
+        assert_eq!(parse_date("yesterday"), None);
         assert!(!is_custom_item("customXml/itemProps1.xml"));
     }
 }

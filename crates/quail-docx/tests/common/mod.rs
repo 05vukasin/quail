@@ -1,6 +1,10 @@
 //! Builds DOCX files in code: a zip with hand-written minimal XML parts.
 
-#![allow(dead_code, clippy::format_push_string)]
+#![allow(
+    dead_code,
+    clippy::format_push_string,
+    clippy::cast_possible_truncation
+)]
 
 use std::io::{Cursor, Write};
 
@@ -197,4 +201,84 @@ pub fn texts(out: &Emitter, key: &str) -> Vec<String> {
 /// Warnings of a finished emitter.
 pub fn warnings(out: Emitter) -> Vec<String> {
     out.into_parts().2
+}
+
+/// `zip` with the entry `name` replaced by `data` (all entries stored).
+pub fn replace_part(zip: &[u8], name: &str, data: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let mut a = zip::ZipArchive::new(Cursor::new(zip)).unwrap();
+    let mut entries = Vec::new();
+    for i in 0..a.len() {
+        let mut f = a.by_index(i).unwrap();
+        let n = f.name().unwrap().into_owned();
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).unwrap();
+        entries.push((n, buf));
+    }
+    let list: Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(n, b)| (n.as_str(), if n == name { data } else { b.as_slice() }))
+        .collect();
+    raw_zip(&list)
+}
+
+/// A stored zip written byte by byte, so it can hold what zip writers refuse (repeated
+/// names).
+pub fn raw_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for (name, data) in entries {
+        let offset = out.len() as u32;
+        let crc = crc32(data);
+        let header = |sig: u32, central: bool| {
+            let mut h = Vec::new();
+            h.extend_from_slice(&sig.to_le_bytes());
+            if central {
+                h.extend_from_slice(&20u16.to_le_bytes());
+            }
+            h.extend_from_slice(&20u16.to_le_bytes());
+            h.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+            h.extend_from_slice(&crc.to_le_bytes());
+            h.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            h.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            h.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            h.extend_from_slice(&0u16.to_le_bytes());
+            if central {
+                h.extend_from_slice(&[0; 6]);
+                h.extend_from_slice(&0u32.to_le_bytes());
+                h.extend_from_slice(&offset.to_le_bytes());
+            }
+            h.extend_from_slice(name.as_bytes());
+            h
+        };
+        out.extend(header(0x0403_4b50, false));
+        out.extend_from_slice(data);
+        central.extend(header(0x0201_4b50, true));
+    }
+    let cd_at = out.len() as u32;
+    let cd_len = central.len() as u32;
+    out.extend(central);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&cd_len.to_le_bytes());
+    out.extend_from_slice(&cd_at.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
 }

@@ -6,7 +6,9 @@
 //! local names.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::io::{BufReader, Read};
+use std::rc::Rc;
 
 use quail_core::Emitter;
 use quick_xml::events::{BytesStart, Event};
@@ -52,6 +54,8 @@ pub(crate) enum Stop {
     Budget,
     /// The file's time budget ran out.
     Timeout,
+    /// One XML event (a text node, a tag) was larger than this many bytes.
+    Oversize(u64),
 }
 
 impl Stop {
@@ -62,17 +66,70 @@ impl Stop {
             Self::Read(m) => format!("{part}: read error, rest of part skipped: {m}"),
             Self::Budget => format!("{part}: decompression budget exceeded, rest skipped"),
             Self::Timeout => format!("{part}: deadline reached, rest skipped"),
+            Self::Oversize(n) => {
+                format!("{part}: an XML event is larger than {n} bytes, rest of part skipped")
+            }
         }
     }
 }
 
-/// Streams the events of one part to `f`. Returns `Ok` at end of input or when `f` stops.
+/// Largest single XML event (one text node, one tag) read by default.
+pub(crate) const MAX_EVENT: u64 = 16 << 20;
+const EVENT_MSG: &str = "single XML event too large";
+
+/// What a finished walk noticed besides the events.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct WalkInfo {
+    /// Entity references that are neither predefined nor character references (they come
+    /// from a DOCTYPE, which is not expanded): dropped.
+    pub unknown_entities: u64,
+    /// The part has a DOCTYPE (Word never writes one).
+    pub doctype: bool,
+}
+
+/// Counts the bytes pulled from the part since the last event: one event (a text node, a
+/// tag) may not exceed `max` bytes, so a 300 MB text node cannot be buffered whole.
+struct Guard<R> {
+    inner: R,
+    since: Rc<Cell<u64>>,
+    max: u64,
+}
+
+impl<R: Read> Read for Guard<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.since.get() > self.max {
+            return Err(std::io::Error::other(EVENT_MSG));
+        }
+        let n = self.inner.read(buf)?;
+        self.since.set(self.since.get() + n as u64);
+        Ok(n)
+    }
+}
+
+/// Streams the events of one part to `f`, with the default event size cap.
 pub(crate) fn walk(
     part: impl Read,
     deadline: &Emitter,
+    f: impl FnMut(Ev<'_>) -> Flow,
+) -> Result<WalkInfo, Stop> {
+    walk_with(part, deadline, MAX_EVENT, f)
+}
+
+/// Streams the events of one part to `f`. Returns at end of input or when `f` stops.
+/// Skipped subtrees are read event by event, so the deadline still applies inside them.
+pub(crate) fn walk_with(
+    part: impl Read,
+    deadline: &Emitter,
+    max_event: u64,
     mut f: impl FnMut(Ev<'_>) -> Flow,
-) -> Result<(), Stop> {
-    let mut reader = Reader::from_reader(BufReader::with_capacity(32 << 10, part));
+) -> Result<WalkInfo, Stop> {
+    let since = Rc::new(Cell::new(0u64));
+    let guard = Guard {
+        inner: part,
+        since: Rc::clone(&since),
+        max: max_event,
+    };
+    let mut reader = Reader::from_reader(BufReader::with_capacity(32 << 10, guard));
     {
         let c = reader.config_mut();
         c.check_end_names = false;
@@ -81,29 +138,35 @@ pub(crate) fn walk(
         c.expand_empty_elements = false;
         c.trim_text(false);
     }
+    let mut info = WalkInfo::default();
     let mut buf = Vec::with_capacity(4096);
-    let mut skip_buf = Vec::new();
+    let mut skip_depth: usize = 0;
     let mut n: u32 = 0;
     loop {
         n = n.wrapping_add(1);
         if n.is_multiple_of(DEADLINE_EVERY) && deadline.check_deadline().is_err() {
             return Err(Stop::Timeout);
         }
+        buf.clear();
         let ev = match reader.read_event_into(&mut buf) {
             Ok(ev) => ev,
-            Err(e) => return Err(classify(&e)),
+            Err(e) => return Err(classify(&e, max_event)),
         };
+        since.set(0);
+        if skip_depth > 0 {
+            match ev {
+                Event::Start(_) => skip_depth += 1,
+                Event::End(_) => skip_depth -= 1,
+                Event::Eof => return Ok(info),
+                _ => {}
+            }
+            continue;
+        }
         let flow = match &ev {
             Event::Start(e) => {
                 let flow = f(Ev::Start(e));
                 if flow == Flow::Skip {
-                    let name = e.name().as_ref().to_owned();
-                    skip_buf.clear();
-                    if let Err(e) =
-                        reader.read_to_end_into(quick_xml::name::QName(&name), &mut skip_buf)
-                    {
-                        return Err(classify(&e));
-                    }
+                    skip_depth = 1;
                     Flow::Go
                 } else {
                     flow
@@ -118,26 +181,34 @@ pub(crate) fn walk(
                     let mut tmp = [0u8; 4];
                     f(Ev::Text(c.encode_utf8(&mut tmp)))
                 }
-                _ => match quick_xml::escape::resolve_predefined_entity(r) {
-                    Some(s) => f(Ev::Text(s)),
-                    None => Flow::Go,
-                },
+                _ => {
+                    if let Some(s) = quick_xml::escape::resolve_predefined_entity(r) {
+                        f(Ev::Text(s))
+                    } else {
+                        info.unknown_entities += 1;
+                        Flow::Go
+                    }
+                }
             },
-            Event::Eof => return Ok(()),
+            Event::DocType(_) => {
+                info.doctype = true;
+                Flow::Go
+            }
+            Event::Eof => return Ok(info),
             _ => Flow::Go,
         };
         if flow == Flow::Stop {
-            return Ok(());
+            return Ok(info);
         }
-        buf.clear();
     }
 }
 
-fn classify(e: &quick_xml::Error) -> Stop {
+fn classify(e: &quick_xml::Error, max_event: u64) -> Stop {
     let mut msg = e.to_string();
     msg.truncate(200);
     match e {
         quick_xml::Error::Io(io) if io.to_string().contains(BUDGET_MSG) => Stop::Budget,
+        quick_xml::Error::Io(io) if io.to_string().contains(EVENT_MSG) => Stop::Oversize(max_event),
         quick_xml::Error::Io(_) => Stop::Read(msg),
         _ => Stop::Malformed(msg),
     }

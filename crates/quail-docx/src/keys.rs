@@ -13,11 +13,12 @@ pub const CREATOR: FactKey = FactKey::new("docx.creator");
 pub const LAST_MODIFIED_BY: FactKey = FactKey::new("docx.last_modified_by");
 /// `cp:revision`, the save counter. Int when numeric, else Text.
 pub const REVISION: FactKey = FactKey::new("docx.revision");
-/// `dcterms:created`, as written (W3CDTF, e.g. `2024-03-01T09:30:00Z`). Text.
+/// `dcterms:created`: the calendar date of the W3CDTF value (`2024-03-01T09:30:00Z` gives
+/// 2024-03-01). Date; an unparsable value is reported in a warning instead.
 pub const CREATED: FactKey = FactKey::new("docx.created");
-/// `dcterms:modified`, as written. Text.
+/// `dcterms:modified`, like [`CREATED`]. Date.
 pub const MODIFIED: FactKey = FactKey::new("docx.modified");
-/// `cp:lastPrinted`, as written. Text.
+/// `cp:lastPrinted`, like [`CREATED`]. Date.
 pub const LAST_PRINTED: FactKey = FactKey::new("docx.last_printed");
 /// `cp:keywords`. Text.
 pub const KEYWORDS: FactKey = FactKey::new("docx.keywords");
@@ -80,6 +81,10 @@ pub const TRACKED_DELETIONS: FactKey = FactKey::new("docx.tracked_deletions");
 pub const TRACKED_FORMAT_CHANGES: FactKey = FactKey::new("docx.tracked_format_changes");
 /// Distinct authors of tracked changes, first spelling kept. List of Text.
 pub const REVISION_AUTHORS: FactKey = FactKey::new("docx.revision_authors");
+/// Characters of tracked deletions (left out of the text). Int.
+pub const DELETED_TEXT_CHARS: FactKey = FactKey::new("docx.deleted_text_chars");
+/// Characters of hidden runs (`w:vanish` set on the run; left out of the text). Int.
+pub const HIDDEN_TEXT_CHARS: FactKey = FactKey::new("docx.hidden_text_chars");
 /// Number of comments. Int.
 pub const COMMENTS: FactKey = FactKey::new("docx.comments");
 /// Distinct comment authors, first spelling kept. List of Text.
@@ -97,6 +102,9 @@ pub const IMAGES: FactKey = FactKey::new("docx.images");
 /// Distinct lowercase host names of external hyperlinks (and `mailto:` domains), in first
 /// seen order. List of Text.
 pub const HYPERLINK_DOMAINS: FactKey = FactKey::new("docx.hyperlink_domains");
+/// Zip entries whose name repeats an earlier entry's, exactly or in another case. Of exact
+/// repeats the last entry is read, of case variants the first. Int.
+pub const DUPLICATE_ENTRIES: FactKey = FactKey::new("docx.duplicate_entries");
 /// Number of zip entries. Int.
 pub const ZIP_ENTRIES: FactKey = FactKey::new("docx.zip_entries");
 

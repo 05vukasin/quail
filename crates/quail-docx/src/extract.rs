@@ -1,6 +1,7 @@
 //! Wiring: which parts are read in which order, and how sections become pages.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use quail_core::{
     Block, BlockKind, Document, Emitter, Error, Format, Limits, Page, PageKind, Result, Span,
@@ -34,9 +35,10 @@ pub(crate) fn run(
     warn: &mut Vec<String>,
     facts: &mut Facts,
 ) -> Result<Document> {
-    let mut pkg = Package::open(bytes, limits)?;
+    let mut pkg = Package::open(bytes, limits, out)?;
     warn.append(&mut pkg.warnings);
     facts.push((keys::ZIP_ENTRIES, count(pkg.entry_count())));
+    facts.push((keys::DUPLICATE_ENTRIES, count(pkg.duplicates)));
 
     let pkg_rels = Rels::read(&mut pkg, "", out, warn);
     let main = pkg_rels
@@ -104,10 +106,10 @@ pub(crate) fn run(
         props::settings(&mut pkg, &p, out, warn, facts);
     }
 
-    let mut shared = Shared {
-        text_left: limits.max_text_bytes,
-        ..Shared::default()
-    };
+    let mut shared = Shared::new(
+        limits.max_text_bytes,
+        usize::try_from(limits.max_pages).unwrap_or(usize::MAX),
+    );
     let mut domains = Distinct::default();
     let mut timed_out = false;
     let add_domains = |rels: &Rels, domains: &mut Distinct| {
@@ -287,6 +289,8 @@ pub(crate) fn run(
         keys::TRACKED_FORMAT_CHANGES,
         Value::Int(stats.format_changes),
     ));
+    facts.push((keys::DELETED_TEXT_CHARS, Value::Int(stats.deleted_chars)));
+    facts.push((keys::HIDDEN_TEXT_CHARS, Value::Int(stats.hidden_chars)));
     if !stats.revision_authors.is_empty() {
         facts.push((keys::REVISION_AUTHORS, text_list(stats.revision_authors)));
     }
@@ -300,6 +304,18 @@ pub(crate) fn run(
         warn.push(format!(
             "text limit of {} bytes reached, rest of the text dropped",
             limits.max_text_bytes
+        ));
+    }
+    if shared.sections_stopped {
+        warn.push(format!(
+            "body reading stopped after max_pages ({}) sections",
+            limits.max_pages
+        ));
+    }
+    if shared.items_capped {
+        warn.push(format!(
+            "more than {} blocks and references: the rest dropped",
+            crate::body::MAX_ITEMS
         ));
     }
     if timed_out {
@@ -328,15 +344,22 @@ struct Assembler<'a, 'p> {
     pages: Vec<Page>,
     sections: usize,
     /// Parsed header/footer parts: part name → blocks.
-    cache: HashMap<String, Vec<(String, BlockKind)>>,
+    cache: HashMap<String, Running>,
     /// Distinct header (0) and footer (1) parts referenced.
     seen_parts: [HashSet<String>; 2],
     /// Header/footer texts already emitted.
-    seen_texts: HashSet<String>,
+    seen_texts: HashSet<u64>,
     seen_notes: HashSet<(bool, String)>,
     seen_comments: HashSet<String>,
     domains: &'a mut Distinct,
     timed_out: bool,
+}
+
+/// A parsed header or footer part.
+struct Running {
+    blocks: Vec<(String, BlockKind)>,
+    /// Already on a page (or its text is).
+    emitted: bool,
 }
 
 #[derive(Default)]
@@ -370,6 +393,9 @@ impl Assembler<'_, '_> {
         self.sections += 1;
         if self.pages.len() >= usize::try_from(self.max_pages).unwrap_or(usize::MAX) {
             return;
+        }
+        if !self.timed_out && self.out.check_deadline().is_err() {
+            self.timed_out = true;
         }
         let mut page = PageText::default();
         self.running(&mut page, &refs.headers, Mode::Header);
@@ -426,26 +452,31 @@ impl Assembler<'_, '_> {
             let Some(part) = self.doc_rels.part_by_id(rid) else {
                 continue;
             };
-            self.seen_parts[slot].insert(part.clone());
             if !self.cache.contains_key(&part) {
+                self.seen_parts[slot].insert(part.clone());
                 let blocks = self.parse_running(&part, mode);
-                self.cache.insert(part.clone(), blocks);
+                // Identical text in another part counts as already emitted.
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                for (t, _) in &blocks {
+                    t.hash(&mut h);
+                }
+                let fresh = !blocks.is_empty() && self.seen_texts.insert(h.finish());
+                self.cache.insert(
+                    part.clone(),
+                    Running {
+                        blocks,
+                        emitted: !fresh,
+                    },
+                );
             }
-            let Some(blocks) = self.cache.get(&part) else {
+            let Some(r) = self.cache.get_mut(&part) else {
                 continue;
             };
-            if blocks.is_empty() {
+            if r.emitted {
                 continue;
             }
-            let mut key = String::new();
-            for (t, _) in blocks {
-                key.push_str(t);
-                key.push('\n');
-            }
-            if !self.seen_texts.insert(key) {
-                continue;
-            }
-            for (t, kind) in blocks {
+            r.emitted = true;
+            for (t, kind) in &r.blocks {
                 page.push(t, *kind, zone);
             }
         }

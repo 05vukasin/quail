@@ -5,9 +5,13 @@
 //! finished paragraph (or table cell) becomes one [`Item`] in reading order.
 //!
 //! Text follows Word's *accepted changes* view: tracked insertions are part of the text,
-//! tracked deletions are not; each deletion's text is kept as an [`Item::Deleted`] after its
-//! paragraph. Field codes are skipped and field results kept. The legacy copy of a drawing
-//! (`mc:Fallback`) is skipped so text boxes are not read twice.
+//! tracked deletions are not; the text of each run of adjacent deletions is kept as an
+//! [`Item::Deleted`] after its paragraph. Field codes are skipped and field results kept.
+//! Hidden runs (`w:vanish` in the run's own properties) are left out and counted. The legacy
+//! copy of a drawing (`mc:Fallback`) is skipped so text boxes are not read twice.
+//!
+//! Memory is bounded by the text budget (every byte that reaches page text, separators and
+//! numbering labels included, is charged to it) and by [`MAX_ITEMS`] for everything else.
 
 use quail_core::{BlockKind, Emitter, Zone};
 
@@ -15,7 +19,7 @@ use crate::numbering::{Counters, Numbering};
 use crate::package::Package;
 use crate::styles::Styles;
 use crate::util::Distinct;
-use crate::xml::{Ev, Flow, Stop, attr, name, val, val_int, walk};
+use crate::xml::{Ev, Flow, MAX_EVENT, Stop, attr, name, on, val, val_int, walk_with};
 
 /// Deepest field nesting tracked; deeper `begin`s are counted but not stacked.
 const MAX_FIELD_DEPTH: usize = 64;
@@ -25,6 +29,10 @@ const MAX_PARA_DEPTH: usize = 64;
 const MAX_TABLE_DEPTH: usize = 64;
 /// Most hyperlink targets collected from field codes.
 const MAX_URLS: usize = 10_000;
+/// Most items (blocks, references, section ends, notes) kept per file.
+pub(crate) const MAX_ITEMS: u64 = 250_000;
+/// Most header (and footer) references kept per section: Word writes at most three.
+const MAX_SECT_REFS: usize = 8;
 
 /// Which kind of part is parsed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +110,10 @@ pub(crate) struct Stats {
     pub tables: i64,
     /// Body tables inside a table cell.
     pub nested_tables: i64,
+    /// Characters of tracked deletions.
+    pub deleted_chars: i64,
+    /// Characters of hidden (`w:vanish`) runs.
+    pub hidden_chars: i64,
     /// Authors of tracked changes.
     pub revision_authors: Distinct,
     /// Targets of `HYPERLINK` fields.
@@ -115,8 +127,49 @@ pub(crate) struct Shared {
     pub text_left: u64,
     /// The text limit was hit.
     pub truncated: bool,
+    /// Items still allowed ([`MAX_ITEMS`]).
+    pub items_left: u64,
+    /// The item cap was hit.
+    pub items_capped: bool,
+    /// Sections after which the body stops ([`quail_core::Limits::max_pages`]).
+    pub max_sections: usize,
+    /// The body stopped at `max_sections`.
+    pub sections_stopped: bool,
     /// Counters.
     pub stats: Stats,
+}
+
+impl Shared {
+    /// New state for a file.
+    pub fn new(text_bytes: u64, max_sections: usize) -> Self {
+        Self {
+            text_left: text_bytes,
+            items_left: MAX_ITEMS,
+            max_sections,
+            ..Self::default()
+        }
+    }
+
+    /// Takes `n` bytes from the text budget; `false` (and truncated) when they do not fit.
+    fn charge(&mut self, n: usize) -> bool {
+        let n = n as u64;
+        if self.truncated || n > self.text_left {
+            self.truncated = true;
+            return false;
+        }
+        self.text_left -= n;
+        true
+    }
+
+    /// Takes one item from the item budget.
+    fn take_item(&mut self) -> bool {
+        if self.items_left == 0 {
+            self.items_capped = true;
+            return false;
+        }
+        self.items_left -= 1;
+        true
+    }
 }
 
 /// What parsing one part gave.
@@ -144,6 +197,8 @@ pub(crate) fn parse_part(
     let Some(reader) = pkg.open_part(part) else {
         return (Parsed::default(), None);
     };
+    // One text node may not be much larger than what the text budget still takes.
+    let max_event = shared.text_left.min(MAX_EVENT) + (1 << 20);
     let mut p = Parser {
         mode,
         styles,
@@ -152,26 +207,60 @@ pub(crate) fn parse_part(
         shared,
         parsed: Parsed::default(),
         paras: Vec::new(),
+        para_overflow: 0,
         tables: Vec::new(),
+        table_overflow: 0,
         cell: None,
         tables_on_page: 0,
+        sections: 0,
+        stop: false,
         fields: Vec::new(),
         hidden: 0,
         overflow_fields: 0,
+        abandoned_fields: 0,
         target: Target::None,
         del_depth: 0,
         del_buf: String::new(),
+        del_pending: false,
         ppr_depth: 0,
+        run_rpr: false,
+        run_hidden: false,
         sect: None,
         sect_in_para: false,
         container: None,
     };
-    let r = walk(reader, out, |ev| p.event(ev));
+    let r = walk_with(reader, out, max_event, |ev| p.event(ev));
     p.finish();
-    let stop = r.err();
-    if let Some(s) = &stop {
-        warn.push(s.describe(part));
+    if p.abandoned_fields > 0 {
+        warn.push(format!(
+            "{part}: {} fields without a result or end abandoned at their paragraph's end",
+            p.abandoned_fields
+        ));
     }
+    if !p.fields.is_empty() {
+        warn.push(format!(
+            "{part}: {} fields still open at the end of the part",
+            p.fields.len()
+        ));
+    }
+    let stop = match r {
+        Ok(info) => {
+            if info.doctype {
+                warn.push(format!("{part}: has a DOCTYPE (not expanded)"));
+            }
+            if info.unknown_entities > 0 {
+                warn.push(format!(
+                    "{part}: {} references to undeclared or DOCTYPE entities dropped",
+                    info.unknown_entities
+                ));
+            }
+            None
+        }
+        Err(s) => {
+            warn.push(s.describe(part));
+            Some(s)
+        }
+    };
     (p.parsed, stop)
 }
 
@@ -226,6 +315,7 @@ enum Target {
     Instr,
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent parser flags, not a mode
 struct Parser<'s> {
     mode: Mode,
     styles: &'s Styles,
@@ -234,19 +324,34 @@ struct Parser<'s> {
     shared: &'s mut Shared,
     parsed: Parsed,
     paras: Vec<Para>,
+    /// `w:p` starts beyond [`MAX_PARA_DEPTH`] whose ends are still to come.
+    para_overflow: usize,
     tables: Vec<Table>,
+    /// `w:tbl` starts beyond [`MAX_TABLE_DEPTH`] whose ends are still to come.
+    table_overflow: usize,
     /// The open cell of the outermost table; nested tables write into it.
     cell: Option<Cell>,
     tables_on_page: u16,
+    sections: usize,
+    /// Stop reading the part (section limit reached).
+    stop: bool,
     fields: Vec<Field>,
     /// Open fields still in their instruction part.
     hidden: usize,
     /// `begin`s beyond [`MAX_FIELD_DEPTH`] not yet ended.
     overflow_fields: usize,
+    /// Fields dropped because their paragraph ended before their result.
+    abandoned_fields: usize,
     target: Target,
     del_depth: u32,
     del_buf: String,
+    /// A deletion ended; the next adjacent one joins it.
+    del_pending: bool,
     ppr_depth: u32,
+    /// Inside a run's own `w:rPr`.
+    run_rpr: bool,
+    /// The current run is hidden (`w:vanish`).
+    run_hidden: bool,
     sect: Option<SectRefs>,
     sect_in_para: bool,
     container: Option<Container>,
@@ -255,6 +360,9 @@ struct Parser<'s> {
 impl Parser<'_> {
     #[allow(clippy::too_many_lines)]
     fn event(&mut self, ev: Ev<'_>) -> Flow {
+        if self.stop {
+            return Flow::Stop;
+        }
         match ev {
             Ev::Text(t) => {
                 match self.target {
@@ -280,8 +388,12 @@ impl Parser<'_> {
                     "p" => {
                         if self.paras.len() < MAX_PARA_DEPTH {
                             self.paras.push(Para::default());
+                        } else {
+                            self.para_overflow += 1;
                         }
                     }
+                    "r" => self.run_hidden = false,
+                    "rPr" if self.ppr_depth == 0 => self.run_rpr = true,
                     "t" => self.target = Target::Text,
                     "delText" => self.target = Target::Deleted,
                     "instrText" => self.target = Target::Instr,
@@ -326,6 +438,9 @@ impl Parser<'_> {
                     "tab" | "ptab" if self.ppr_depth == 0 => self.push_run("\t"),
                     "br" | "cr" => self.push_run("\n"),
                     "noBreakHyphen" => self.push_run("-"),
+                    "vanish" if self.run_rpr && self.ppr_depth == 0 => {
+                        self.run_hidden = on(e);
+                    }
                     "sym" => {
                         if let Some(c) = attr(e, "char")
                             .and_then(|c| u32::from_str_radix(c.trim(), 16).ok())
@@ -350,12 +465,13 @@ impl Parser<'_> {
                     }
                     "commentReference" if self.mode != Mode::Notes => {
                         if let Some(id) = attr(e, "id") {
+                            self.flush_deleted();
                             self.annot(Annot::Comment(id.into_owned()));
                         }
                     }
                     "footnoteReference" | "endnoteReference" if self.mode != Mode::Notes => {
                         if let Some(id) = attr(e, "id") {
-                            self.parsed.items.push(Item::NoteRef {
+                            self.push_item(Item::NoteRef {
                                 endnote: n == "endnoteReference",
                                 id: id.into_owned(),
                             });
@@ -383,30 +499,43 @@ impl Parser<'_> {
             }
             Ev::End(n) => {
                 match n {
-                    "p" => self.end_para(),
+                    "p" => {
+                        if self.para_overflow > 0 {
+                            self.para_overflow -= 1;
+                        } else {
+                            self.end_para();
+                        }
+                    }
+                    "r" => self.run_hidden = false,
+                    "rPr" => self.run_rpr = false,
                     "t" | "delText" | "instrText" => self.target = Target::None,
                     "pPr" => self.ppr_depth = self.ppr_depth.saturating_sub(1),
-                    "tbl" => self.end_table(),
+                    "tbl" => {
+                        if self.table_overflow > 0 {
+                            self.table_overflow -= 1;
+                        } else {
+                            self.end_table();
+                        }
+                    }
                     "tc" => self.end_cell(),
                     "sectPr" => self.end_sect(),
                     "del" | "moveFrom" => {
                         if self.del_depth > 0 {
                             self.del_depth -= 1;
                             if self.del_depth == 0 {
-                                self.flush_deleted();
+                                // Kept open: an adjacent deletion joins this one.
+                                self.del_pending = true;
                             }
                         }
                     }
                     "footnote" | "endnote" | "comment" if self.mode == Mode::Notes => {
-                        if let Some(c) = self.container.take()
-                            && !c.text.is_empty()
-                        {
-                            self.parsed.containers.push(c);
+                        if let Some(c) = self.container.take() {
+                            self.push_container(c);
                         }
                     }
                     _ => {}
                 }
-                Flow::Go
+                if self.stop { Flow::Stop } else { Flow::Go }
             }
         }
     }
@@ -427,18 +556,15 @@ impl Parser<'_> {
             return;
         }
         if let Some(s) = self.sect.as_mut() {
-            match n {
-                "headerReference" => {
-                    if let Some(id) = attr(e, "id") {
-                        s.headers.push(id.into_owned());
-                    }
-                }
-                "footerReference" => {
-                    if let Some(id) = attr(e, "id") {
-                        s.footers.push(id.into_owned());
-                    }
-                }
-                _ => {}
+            let list = match n {
+                "headerReference" => &mut s.headers,
+                "footerReference" => &mut s.footers,
+                _ => return,
+            };
+            if list.len() < MAX_SECT_REFS
+                && let Some(id) = attr(e, "id")
+            {
+                list.push(id.into_owned());
             }
         }
     }
@@ -459,6 +585,31 @@ impl Parser<'_> {
             text: String::new(),
         });
         Flow::Go
+    }
+
+    fn push_container(&mut self, c: Container) {
+        // The note's text was charged as it was read; its separator in the page and its
+        // slot are charged here.
+        if !c.text.is_empty() && self.shared.take_item() && self.shared.charge(1) {
+            self.parsed.containers.push(c);
+        }
+    }
+
+    fn push_item(&mut self, item: Item) {
+        if !self.shared.take_item() {
+            // Nothing more can be kept: stop reading the part.
+            self.stop = true;
+            return;
+        }
+        if let Item::SectionEnd(_) = item {
+            self.sections += 1;
+            self.tables_on_page = 0;
+            if self.mode == Mode::Body && self.sections >= self.shared.max_sections {
+                self.shared.sections_stopped = true;
+                self.stop = true;
+            }
+        }
+        self.parsed.items.push(item);
     }
 
     fn revision(&mut self, e: &quick_xml::events::BytesStart<'_>, kind: Rev) {
@@ -515,6 +666,20 @@ impl Parser<'_> {
         }
     }
 
+    /// A field's instruction never spans paragraphs: fields still in their instruction part
+    /// when a paragraph ends are malformed and dropped, so they cannot hide the rest of the
+    /// part. Fields in their result part (a table of contents) may span paragraphs.
+    fn abandon_open_instructions(&mut self) {
+        if self.hidden == 0 && self.overflow_fields == 0 {
+            return;
+        }
+        let before = self.fields.len();
+        self.fields.retain(|f| f.result);
+        self.abandoned_fields += before - self.fields.len() + self.overflow_fields;
+        self.hidden = 0;
+        self.overflow_fields = 0;
+    }
+
     /// A field instruction: only `HYPERLINK` targets are kept (for link domains).
     fn instr(&mut self, instr: &str) {
         let s = instr.trim_start();
@@ -553,6 +718,13 @@ impl Parser<'_> {
         if self.hidden > 0 || self.overflow_fields > 0 {
             return;
         }
+        if self.run_hidden {
+            self.shared.stats.hidden_chars += char_count(s);
+            return;
+        }
+        if self.del_pending && !s.trim().is_empty() {
+            self.flush_deleted();
+        }
         let Some(p) = self.paras.last_mut() else {
             return;
         };
@@ -560,13 +732,21 @@ impl Parser<'_> {
     }
 
     fn push_deleted(&mut self, s: &str) {
-        if self.hidden > 0 || self.overflow_fields > 0 || self.mode == Mode::Notes {
+        if self.hidden > 0 || self.overflow_fields > 0 {
+            return;
+        }
+        self.shared.stats.deleted_chars += char_count(s);
+        if self.mode == Mode::Notes {
             return;
         }
         push_limited(&mut self.del_buf, s, self.shared);
     }
 
     fn flush_deleted(&mut self) {
+        self.del_pending = false;
+        if self.del_depth > 0 {
+            return;
+        }
         let t = self.del_buf.trim();
         if !t.is_empty() {
             let t = t.to_owned();
@@ -580,15 +760,33 @@ impl Parser<'_> {
             return;
         }
         if let Some(p) = self.paras.last_mut() {
-            p.annots.push(a);
+            if p.annots.len() < 10_000 {
+                p.annots.push(a);
+            }
         } else if let Some(c) = self.cell.as_mut() {
-            c.annots.push(a);
+            if c.annots.len() < 10_000 {
+                c.annots.push(a);
+            }
         } else {
-            self.parsed.items.push(annot_item(a));
+            self.push_annot(a);
+        }
+    }
+
+    fn push_annot(&mut self, a: Annot) {
+        match a {
+            Annot::Comment(id) => self.push_item(Item::Comment(id)),
+            Annot::Deleted(t) => {
+                // Its separator in the page; its text was charged as it was read.
+                if self.shared.charge(1) {
+                    self.push_item(Item::Deleted(t));
+                }
+            }
         }
     }
 
     fn end_para(&mut self) {
+        self.flush_deleted();
+        self.abandon_open_instructions();
         let Some(p) = self.paras.pop() else {
             return;
         };
@@ -620,7 +818,8 @@ impl Parser<'_> {
             (None, Some(_)) => BlockKind::ListItem,
             (None, None) => BlockKind::Paragraph,
         };
-        let text = if label.is_empty() || text.is_empty() {
+        // The label and its space go into page text: charged like any text.
+        let text = if label.is_empty() || text.is_empty() || !self.shared.charge(label.len() + 1) {
             text.to_owned()
         } else {
             format!("{label} {text}")
@@ -629,15 +828,14 @@ impl Parser<'_> {
         if let Some(s) = p.sect
             && self.mode == Mode::Body
         {
-            self.parsed.items.push(Item::SectionEnd(s));
-            self.tables_on_page = 0;
+            self.push_item(Item::SectionEnd(s));
         }
     }
 
     /// Where a finished paragraph goes: the open table cell, the open note, or the output.
     fn sink(&mut self, text: String, kind: BlockKind, annots: Vec<Annot>) {
         if let Some(c) = self.cell.as_mut() {
-            if !text.is_empty() {
+            if !text.is_empty() && (c.text.is_empty() || self.shared.charge(1)) {
                 if !c.text.is_empty() {
                     c.text.push('\n');
                 }
@@ -647,7 +845,7 @@ impl Parser<'_> {
             return;
         }
         if let Some(c) = self.container.as_mut() {
-            if !text.is_empty() {
+            if !text.is_empty() && (c.text.is_empty() || self.shared.charge(1)) {
                 if !c.text.is_empty() {
                     c.text.push('\n');
                 }
@@ -655,11 +853,21 @@ impl Parser<'_> {
             }
             return;
         }
-        if !text.is_empty() {
-            let zone = self.zone(kind);
-            self.parsed.items.push(Item::Block { text, kind, zone });
+        self.push_block(text, kind);
+        for a in annots {
+            self.push_annot(a);
         }
-        self.parsed.items.extend(annots.into_iter().map(annot_item));
+    }
+
+    /// A finished block. Its separator in the page is charged here; when that one byte no
+    /// longer fits the block is still kept (its text was within budget), and every later
+    /// text is empty: the page text overshoots the budget by at most one byte.
+    fn push_block(&mut self, text: String, kind: BlockKind) {
+        if !text.is_empty() {
+            let _ = self.shared.charge(1);
+            let zone = self.zone(kind);
+            self.push_item(Item::Block { text, kind, zone });
+        }
     }
 
     fn zone(&self, kind: BlockKind) -> Zone {
@@ -682,6 +890,7 @@ impl Parser<'_> {
             }
         }
         if self.tables.len() >= MAX_TABLE_DEPTH {
+            self.table_overflow += 1;
             return;
         }
         let index = if self.tables.is_empty() {
@@ -726,7 +935,7 @@ impl Parser<'_> {
     }
 
     fn end_cell(&mut self) {
-        if self.tables.len() > 1 {
+        if self.tables.len() > 1 || self.table_overflow > 0 {
             if let Some(t) = self.tables.last_mut() {
                 t.col = t.col.saturating_add(1);
             }
@@ -744,7 +953,7 @@ impl Parser<'_> {
             col: c.col,
         };
         if let Some(ct) = self.container.as_mut() {
-            if !c.text.is_empty() {
+            if !c.text.is_empty() && (ct.text.is_empty() || self.shared.charge(1)) {
                 if !ct.text.is_empty() {
                     ct.text.push('\n');
                 }
@@ -752,17 +961,10 @@ impl Parser<'_> {
             }
             return;
         }
-        if !c.text.is_empty() {
-            let zone = self.zone(kind);
-            self.parsed.items.push(Item::Block {
-                text: c.text,
-                kind,
-                zone,
-            });
+        self.push_block(c.text, kind);
+        for a in c.annots {
+            self.push_annot(a);
         }
-        self.parsed
-            .items
-            .extend(c.annots.into_iter().map(annot_item));
     }
 
     fn start_sect(&mut self) {
@@ -784,23 +986,23 @@ impl Parser<'_> {
         {
             p.sect = Some(s);
         } else {
-            self.parsed.items.push(Item::SectionEnd(s));
-            self.tables_on_page = 0;
+            self.push_item(Item::SectionEnd(s));
         }
     }
 
     /// Flushes whatever a truncated part left open.
     fn finish(&mut self) {
+        self.stop = false;
+        self.flush_deleted();
         while !self.paras.is_empty() {
             self.end_para();
         }
+        self.table_overflow = 0;
         while !self.tables.is_empty() {
             self.end_table();
         }
-        if let Some(c) = self.container.take()
-            && !c.text.is_empty()
-        {
-            self.parsed.containers.push(c);
+        if let Some(c) = self.container.take() {
+            self.push_container(c);
         }
     }
 }
@@ -812,11 +1014,8 @@ enum Rev {
     Format,
 }
 
-fn annot_item(a: Annot) -> Item {
-    match a {
-        Annot::Comment(id) => Item::Comment(id),
-        Annot::Deleted(t) => Item::Deleted(t),
-    }
+fn char_count(s: &str) -> i64 {
+    i64::try_from(s.chars().count()).unwrap_or(i64::MAX)
 }
 
 /// Elements that record a tracked formatting change (their content is the old formatting).
@@ -836,8 +1035,12 @@ fn is_format_change(n: &str) -> bool {
 }
 
 /// Appends `s` to `buf` within the text budget, dropping control characters other than tab
-/// and newline (and the form feed that separates pages in `full_text`).
+/// and newline (and the form feed that separates pages in `full_text`). Once the budget is
+/// spent nothing more is appended anywhere.
 fn push_limited(buf: &mut String, s: &str, shared: &mut Shared) {
+    if shared.truncated {
+        return;
+    }
     let len = s.len() as u64;
     if len <= shared.text_left
         && !s
