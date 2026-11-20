@@ -122,7 +122,7 @@ hook; no renderer ships yet (`NoRenderer`), the pack says so on every page.
 `assign(id) = holdout` iff `blake3("<seed>:<id>")` as a fraction of 2^64 is below the share
 (default 20 %, seed `quail-eval-holdout-2026-11-20`). Per file, so adding files never moves
 others. `splits` writes `<dataset>.dev.txt` / `<dataset>.holdout.txt` (BLAKE3 ids only:
-committable, in `crates/quail-eval/split/` once real gold exists); files already listed keep
+committed in `crates/quail-eval/split/`: Kleister-NDA 253 dev / 84 holdout, CUAD 409 / 100); files already listed keep
 their side even if seed or share change. `--check` fails if lists are stale or a gold file's
 `split` disagrees; `--apply` fixes the gold files. `convert` uses the same assignment.
 
@@ -130,8 +130,8 @@ their side even if seed or share change. `--check` fails if lists are stale or a
 
 | adapter | reads | tasks | status |
 |---|---|---|---|
-| `kleister-nda` | `{train,dev-0}/expected.tsv` + `in.tsv` (decompress `in.tsv.xz` first), `documents/*.pdf` | `party`, `effective_date`, `jurisdiction`, `term` (missing key → absent) | synthetic tests only, not run on the real data |
-| `cuad` | `CUAD_v1.json` (SQuAD form), contract PDFs/TXTs by title | `doc_title`, `party` (contains), `agreement_date`, `effective_date`, `expiration_date` (dates parsed to ISO; non-date answers skipped and counted; no answer → absent) | synthetic tests only, not run on the real data |
+| `kleister-nda` | `{train,dev-0}/expected.tsv` + `in.tsv` (decompress `in.tsv.xz` first), `documents/*.pdf` | `party`, `effective_date`, `jurisdiction`, `term` (missing key → absent) | run on the real data: 337 documents (train + dev-0), 1315 labels |
+| `cuad` | `CUAD_v1.json` (SQuAD form), contract PDFs/TXTs by title | `doc_title`, `party` (contains), `agreement_date`, `effective_date`, `expiration_date` (dates parsed to ISO; non-date answers skipped and counted; no answer → absent) | run on the real data: 510 documents (1 without a file), 3675 labels, 773 non-date answers skipped |
 
 CUAD's party spans include defined-term aliases ("Distributor"), so party precision against
 CUAD is low by construction; recall is the meaningful number there.

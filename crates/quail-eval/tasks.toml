@@ -24,20 +24,26 @@ normalize = "text"
 
 [task.party]
 description = "Contracting parties / companies named as parties"
-# One record per mention; deduplicated after normalization, most confident first.
-keys = ["party.company"]
+# One record per mention; deduplicated after normalization, most confident first. The DOCX
+# CLM properties (plain text) are pooled too. `party.candidates` (top 10) scored F1 within
+# 2 points of this on Kleister/CUAD with a much worse ECE.
+keys = ["party.company", "docx.clm_first_party", "docx.clm_second_party"]
 field = "surface"
 normalize = "company"
 multi = true
 
 [task.effective_date]
 description = "Date the agreement takes effect"
-keys = ["signal.date_effective"]
+# Without a stated effective date the agreement date is the effective date (Kleister-NDA:
+# +5 F1; CUAD: -0.5).
+keys = ["signal.date_effective", "signal.date_signed"]
 normalize = "date"
 
 [task.agreement_date]
 description = "Date the agreement was signed or dated"
-keys = ["signal.date_signed"]
+# "made and entered into as of <date>" is tagged effective by quail-signals; CUAD's
+# Agreement Date is that date (F1 24.8 -> 76.2 with it pooled).
+keys = ["signal.date_signed", "signal.date_effective"]
 normalize = "date"
 
 [task.expiration_date]

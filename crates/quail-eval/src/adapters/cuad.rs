@@ -18,7 +18,7 @@
 //! renewal clause, are skipped and counted). A category with no answer is `absent`.
 //! `master_clauses.csv` carries the same spans and is not needed.
 //!
-//! Status: tested on generated samples only; not yet run on the real dataset.
+//! Status: run on the real dataset (510 documents, one without a contract file).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
