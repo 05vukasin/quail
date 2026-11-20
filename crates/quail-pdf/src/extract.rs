@@ -366,10 +366,7 @@ fn pages(pdf: &Pdf, file_len: usize, limits: &Limits, out: &mut Emitter) -> Docu
         keys::FONTS,
         Value::List(fonts.into_iter().map(Value::text).collect()),
     );
-    out.fact(
-        keys::IMAGE_ONLY_PAGES,
-        int(image_only_pages),
-    );
+    out.fact(keys::IMAGE_ONLY_PAGES, int(image_only_pages));
     out.fact(
         keys::PAGES_NEEDING_OCR,
         int(doc.pages.iter().filter(|p| p.needs_ocr).count()),

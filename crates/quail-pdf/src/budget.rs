@@ -81,9 +81,8 @@ impl Budget {
                 continue;
             };
             let d = x.dict();
-            if !d
-                .get::<Name<'_>>(b"Subtype")
-                .is_some_and(|n| n.as_str() == "Image")
+            if d.get::<Name<'_>>(b"Subtype")
+                .is_none_or(|n| n.as_str() != "Image")
             {
                 continue;
             }
@@ -166,9 +165,11 @@ pub(crate) fn object_streams_fit(bytes: &[u8], max: u64) -> bool {
     }
     let mut left = max;
     let mut from = 0usize;
-    while let Some(rel) = bytes.get(from..).and_then(|b| crate::raw::find(b, b"/ObjStm")) {
+    while let Some(rel) = bytes
+        .get(from..)
+        .and_then(|b| crate::raw::find(b, b"/ObjStm"))
+    {
         let at = from + rel;
-        from = at + 7;
         // The stream keyword after the dictionary, and the data up to `endstream`.
         let Some(kw) = bytes.get(at..).and_then(|b| crate::raw::find(b, b"stream")) else {
             break;

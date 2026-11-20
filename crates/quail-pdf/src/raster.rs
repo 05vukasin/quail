@@ -197,45 +197,44 @@ impl<'a> Device<'a> for ScanDevice {
             return;
         }
         // Upright: a pure positive scale from image pixels to the page (top-left origin).
-        let [a, b, c, d, _, _] = props.transform.as_coeffs();
-        let eps = 1e-6 * a.abs().max(d.abs()).max(1e-9);
-        if !(a > 0.0 && d > 0.0 && b.abs() <= eps && c.abs() <= eps) {
+        let [sx, shy, shx, sy, _, _] = props.transform.as_coeffs();
+        let eps = 1e-6 * sx.abs().max(sy.abs()).max(1e-9);
+        if !(sx > 0.0 && sy > 0.0 && shy.abs() <= eps && shx.abs() <= eps) {
             return;
         }
-        let (w, h) = (image.width(), image.height());
-        if u64::from(w) * u64::from(h) > self.max_pixels {
+        if u64::from(image.width()) * u64::from(image.height()) > self.max_pixels {
             self.result = Some(Err(Error::LimitExceeded("max_render_pixels")));
             return;
         }
         let mut out: Option<Image> = None;
         match &image {
-            HImage::Raster(r) => r.with_rgba(
+            HImage::Raster(raster) => raster.with_rgba(
                 |data, _alpha| {
                     out = Some(match data {
-                        ImageData::Luma(l) => Image {
-                            width: l.width,
-                            height: l.height,
+                        ImageData::Luma(luma) => Image {
+                            width: luma.width,
+                            height: luma.height,
                             channels: 1,
-                            data: l.data,
+                            data: luma.data,
                         },
-                        ImageData::Rgb(c) => Image {
-                            width: c.width,
-                            height: c.height,
+                        ImageData::Rgb(rgb) => Image {
+                            width: rgb.width,
+                            height: rgb.height,
                             channels: 3,
-                            data: c.data,
+                            data: rgb.data,
                         },
                     });
                 },
                 None,
             ),
-            HImage::Stencil(s) => s.with_stencil(
-                |l, _paint| {
+            HImage::Stencil(stencil) => stencil.with_stencil(
+                |mask, _paint| {
                     out = Some(Image {
-                        width: l.width,
-                        height: l.height,
+                        width: mask.width,
+                        height: mask.height,
                         channels: 1,
                         // Mask coverage 255 = painted (ink): invert to dark-on-white.
-                        data: l.data.iter().map(|v| 255 - v).collect(),
+                        data: mask.data.iter().map(|v| 255 - v).collect(),
                     });
                 },
                 None,

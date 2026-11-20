@@ -16,7 +16,11 @@ text-collecting device. The same interpreter renders pages (crate `hayro`) when 
   - `blocks`: paragraph groups of lines, each with a `Span` into the text and a `BBox` (points, top-left origin).
   - `zone`: `Header` or `Footer` by geometry (top or bottom 6 % band) or by repetition (the same text, digits ignored, in the top or bottom 15 % band on enough pages). Everything else is `Body`.
   - `text_source` (`Native` or `None`) and `needs_ocr`. A page needs OCR when it has no text but has images or heavy vector drawing, when it is mostly an image with little text, or when its text is garbage.
-- Artifact `pdf.pages` (`PdfPages`): per-page image count, coverage, placements (pixel size and box), image-only flag and rotation. `quail-ocr` can use it to extract a page's scan directly instead of rendering the page.
+  - `images` (core `PageImage`: page box and pixel size, first 64 per page) and `image_coverage`, so `Page::is_scan()` works.
+- Artifact `raster` (core `Raster`), backed by `PdfRaster`, which implements `PageRaster` on hayro:
+  - `render(page, dpi, limits)` gives 8-bit gray on white. It refuses pages over `max_render_pixels` (and over hayro's 65,535 px per side) before allocating, and charges content, fonts and images to `max_decompressed`.
+  - `embedded_scan(page, limits)` decodes the page's single image as stored (gray or RGB; image masks come back as dark ink on white). It returns `None` when the page holds more than one image, or when the image is rotated or mirrored; rendering then gives the upright page.
+  - `PdfRaster` holds only the file's shared `Blob` and re-parses per call, so it adds no memory beyond the file.
 
 ## Keys (`pdf.*`)
 
@@ -41,13 +45,18 @@ text-collecting device. The same interpreter renders pages (crate `hayro`) when 
 
 ## Limits and robustness
 
+Early stops are reported with `Emitter::problem`, which keeps the partial document and makes the record Partial. Notes, such as a rejected garbage text layer, go through `warn`.
+
 - `max_bytes`: larger files fail with `LimitExceeded("max_bytes")` before any parsing.
-- `max_pages`: later pages are skipped, with a warning.
-- `max_decompressed`: before a page is interpreted, its content streams, form XObjects and font programs are inflated once by a bounded decoder and charged to the budget. Shared streams are charged once. Pages past the budget are skipped, with a warning.
-- `max_text_bytes`: text is truncated at a block boundary, with a warning.
-- `timeout`: `Emitter::check_deadline` runs before every page and gives a partial document.
+- `max_pages`: later pages are skipped (problem).
+- `max_decompressed`:
+  - Object streams are measured on the raw bytes before the file is opened, since hayro inflates them with no cap; a file over the budget fails with `LimitExceeded`.
+  - Before a page is interpreted, its content streams, form XObjects and font programs are inflated once by a bounded decoder and charged to the budget. Shared streams are charged once. Pages past the budget are skipped (problem).
+- `max_text_bytes`: text is truncated at a block boundary (problem).
+- `timeout`: `Emitter::check_deadline` runs before every page and gives a partial document (problem).
 - Encrypted with a user password: returns `Error::Encrypted` after emitting the facts it can read (version, encrypted, incremental updates, linearized).
-- Panics in the parser or the interpreter are caught per document and per page. The page is then flagged `needs_ocr`, with a warning.
+- Panics in the parser, the interpreter or the renderer are caught per document, per page and per render. A failed page is flagged `needs_ocr` (problem).
+- JavaScript is found through the catalog, a byte scan, and a walk over every object (object streams included).
 
 ## Development
 
