@@ -54,7 +54,7 @@ pub fn detect(bytes: &[u8]) -> Sniff {
     if bytes.is_empty() {
         return Sniff::new(Format::Unknown, "application/x-empty");
     }
-    if bytes.starts_with(b"%PDF-") {
+    if bytes.starts_with(b"%PDF-") && pdf_version(bytes.get(5..8)) {
         return PDF;
     }
     if let Some(s) = image(bytes) {
@@ -66,8 +66,7 @@ pub fn detect(bytes: &[u8]) -> Sniff {
     if let Some(s) = other_binary(bytes) {
         return s;
     }
-    let head = &bytes[..bytes.len().min(PDF_HEADER_WINDOW)];
-    if find(head, b"%PDF-").is_some() {
+    if pdf_header(&bytes[..bytes.len().min(PDF_HEADER_WINDOW)]) {
         return PDF;
     }
     if bytes.starts_with(b"{\\rtf") {
@@ -131,6 +130,40 @@ fn other_binary(b: &[u8]) -> Option<Sniff> {
         return unk("application/vnd.rar");
     }
     None
+}
+
+/// `d.d` after `%PDF-`.
+fn pdf_version(v: Option<&[u8]>) -> bool {
+    matches!(v, Some([a, b'.', b]) if a.is_ascii_digit() && b.is_ascii_digit())
+}
+
+/// `%PDF-d.d` in `head`, preceded only by whitespace or binary junk. A prefix that reads as
+/// text (a Markdown note, source code mentioning `%PDF-`) means this is a text file.
+fn pdf_header(head: &[u8]) -> bool {
+    let mut from = 0;
+    while let Some(p) = head.get(from..).and_then(|h| find(h, b"%PDF-")) {
+        let at = from + p;
+        if pdf_version(head.get(at + 5..at + 8)) {
+            return junk_prefix(&head[..at]);
+        }
+        from = at + 1;
+    }
+    false
+}
+
+fn junk_prefix(prefix: &[u8]) -> bool {
+    if prefix.iter().all(u8::is_ascii_whitespace) {
+        return true;
+    }
+    let printable = prefix
+        .iter()
+        .filter(|&&c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+        .count();
+    let control = prefix
+        .iter()
+        .any(|&c| c < 0x20 && !c.is_ascii_whitespace() || c == 0x7F);
+    let text = printable * 2 > prefix.len() || (!control && std::str::from_utf8(prefix).is_ok());
+    !text
 }
 
 /// `memmem` for short needles.
@@ -200,36 +233,46 @@ fn zip(b: &[u8]) -> Sniff {
 fn central_directory(b: &[u8], names: &mut ZipNames) -> bool {
     const EOCD: &[u8] = b"PK\x05\x06";
     const EOCD_LEN: usize = 22;
+    /// Signature matches tried, from the end: a comment may contain a fake EOCD.
+    const MAX_CANDIDATES: usize = 8;
     if b.len() < EOCD_LEN {
         return false;
     }
     // The EOCD is 22 bytes plus a comment of at most 65535 bytes, at the very end.
     let window_start = b.len().saturating_sub(EOCD_LEN + 0xFFFF);
-    let window = &b[window_start..];
-    let Some(rel) = window
-        .windows(4)
-        .rposition(|w| w == EOCD)
-        .filter(|&p| p + EOCD_LEN <= window.len())
-    else {
-        return false;
-    };
-    let eocd = window_start + rel;
-    let (Some(entries), Some(cd_size), Some(cd_off)) = (
-        u16_at(b, eocd + 10),
-        u32_at(b, eocd + 12),
-        u32_at(b, eocd + 16),
-    ) else {
-        return false;
-    };
-    if cd_off == 0xFFFF_FFFF || entries == 0xFFFF {
-        return false; // ZIP64: fall back to local headers
+    let mut end = b.len();
+    for _ in 0..MAX_CANDIDATES {
+        let Some(rel) = b
+            .get(window_start..end)
+            .and_then(|w| w.windows(4).rposition(|x| x == EOCD))
+        else {
+            return false;
+        };
+        let eocd = window_start + rel;
+        end = eocd + 3; // next search strictly before this match
+        if let Some((cd, entries)) = directory_at(b, eocd) {
+            walk_directory(cd, entries, names);
+            return true;
+        }
     }
-    let Some(cd) = cd_off
-        .checked_add(cd_size)
-        .and_then(|end| b.get(cd_off..end))
-    else {
-        return false;
-    };
+    false
+}
+
+/// The central directory an EOCD at `eocd` points to, if it is plausible: in bounds and
+/// starting with a directory entry signature. ZIP64 markers are not followed.
+fn directory_at(b: &[u8], eocd: usize) -> Option<(&[u8], usize)> {
+    let entries = u16_at(b, eocd + 10)?;
+    let cd_size = u32_at(b, eocd + 12)?;
+    let cd_off = u32_at(b, eocd + 16)?;
+    u16_at(b, eocd + 20)?; // the record is complete
+    if cd_off == 0xFFFF_FFFF || entries == 0xFFFF {
+        return None; // ZIP64: fall back to local headers
+    }
+    let cd = b.get(cd_off..cd_off.checked_add(cd_size)?)?;
+    (entries == 0 || cd.starts_with(b"PK\x01\x02")).then_some((cd, entries))
+}
+
+fn walk_directory(cd: &[u8], entries: usize, names: &mut ZipNames) {
     let mut at = 0usize;
     for _ in 0..entries.min(MAX_ZIP_ENTRIES) {
         if cd.get(at..at + 4) != Some(b"PK\x01\x02") {
@@ -251,7 +294,6 @@ fn central_directory(b: &[u8], names: &mut ZipNames) -> bool {
         }
         at += 46 + n + x + c;
     }
-    true
 }
 
 /// Fallback for truncated archives: follow local file headers from the start. Stops at an
@@ -365,6 +407,111 @@ mod tests {
         let mut far = vec![b'x'; 1100];
         far.extend_from_slice(b"%PDF-1.4");
         assert_eq!(sniff(&far), Format::Text);
+        // Binary junk before the header (e.g. a mail-gateway prefix with control bytes).
+        let mut bin = vec![0x01, 0xFF, 0x00, 0x13, 0x88, 0x02];
+        bin.extend_from_slice(b"%PDF-1.5\n");
+        assert_eq!(sniff(&bin), Format::Pdf);
+    }
+
+    #[test]
+    fn text_mentioning_pdf_header_is_text() {
+        let md = b"# Notes\n\nA PDF file starts with `%PDF-1.7` and ends with `%%EOF`.\n";
+        assert_eq!(sniff(md), Format::Text);
+        let rs = b"fn is_pdf(b: &[u8]) -> bool {\n    b.starts_with(b\"%PDF-1.4\")\n}\n";
+        assert_eq!(sniff(rs), Format::Text);
+        let cyr = "Документ почиње са %PDF-1.4 заглављем".as_bytes();
+        assert_eq!(sniff(cyr), Format::Text);
+        // No version digits: not a header, even at offset 0.
+        assert_eq!(sniff(b"%PDF-x is how it starts"), Format::Text);
+        assert_eq!(sniff(b"%PDF-2.0\n"), Format::Pdf);
+    }
+
+    #[test]
+    fn fake_eocd_in_comment_falls_back_to_the_real_one() {
+        let mut z = zip_with(&["[Content_Types].xml", "word/document.xml"], true);
+        // Archive comment holding a bogus EOCD signature pointing nowhere.
+        let n = z.len();
+        let fake: Vec<u8> = b"PK\x05\x06".iter().copied().chain([0xAB; 18]).collect();
+        z[n - 2..n].copy_from_slice(&u16::try_from(fake.len()).unwrap().to_le_bytes());
+        z.extend_from_slice(&fake);
+        assert_eq!(sniff(&z), Format::Docx);
+    }
+
+    #[test]
+    fn garbage_central_directory_falls_back_to_local_headers() {
+        let mut z = zip_with(&["[Content_Types].xml", "word/document.xml"], true);
+        let n = z.len();
+        // Point the directory at offset 0 (a local header, not a directory entry).
+        z[n - 6..n - 2].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(sniff(&z), Format::Docx);
+    }
+
+    /// xorshift64*: deterministic random bytes without a dependency.
+    fn rng(seed: &mut u64) -> u64 {
+        *seed ^= *seed >> 12;
+        *seed ^= *seed << 25;
+        *seed ^= *seed >> 27;
+        seed.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn rand_index(seed: &mut u64, n: usize) -> usize {
+        usize::try_from(rng(seed) % u64::try_from(n).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn random_bytes_never_panic_and_stay_fast() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        let prefixes: [&[u8]; 4] = [b"PK\x03\x04", b"PK\x05\x06", b"%PDF-1.", b"RIFF"];
+        let docx = zip_with(&["[Content_Types].xml", "word/document.xml", "a"], true);
+        let start = std::time::Instant::now();
+        let mut slowest = std::time::Duration::ZERO;
+        for i in 0..20_000 {
+            let len = rand_index(&mut seed, 2048);
+            let mut b: Vec<u8> = (0..len).map(|_| rng(&mut seed).to_le_bytes()[0]).collect();
+            match i % 4 {
+                0 => {}
+                1 => {
+                    let p = prefixes[i / 4 % prefixes.len()];
+                    b.splice(0..0, p.iter().copied());
+                }
+                2 => {
+                    // Sprinkle EOCD / directory signatures.
+                    for _ in 0..4 {
+                        let at = rand_index(&mut seed, b.len() + 1);
+                        b.splice(at..at, b"PK\x05\x06PK\x01\x02".iter().copied());
+                    }
+                    b.splice(0..0, b"PK\x03\x04".iter().copied());
+                }
+                _ => {
+                    // Mutate a valid DOCX.
+                    b.clone_from(&docx);
+                    for _ in 0..3 {
+                        let at = rand_index(&mut seed, b.len());
+                        b[at] = rng(&mut seed).to_le_bytes()[0];
+                    }
+                }
+            }
+            let t = std::time::Instant::now();
+            let _ = detect(&b);
+            slowest = slowest.max(t.elapsed());
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(20));
+        assert!(
+            slowest < std::time::Duration::from_millis(50),
+            "{slowest:?}"
+        );
+    }
+
+    #[test]
+    fn many_fake_eocds_are_bounded() {
+        // 64 KiB of EOCD signatures in the tail: only a few candidates are tried.
+        let mut z = zip_with(&["word/document.xml"], false);
+        for _ in 0..16_000 {
+            z.extend_from_slice(b"PK\x05\x06");
+        }
+        let t = std::time::Instant::now();
+        let _ = sniff(&z);
+        assert!(t.elapsed() < std::time::Duration::from_millis(200));
     }
 
     #[test]
