@@ -10,7 +10,8 @@ use crate::format::Format;
 pub enum Status {
     /// Every applicable step ran.
     Ok,
-    /// Some steps failed or hit limits; the facts present are still valid.
+    /// A step failed, was skipped for a missing requirement, or hit a limit; the facts present
+    /// are still valid. Warnings alone never make a record partial.
     Partial {
         /// One line per problem.
         problems: Vec<String>,
@@ -54,6 +55,9 @@ pub struct FileRecord {
     pub timings: Vec<Timing>,
     /// Outcome.
     pub status: Status,
+    /// Non-fatal notes from the steps, prefixed with the step id (`pdf.extract@1: ...`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl FileRecord {

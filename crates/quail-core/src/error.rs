@@ -36,7 +36,34 @@ pub enum Error {
     /// A model or resource could not be loaded.
     #[error("resource: {0}")]
     Resource(String),
+    /// A source could not deliver one item; `locator` names it so the engine can still write
+    /// a `Failed` record for that file.
+    #[error("{locator}: {source}")]
+    Source {
+        /// The file that could not be delivered.
+        locator: String,
+        /// Why.
+        source: Box<Error>,
+    },
     /// Anything else.
     #[error("{0}")]
     Other(String),
+}
+
+impl Error {
+    /// Wraps an error with the locator of the item it belongs to.
+    pub fn at(locator: impl Into<String>, source: Error) -> Self {
+        Self::Source {
+            locator: locator.into(),
+            source: Box::new(source),
+        }
+    }
+
+    /// The locator, if this error carries one.
+    pub fn locator(&self) -> Option<&str> {
+        match self {
+            Self::Source { locator, .. } => Some(locator),
+            _ => None,
+        }
+    }
 }
