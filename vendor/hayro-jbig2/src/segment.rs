@@ -247,7 +247,7 @@ pub(crate) fn parse_segment_header(reader: &mut Reader<'_>, strict: bool) -> Res
         .and_then(|len| reader.read_bytes(len))
         .ok_or(ParseError::UnexpectedEof)?;
 
-    let mut referred_to_segments = Vec::with_capacity(referred_to_count as usize);
+    let mut referred_to_segments = Vec::with_capacity(crate::bitmap::capacity_hint(referred_to_count as usize)); // quail: clamped hint
     for bytes in numbers.chunks_exact(number_size) {
         let referred = bytes
             .iter()

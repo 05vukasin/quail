@@ -8,6 +8,36 @@ use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::colorspace::ColorSpace::CMYK;
 use zune_jpeg::zune_core::options::DecoderOptions;
 
+/// quail: the frame size in the JPEG's SOF marker fits the caps. Images whose frame is larger
+/// than the image dictionary are patched down to the dictionary size before decoding, so the
+/// smaller of the two is checked. No SOF found: let the decoder fail on its own.
+pub(crate) fn header_fits(data: &[u8], limits: &crate::budget::DecodeLimits<'_>) -> bool {
+    let mut i = 2usize;
+    while i + 4 <= data.len() {
+        if data[i] != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = data[i + 1];
+        if marker == 0xFF || marker == 0x01 || (0xD0..=0xD9).contains(&marker) {
+            i += 2;
+            continue;
+        }
+        let len = usize::from(u16::from_be_bytes([data[i + 2], data[i + 3]]));
+        let is_sof = matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF);
+        if is_sof {
+            let Some(f) = data.get(i + 4..i + 10) else {
+                return false;
+            };
+            let h = u32::from(u16::from_be_bytes([f[1], f[2]]));
+            let w = u32::from(u16::from_be_bytes([f[3], f[4]]));
+            return limits.image_fits(w, h, u64::from(f[5]));
+        }
+        i += 2 + len;
+    }
+    true
+}
+
 pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,

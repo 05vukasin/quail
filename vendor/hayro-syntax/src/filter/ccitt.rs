@@ -12,6 +12,8 @@ pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    // quail: pixel and output caps.
+    limits: &crate::budget::DecodeLimits<'_>,
 ) -> Option<FilterResult<'static>> {
     let k = params.get::<i32>(K).unwrap_or(0);
 
@@ -24,6 +26,16 @@ pub(crate) fn decode(
         params.get::<u32>(ROWS).unwrap_or(0)
     };
     let output_len = (columns as usize).checked_mul(rows as usize)?;
+    // quail: refuse oversized images up front, and when the row count is unknown let the
+    // output grow only up to the pixel cap.
+    if columns == 0 || !limits.image_fits(columns, rows, 1) {
+        return None;
+    }
+    let max_rows: u32 = if rows > 0 {
+        rows
+    } else {
+        u32::try_from(limits.max_pixels.min(limits.max_out) / u64::from(columns)).unwrap_or(u32::MAX)
+    };
 
     let settings = DecodeSettings {
         columns,
@@ -60,10 +72,16 @@ pub(crate) fn decode(
             /// The bits of the last byte in a row that belong to the image.
             last_byte_mask: u8,
             decoded_rows: u32,
+            // quail: rows beyond this are dropped.
+            max_rows: u32,
         }
 
         impl Decoder for BitPackDecoder {
             fn push_row(&mut self, changes: &[u32]) {
+                // quail: never grow past the row cap.
+                if self.decoded_rows >= self.max_rows {
+                    return;
+                }
                 let start = self.decoded_rows as usize * self.stride;
                 let end = start + self.stride;
 
@@ -106,6 +124,7 @@ pub(crate) fn decode(
             white,
             last_byte_mask: 0xFF_u8 << ((8 - columns % 8) % 8),
             decoded_rows: 0,
+            max_rows,
         };
         let mut context = DecoderContext::new(settings);
         let result = hayro_ccitt::decode(data, &mut decoder, &mut context);
@@ -127,10 +146,16 @@ pub(crate) fn decode(
             columns: u32,
             white: u8,
             decoded_rows: u32,
+            // quail: rows beyond this are dropped.
+            max_rows: u32,
         }
 
         impl Decoder for Luma8Decoder {
             fn push_row(&mut self, changes: &[u32]) {
+                // quail: never grow past the row cap.
+                if self.decoded_rows >= self.max_rows {
+                    return;
+                }
                 let start = self.decoded_rows as usize * self.columns as usize;
                 let end = start + self.columns as usize;
 
@@ -154,6 +179,7 @@ pub(crate) fn decode(
             columns,
             white,
             decoded_rows: 0,
+            max_rows,
         };
         let mut context = DecoderContext::new(settings);
         let result = hayro_ccitt::decode(data, &mut decoder, &mut context);

@@ -14,6 +14,16 @@ use alloc::vec::Vec;
 // to `u16::MAX`, which should be more than enough.
 pub(crate) const MAX_DIMENSION: u32 = u16::MAX as u32;
 
+/// quail: largest bitmap, in pixels, any segment may allocate (32 MiB of bits). Real scans are
+/// far below this (A4 at 600 dpi is ~35 M pixels); without it a 747-byte file could ask for
+/// 65535 × 65535 and the caller's 8-bit expansion then for 4 GiB.
+pub(crate) const MAX_PIXELS: u64 = 1 << 28;
+
+/// quail: clamp a capacity hint taken from the file (a count, not data that was read).
+pub(crate) fn capacity_hint(n: usize) -> usize {
+    n.min(1 << 16)
+}
+
 /// The underlying word type for packed pixel storage.
 /// Change this to `u32` to switch back to 32-bit words.
 pub(crate) type Word = u32;
@@ -55,7 +65,8 @@ impl Bitmap {
     }
 
     pub(crate) fn new_wide(width: u32, height: u32) -> Result<Self> {
-        if u64::from(width) * u64::from(height) > u64::from(MAX_DIMENSION).pow(2) {
+        // quail: pixel cap instead of MAX_DIMENSION².
+        if u64::from(width) * u64::from(height) > MAX_PIXELS {
             bail!(OverflowError::BitmapDimension);
         }
 
@@ -79,7 +90,11 @@ impl Bitmap {
         y_location: u32,
         default_pixel: bool,
     ) -> Result<Self> {
-        if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        // quail: also cap the pixel count.
+        if width > MAX_DIMENSION
+            || height > MAX_DIMENSION
+            || u64::from(width) * u64::from(height) > MAX_PIXELS
+        {
             bail!(OverflowError::BitmapDimension);
         }
 
@@ -108,7 +123,11 @@ impl Bitmap {
         height: u32,
         default_pixel: bool,
     ) -> Result<()> {
-        if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        // quail: also cap the pixel count.
+        if width > MAX_DIMENSION
+            || height > MAX_DIMENSION
+            || u64::from(width) * u64::from(height) > MAX_PIXELS
+        {
             return Err(OverflowError::BitmapDimension.into());
         }
 

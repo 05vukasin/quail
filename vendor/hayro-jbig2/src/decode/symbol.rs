@@ -38,7 +38,7 @@ pub(crate) fn decode(
         a_ctx: ArithmeticContext::new(header.data, header, input_contexts)?,
         h_ctx: HuffmanContext::new(header.data, header, referred_tables, standard_tables)?,
         symbols: Symbols::new(input_symbols, num_new_symbols as usize),
-        symbol_widths: Vec::with_capacity(num_new_symbols as usize),
+        symbol_widths: Vec::with_capacity(crate::bitmap::capacity_hint(num_new_symbols as usize)), // quail: clamped hint
         height_class_first_symbol: 0,
         symbols_decoded_count: 0,
         total_width: 0,
@@ -421,7 +421,7 @@ impl<'a> Symbols<'a> {
     fn new(input: &'a [&'a Bitmap], capacity: usize) -> Self {
         Self {
             input,
-            new: Vec::with_capacity(capacity),
+            new: Vec::with_capacity(crate::bitmap::capacity_hint(capacity)), // quail: clamped hint
         }
     }
 
@@ -705,7 +705,7 @@ fn export_symbols(ctx: &mut SymbolDecodeContext<'_>) -> Result<Vec<Bitmap>> {
 
         u32::try_from(value).map_err(|_| HuffmanError::InvalidCode.into())
     };
-    let mut exported = Vec::with_capacity(ctx.header.num_exported_symbols as usize);
+    let mut exported = Vec::with_capacity(crate::bitmap::capacity_hint(ctx.header.num_exported_symbols as usize)); // quail: clamped hint
     let mut index: u32 = 0;
     let mut should_export = false;
 

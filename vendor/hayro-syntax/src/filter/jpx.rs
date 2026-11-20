@@ -17,6 +17,25 @@ impl ImageColorSpace {
     }
 }
 
+/// quail: the image size in the JPEG 2000 codestream's SIZ marker fits the caps, checked
+/// before the decoder allocates. The marker follows SOC (`FF4F FF51`), inside a `jp2c` box for
+/// JP2 files. No SIZ found: refuse.
+pub(crate) fn header_fits(data: &[u8], limits: &crate::budget::DecodeLimits<'_>) -> bool {
+    let Some(at) = data.windows(4).position(|w| w == [0xFF, 0x4F, 0xFF, 0x51]) else {
+        return false;
+    };
+    let Some(siz) = data.get(at + 4..at + 4 + 38) else {
+        return false;
+    };
+    let be32 = |o: usize| u32::from_be_bytes([siz[o], siz[o + 1], siz[o + 2], siz[o + 3]]);
+    // Lsiz(2) Rsiz(2) Xsiz Ysiz XOsiz YOsiz XTsiz YTsiz XTOsiz YTOsiz Csiz(2)
+    let w = be32(4).saturating_sub(be32(12));
+    let h = be32(8).saturating_sub(be32(16));
+    let comps = u64::from(u16::from_be_bytes([siz[36], siz[37]]));
+    // Decoders keep samples wider than a byte: charge 4 bytes per sample.
+    comps > 0 && limits.image_fits(w, h, comps.saturating_mul(4))
+}
+
 pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 

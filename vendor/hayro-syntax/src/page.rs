@@ -66,6 +66,10 @@ impl<'a> Pages<'a> {
         let mut pages = vec![];
 
         for object in xref.objects() {
+            // quail: stop at the page cap.
+            if pages.len() >= MAX_PAGES {
+                break;
+            }
             if let Some(dict) = object.into_dict()
                 && let Some(page) = Page::new(&dict, &PagesContext::new(), ctx, true)
             {
@@ -115,6 +119,11 @@ impl<'a> PageTreeFrame<'a> {
     }
 }
 
+/// quail: most pages a page tree may yield. Inline (non-reference) kid dictionaries are not
+/// deduplicated, and every `Page` costs hundreds of bytes, so without a cap a small file can
+/// make the page list alone exhaust memory.
+pub const MAX_PAGES: usize = 1 << 17;
+
 fn resolve_pages<'a>(
     pages_dict: &Dict<'a>,
     entries: &mut Vec<Page<'a>>,
@@ -130,6 +139,10 @@ fn resolve_pages<'a>(
     let mut stack = vec![PageTreeFrame::new(pages_dict, ctx)?];
 
     while let Some(frame) = stack.last_mut() {
+        // quail: stop at the page cap.
+        if entries.len() >= MAX_PAGES {
+            break;
+        }
         let Some(kid) = frame.kids.next() else {
             stack.pop();
 

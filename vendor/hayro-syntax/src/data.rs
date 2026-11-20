@@ -15,6 +15,22 @@ pub struct PdfData {
     inner: Arc<dyn AsRef<[u8]> + Send + Sync>,
     #[cfg(not(feature = "std"))]
     inner: Arc<dyn AsRef<[u8]>>,
+    // quail: decode budget shared by every stream decoded out of this file.
+    budget: Option<Arc<crate::budget::DecodeBudget>>,
+}
+
+// quail: attach and read the decode budget.
+impl PdfData {
+    /// Attaches a decode budget: every stream decoded from this data is charged to it.
+    pub fn with_budget(mut self, budget: Arc<crate::budget::DecodeBudget>) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// The attached decode budget, if any.
+    pub fn budget(&self) -> Option<&crate::budget::DecodeBudget> {
+        self.budget.as_deref()
+    }
 }
 
 impl Debug for PdfData {
@@ -32,14 +48,22 @@ impl AsRef<[u8]> for PdfData {
 #[cfg(feature = "std")]
 impl<T: AsRef<[u8]> + Send + Sync + 'static> From<Arc<T>> for PdfData {
     fn from(data: Arc<T>) -> Self {
-        Self { inner: data }
+        // quail: no budget by default.
+        Self {
+            inner: data,
+            budget: None,
+        }
     }
 }
 
 #[cfg(not(feature = "std"))]
 impl<T: AsRef<[u8]> + 'static> From<Arc<T>> for PdfData {
     fn from(data: Arc<T>) -> Self {
-        Self { inner: data }
+        // quail: no budget by default.
+        Self {
+            inner: data,
+            budget: None,
+        }
     }
 }
 
@@ -47,6 +71,8 @@ impl From<Vec<u8>> for PdfData {
     fn from(data: Vec<u8>) -> Self {
         Self {
             inner: Arc::new(data),
+            // quail: no budget by default.
+            budget: None,
         }
     }
 }
@@ -102,7 +128,7 @@ impl Data {
 
         // Decoding may resolve other objects, so do it without holding the cache lock.
         let stream = ctx.xref().get_with::<Stream<'_>>(id, ctx)?;
-        let object_stream = ObjectStream::new(&stream)?;
+        let object_stream = ObjectStream::new(&stream, None)?;
 
         let mut locked = self.map.get();
         if let Some(&idx) = locked.get(&id) {

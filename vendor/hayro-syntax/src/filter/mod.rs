@@ -67,37 +67,66 @@ impl Filter {
         data: &[u8],
         params: &Dict<'_>,
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
+        // quail: output and pixel caps for this layer.
+        limits: &crate::budget::DecodeLimits<'_>,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
+        // quail: generic data filters stop just past `max_out`; a longer result is refused
+        // and recorded as a limit hit.
+        let max_out = usize::try_from(limits.max_out).unwrap_or(usize::MAX);
+        let capped = |d: Option<Vec<u8>>| match d {
+            Some(d) if d.len() > max_out => {
+                limits.refuse();
+                Err(DecodeFailure::StreamDecode)
+            }
+            Some(d) => Ok(FilterResult::from_data(d)),
+            None => Err(DecodeFailure::StreamDecode),
+        };
+        // quail: image filters must fit the caps, as declared by the image dictionary and by
+        // the codestream headers, before any decoder allocates.
+        #[cfg(feature = "images")]
+        let refuse_image = || {
+            limits.refuse();
+            Err(DecodeFailure::ImageDecode)
+        };
+        #[cfg(feature = "images")]
+        let declared_fits = || {
+            let comps = u64::from(image_params.num_components.unwrap_or(4).max(1));
+            limits.image_fits(image_params.width, image_params.height, comps)
+        };
         match self {
-            Self::AsciiHexDecode => ascii_hex::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::Ascii85Decode => ascii_85::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::RunLengthDecode => run_length::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::LzwDecode => lzw_flate::lzw::decode(data, params)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::FlateDecode => lzw_flate::flate::decode(data, params)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
+            Self::AsciiHexDecode => capped(ascii_hex::decode(data)),
+            Self::Ascii85Decode => capped(ascii_85::decode(data)),
+            Self::RunLengthDecode => capped(run_length::decode(data, max_out)),
+            Self::LzwDecode => capped(lzw_flate::lzw::decode(data, params, max_out)),
+            Self::FlateDecode => capped(lzw_flate::flate::decode(data, params, max_out)),
             #[cfg(feature = "images")]
             Self::DctDecode => {
+                if !declared_fits() || !dct::header_fits(data, limits) {
+                    return refuse_image();
+                }
                 dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
             }
             #[cfg(feature = "images")]
             Self::CcittFaxDecode => {
-                ccitt::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
+                if !declared_fits() {
+                    return refuse_image();
+                }
+                ccitt::decode(data, params, image_params, limits).ok_or(DecodeFailure::ImageDecode)
             }
             #[cfg(feature = "images")]
             Self::Jbig2Decode => {
-                jbig2::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
+                if !declared_fits() {
+                    return refuse_image();
+                }
+                jbig2::decode(data, params, image_params, limits).ok_or(DecodeFailure::ImageDecode)
             }
             #[cfg(feature = "images")]
-            Self::JpxDecode => jpx::decode(data, image_params).ok_or(DecodeFailure::ImageDecode),
+            Self::JpxDecode => {
+                if !jpx::header_fits(data, limits) {
+                    return refuse_image();
+                }
+                jpx::decode(data, image_params).ok_or(DecodeFailure::ImageDecode)
+            }
             #[cfg(not(feature = "images"))]
             Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
                 Err(DecodeFailure::ImageDecode)

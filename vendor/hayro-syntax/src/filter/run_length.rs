@@ -2,11 +2,16 @@ use crate::reader::Reader;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
+// quail: `max_out` caps the output (run-length expands up to 64:1).
+pub(crate) fn decode(data: &[u8], max_out: usize) -> Option<Vec<u8>> {
     let mut reader = Reader::new(data);
     let mut decoded = vec![];
 
     loop {
+        // quail: over the cap: stop; the caller sees the length and refuses.
+        if decoded.len() > max_out {
+            return Some(decoded);
+        }
         let length = reader.read_byte()?;
 
         match length {
@@ -37,7 +42,7 @@ mod tests {
     fn run_length() {
         let input = vec![4, 10, 11, 12, 13, 14, 253, 3, 128];
         assert_eq!(
-            decode(&input).unwrap(),
+            decode(&input, usize::MAX).unwrap(),
             vec![10, 11, 12, 13, 14, 3, 3, 3, 3]
         );
     }

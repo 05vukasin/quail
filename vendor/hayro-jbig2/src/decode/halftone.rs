@@ -226,6 +226,10 @@ fn compute_skip_bitmap(
     let len = stride
         .checked_mul(grid.height)
         .ok_or(OverflowError::BitmapDimension)? as usize;
+    // quail: cap the skip array like any bitmap.
+    if len as u64 > crate::bitmap::MAX_PIXELS {
+        return Err(OverflowError::BitmapDimension.into());
+    }
     let mut hskip = vec![0_u32; len];
     let mut coords = GridCoords::new(grid, &header.grid_vector);
 

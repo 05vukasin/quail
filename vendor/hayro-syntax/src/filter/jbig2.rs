@@ -15,6 +15,8 @@ pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    // quail: pixel and output caps.
+    limits: &crate::budget::DecodeLimits<'_>,
 ) -> Option<FilterResult<'static>> {
     let globals = params
         .get::<Stream<'_>>(JBIG2_GLOBALS)
@@ -26,6 +28,12 @@ pub(crate) fn decode(
         .transpose()
         .ok()?;
     let page = hayro_jbig2::Page::new_embedded(data, globals.as_ref(), &settings).ok()?;
+    // quail: the page size comes from the JBIG2 data, not the image dictionary; check it
+    // before allocating the output (hayro-jbig2 itself caps its bitmaps).
+    if !limits.image_fits(page.width(), page.height(), 1) {
+        limits.refuse();
+        return None;
+    }
 
     // Whenever possible (if we don't have an indexed color space), we convert
     // the data as 8-bit instead of 1-bit, so that it can be easier converted

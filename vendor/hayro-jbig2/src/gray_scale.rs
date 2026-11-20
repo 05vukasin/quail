@@ -188,6 +188,10 @@ fn decode_bitplanes<F>(
 where
     F: FnMut(u32, &mut Bitmap) -> Result<()>,
 {
+    // quail: the value array is 4 bytes per pixel; refuse before allocating it.
+    if u64::from(width) * u64::from(height) > crate::bitmap::MAX_PIXELS {
+        return Err(OverflowError::BitmapDimension.into());
+    }
     let size = width as usize * height as usize;
     // `GSVALS` - The decoded gray-scale image array.
     let mut values = vec![0_u32; size];

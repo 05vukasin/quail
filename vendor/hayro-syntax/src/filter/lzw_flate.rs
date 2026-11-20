@@ -10,33 +10,49 @@ pub(crate) mod flate {
     use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
     use crate::object::Dict;
 
+    // quail: `max_out` caps the inflated size; reading stops one byte past it.
     #[cfg(feature = "unsafe")]
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
+    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, max_out: usize) -> Option<Vec<u8>> {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
-        fn zlib_stream(data: &[u8]) -> Option<Vec<u8>> {
-            let mut decoder = ZlibDecoder::new(data);
+        let limit = (max_out as u64).saturating_add(1);
+        let zlib_stream = |data: &[u8]| -> Option<Vec<u8>> {
             let mut result = Vec::new();
-            decoder.read_to_end(&mut result).ok().map(|_| result)
-        }
-
-        fn deflate_stream(data: &[u8]) -> Option<Vec<u8>> {
-            let mut decoder = DeflateDecoder::new(data);
+            ZlibDecoder::new(data)
+                .take(limit)
+                .read_to_end(&mut result)
+                .ok()
+                .map(|_| result)
+        };
+        let deflate_stream = |data: &[u8]| -> Option<Vec<u8>> {
             let mut result = Vec::new();
-            decoder.read_to_end(&mut result).ok().map(|_| result)
-        }
+            DeflateDecoder::new(data)
+                .take(limit)
+                .read_to_end(&mut result)
+                .ok()
+                .map(|_| result)
+        };
 
         let decoded = zlib_stream(data)
             .or_else(|| deflate_stream(data))
-            .or_else(|| fallback::decode(data))?;
+            .or_else(|| fallback::decode(data, max_out))?;
+        // quail: over the cap: hand the truncated buffer back, the caller refuses it.
+        if decoded.len() > max_out {
+            return Some(decoded);
+        }
         let params = PredictorParams::from_params(params);
         apply_predictor(decoded, &params)
     }
 
+    // quail: `max_out` caps the inflated size.
     #[cfg(not(feature = "unsafe"))]
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
-        let decoded = fallback::decode(data)?;
+    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, max_out: usize) -> Option<Vec<u8>> {
+        let decoded = fallback::decode(data, max_out)?;
+        // quail: over the cap: hand the truncated buffer back, the caller refuses it.
+        if decoded.len() > max_out {
+            return Some(decoded);
+        }
         let params = PredictorParams::from_params(params);
         apply_predictor(decoded, &params)
     }
@@ -47,11 +63,12 @@ pub(crate) mod flate {
         use alloc::vec;
         use alloc::vec::Vec;
 
-        pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
-            flate_decode(data)
+        // quail: `max_out` caps the output.
+        pub(crate) fn decode(data: &[u8], max_out: usize) -> Option<Vec<u8>> {
+            flate_decode(data, max_out)
         }
 
-        fn flate_decode(data: &[u8]) -> Option<Vec<u8>> {
+        fn flate_decode(data: &[u8], max_out: usize) -> Option<Vec<u8>> {
             if data.len() >= 2 {
                 let cmf = data[0];
                 let flg = data[1];
@@ -60,12 +77,12 @@ pub(crate) mod flate {
                     && ((cmf as u16) << 8 | flg as u16).is_multiple_of(31)
                     && (flg & 0x20) == 0
                 {
-                    let mut stream = FlateStream::new(&data[2..]);
+                    let mut stream = FlateStream::new(&data[2..], max_out);
                     return stream.decode();
                 }
             }
 
-            let mut stream = FlateStream::new(data);
+            let mut stream = FlateStream::new(data, max_out);
             stream.decode()
         }
 
@@ -76,10 +93,12 @@ pub(crate) mod flate {
             code_size: u8,
             output: Vec<u8>,
             eof: bool,
+            // quail: stop once the output passes this.
+            max_out: usize,
         }
 
         impl<'a> FlateStream<'a> {
-            fn new(data: &'a [u8]) -> Self {
+            fn new(data: &'a [u8], max_out: usize) -> Self {
                 FlateStream {
                     data,
                     pos: 0,
@@ -87,12 +106,17 @@ pub(crate) mod flate {
                     code_size: 0,
                     output: Vec::new(),
                     eof: false,
+                    max_out,
                 }
             }
 
             fn decode(&mut self) -> Option<Vec<u8>> {
                 while !self.eof && self.pos < self.data.len() {
                     self.read_block();
+                    // quail: over the cap: stop; the caller sees the length and refuses.
+                    if self.output.len() > self.max_out {
+                        break;
+                    }
                 }
 
                 Some(core::mem::take(&mut self.output))
@@ -263,6 +287,11 @@ pub(crate) mod flate {
                 };
 
                 loop {
+                    // quail: a single block can expand without bound; stop past the cap.
+                    if self.output.len() > self.max_out {
+                        self.eof = true;
+                        return;
+                    }
                     let code1 = match self.get_code(&lit_code_table) {
                         Some(c) => c,
                         None => {
@@ -557,10 +586,15 @@ pub(crate) mod lzw {
     use alloc::vec::Vec;
 
     /// Decode a LZW-encoded stream.
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
+    // quail: `max_out` caps the output (LZW reaches ~2500:1).
+    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, max_out: usize) -> Option<Vec<u8>> {
         let params = PredictorParams::from_params(params);
 
-        let decoded = decode_impl(data, params.early_change)?;
+        let decoded = decode_impl(data, params.early_change, max_out)?;
+        // quail: over the cap: hand the truncated buffer back, the caller refuses it.
+        if decoded.len() > max_out {
+            return Some(decoded);
+        }
 
         apply_predictor(decoded, &params)
     }
@@ -570,7 +604,7 @@ pub(crate) mod lzw {
     const MAX_ENTRIES: usize = 4096;
     const INITIAL_SIZE: u16 = 258;
 
-    fn decode_impl(data: &[u8], early_change: bool) -> Option<Vec<u8>> {
+    fn decode_impl(data: &[u8], early_change: bool, max_out: usize) -> Option<Vec<u8>> {
         let mut table = Table::new(early_change);
         let mut bit_size = table.code_length();
         let mut reader = BitReader::new(data);
@@ -585,6 +619,10 @@ pub(crate) mod lzw {
                 }
             };
 
+            // quail: over the cap: stop; the caller sees the length and refuses.
+            if decoded.len() > max_out {
+                return Some(decoded);
+            }
             match next {
                 CLEAR_TABLE => {
                     table.clear();

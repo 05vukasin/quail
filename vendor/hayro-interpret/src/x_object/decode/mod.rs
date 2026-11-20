@@ -29,6 +29,16 @@ fn decode_context<'a>(
     obj: &ImageXObject<'a>,
     target_dimension: Option<(u32, u32)>,
 ) -> Option<DecodeContext<'a>> {
+    // quail: the sample buffers below are sized from /Width × /Height, not from the decoded
+    // data, so a 1 KB stream can ask for gigabytes. Refuse images above the file's pixel cap
+    // before anything is allocated.
+    let pixels = u64::from(obj.width()).saturating_mul(u64::from(obj.height()));
+    if pixels > obj.stream.max_image_pixels() {
+        obj.stream.note_limit_hit();
+        (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+        return None;
+    }
+
     let dict = obj.stream.dict();
     let dict_bpc = dict
         .get::<u8>(BPC)

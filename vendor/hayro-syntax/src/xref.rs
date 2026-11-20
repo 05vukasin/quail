@@ -43,7 +43,9 @@ pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefErro
     let mut xref_map = FxHashMap::default();
     let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
     let trailer =
-        populate_xref_impl(data.as_ref(), xref_pos, &mut xref_map).ok_or(XRefError::Unknown)?;
+        // quail: xref streams are charged to the file's decode budget.
+        populate_xref_impl(data.as_ref(), xref_pos, &mut xref_map, data.budget())
+            .ok_or(XRefError::Unknown)?;
 
     XRef::new(
         data.clone(),
@@ -134,7 +136,7 @@ fn fallback_xref_map_inner<'a>(
                             }
                             && let Some(stream) = old_r.read::<Stream<'_>>(&dummy_ctx)
                             && let Some(last_obj_num) = last_obj_num
-                            && let Some(obj_stream) = ObjectStream::new(&stream)
+                            && let Some(obj_stream) = ObjectStream::new(&stream, data.budget())
                         {
                             for (idx, (obj_num, offset)) in obj_stream.offsets.iter().enumerate() {
                                 if offset.is_none() {
@@ -207,7 +209,8 @@ fn fallback_xref_map_inner<'a>(
                             if let Some(stream) =
                                 reader.read_with_context::<IndirectObject<Stream<'_>>>(&dummy_ctx)
                                 && {
-                                    if let Some(object_stream) = ObjectStream::new(&stream.get())
+                                    if let Some(object_stream) =
+                                        ObjectStream::new(&stream.get(), data.budget())
                                         && let Some(obj) =
                                             object_stream.get::<Dict<'_>>(*idx, &dummy_ctx)
                                     {
@@ -508,6 +511,14 @@ impl XRef {
         }
     }
 
+    /// quail: the decode budget of the file this xref belongs to.
+    pub fn decode_budget(&self) -> Option<&crate::budget::DecodeBudget> {
+        match &self.0 {
+            Inner::Dummy => None,
+            Inner::Some(r) => r.data.get().budget(),
+        }
+    }
+
     /// Return the object with the given identifier.
     #[allow(private_bounds)]
     pub fn get<'a, T>(&'a self, id: ObjectIdentifier) -> Option<T>
@@ -736,9 +747,15 @@ impl XRefEntry {
     }
 }
 
-fn populate_xref_impl<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap) -> Option<&'a [u8]> {
+// quail: `budget` caps xref stream decoding (it runs before the xref exists).
+fn populate_xref_impl<'a>(
+    data: &'a [u8],
+    pos: usize,
+    xref_map: &mut XrefMap,
+    budget: Option<&crate::budget::DecodeBudget>,
+) -> Option<&'a [u8]> {
     let mut visited = BTreeSet::new();
-    populate_xref_impl_inner(data, pos, xref_map, &mut visited)
+    populate_xref_impl_inner(data, pos, xref_map, &mut visited, budget)
 }
 
 /// Maximum number of allowed xref `Prev` pointers before we abort.
@@ -749,6 +766,7 @@ fn populate_xref_impl_inner<'a>(
     pos: usize,
     xref_map: &mut XrefMap,
     visited: &mut BTreeSet<usize>,
+    budget: Option<&crate::budget::DecodeBudget>,
 ) -> Option<&'a [u8]> {
     if !visited.insert(pos) {
         return None;
@@ -769,9 +787,9 @@ fn populate_xref_impl_inner<'a>(
         .read_without_context::<ObjectIdentifier>()
         .is_some()
     {
-        populate_from_xref_stream(data, &mut r2, xref_map, visited)
+        populate_from_xref_stream(data, &mut r2, xref_map, visited, budget)
     } else {
-        populate_from_xref_table(data, &mut r2, xref_map, visited)
+        populate_from_xref_table(data, &mut r2, xref_map, visited, budget)
     }
 }
 
@@ -798,6 +816,7 @@ fn populate_from_xref_table<'a>(
     reader: &mut Reader<'a>,
     insert_map: &mut XrefMap,
     visited: &mut BTreeSet<usize>,
+    budget: Option<&crate::budget::DecodeBudget>,
 ) -> Option<&'a [u8]> {
     let trailer = {
         let mut reader = reader.clone();
@@ -812,13 +831,13 @@ fn populate_from_xref_table<'a>(
 
     if let Some(prev) = trailer.get::<i32>(PREV) {
         // First insert the entries from any previous xref tables.
-        populate_xref_impl_inner(data, prev as usize, insert_map, visited)?;
+        populate_xref_impl_inner(data, prev as usize, insert_map, visited, budget)?;
     }
 
     // In hybrid files, entries in `XRefStm` should have higher priority, therefore we insert them
     // after looking at `PREV`.
     if let Some(xref_stm) = trailer.get::<i32>(XREF_STM) {
-        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited)?;
+        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, budget)?;
     }
 
     while let Some(header) = reader.read_without_context::<SubsectionHeader>() {
@@ -851,6 +870,7 @@ fn populate_from_xref_stream<'a>(
     reader: &mut Reader<'a>,
     insert_map: &mut XrefMap,
     visited: &mut BTreeSet<usize>,
+    budget: Option<&crate::budget::DecodeBudget>,
 ) -> Option<&'a [u8]> {
     let stream = reader
         .read_with_context::<IndirectObject<Stream<'_>>>(&ReaderContext::dummy())?
@@ -858,7 +878,7 @@ fn populate_from_xref_stream<'a>(
 
     if let Some(prev) = stream.dict().get::<i32>(PREV) {
         // First insert the entries from any previous xref tables.
-        let _ = populate_xref_impl_inner(data, prev as usize, insert_map, visited)?;
+        let _ = populate_xref_impl_inner(data, prev as usize, insert_map, visited, budget)?;
     }
 
     let size = stream.dict().get::<u32>(SIZE)?;
@@ -869,7 +889,7 @@ fn populate_from_xref_stream<'a>(
         return None;
     }
 
-    let xref_data = stream.decoded_data().ok()?;
+    let xref_data = stream.decoded_data_with_budget(budget).ok()?;
     let mut xref_reader = Reader::new(xref_data.as_ref());
 
     if let Some(arr) = stream.dict().get::<Array<'_>>(INDEX) {
@@ -1036,8 +1056,9 @@ pub(crate) struct ObjectStream {
 }
 
 impl ObjectStream {
-    pub(crate) fn new(stream: &Stream<'_>) -> Option<Self> {
-        let data = stream.decoded_data().ok()?.into_owned();
+    // quail: `budget` is used when the stream's own context has none (xref repair).
+    pub(crate) fn new(stream: &Stream<'_>, budget: Option<&crate::budget::DecodeBudget>) -> Option<Self> {
+        let data = stream.decoded_data_with_budget(budget).ok()?.into_owned();
         let offsets = Self::read_offsets(stream, &data).unwrap_or_default();
 
         Some(Self { data, offsets })
@@ -1146,7 +1167,7 @@ mod tests {
 
         let mut xref_map = FxHashMap::default();
         let xref_pos = find_last_xref_pos(pdf.as_ref()).unwrap();
-        let _result = populate_xref_impl(pdf.as_ref(), xref_pos, &mut xref_map);
+        let _result = populate_xref_impl(pdf.as_ref(), xref_pos, &mut xref_map, None);
     }
 
     #[test]

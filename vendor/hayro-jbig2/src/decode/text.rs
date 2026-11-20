@@ -707,7 +707,7 @@ fn decode_symbol_id_huffman_table(
     }
 
     let runcode_table = HuffmanTable::build(&runcode_lines)?;
-    let mut symbol_code_lengths = Vec::with_capacity(num_symbols as usize);
+    let mut symbol_code_lengths = Vec::with_capacity(crate::bitmap::capacity_hint(num_symbols as usize)); // quail: clamped hint
 
     while symbol_code_lengths.len() < num_symbols as usize {
         let runcode = runcode_table.decode_no_oob(reader)? as u32;

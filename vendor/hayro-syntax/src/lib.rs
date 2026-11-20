@@ -88,6 +88,8 @@ pub(crate) mod pdf;
 pub(crate) mod trivia;
 pub(crate) mod util;
 
+// quail: per-file decode budget.
+pub mod budget;
 pub mod content;
 mod crypto;
 pub mod metadata;

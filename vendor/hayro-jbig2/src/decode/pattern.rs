@@ -75,7 +75,7 @@ pub(crate) fn decode(
 
     // "3) Set: GRAY = 0" (6.7.5)
     // "4) While GRAY ≤ GRAYMAX:" (6.7.5)
-    let mut patterns = Vec::with_capacity(num_patterns as usize);
+    let mut patterns = Vec::with_capacity(crate::bitmap::capacity_hint(num_patterns as usize)); // quail: clamped hint
 
     let src_stride = collective_bitmap.stride;
 

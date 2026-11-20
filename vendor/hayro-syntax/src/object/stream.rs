@@ -157,6 +157,23 @@ impl<'a> Stream<'a> {
         })
     }
 
+    /// quail: largest image, in pixels, that may be decoded from this stream (the file's
+    /// budget, or a fixed default when the stream has no document context).
+    pub fn max_image_pixels(&self) -> u64 {
+        self.dict
+            .ctx()
+            .xref()
+            .decode_budget()
+            .map_or(crate::budget::DEFAULT_MAX_IMAGE_PIXELS, |b| b.max_pixels())
+    }
+
+    /// quail: records on the file's budget that decoding this stream was refused by a limit.
+    pub fn note_limit_hit(&self) {
+        if let Some(b) = self.dict.ctx().xref().decode_budget() {
+            b.mark_limit_hit();
+        }
+    }
+
     /// Return the filters that are applied to the stream.
     pub fn filters(&self) -> SmallVec<[Filter; 2]> {
         self.filters_and_params().filters
@@ -198,6 +215,35 @@ impl<'a> Stream<'a> {
         &self,
         image_params: &ImageDecodeParams,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
+        self.decoded_image_inner(image_params, None)
+    }
+
+    /// quail: decoded data (not an image) charged to `budget` when the stream's own context
+    /// carries none (the xref is still being built, so contexts are dummies).
+    pub(crate) fn decoded_data_with_budget(
+        &self,
+        budget: Option<&crate::budget::DecodeBudget>,
+    ) -> Result<Cow<'a, [u8]>, DecodeFailure> {
+        if self.filters().iter().any(|filter| {
+            matches!(
+                filter,
+                Filter::DctDecode
+                    | Filter::JpxDecode
+                    | Filter::Jbig2Decode
+                    | Filter::CcittFaxDecode
+            )
+        }) {
+            return Err(DecodeFailure::ImageDecode);
+        }
+        self.decoded_image_inner(&ImageDecodeParams::default(), budget)
+            .map(|r| r.data)
+    }
+
+    fn decoded_image_inner(
+        &self,
+        image_params: &ImageDecodeParams,
+        fallback_budget: Option<&crate::budget::DecodeBudget>,
+    ) -> Result<FilterResult<'a>, DecodeFailure> {
         if matches!(
             self.dict.get::<Object<'_>>(F),
             Some(Object::String(_) | Object::Dict(_))
@@ -207,6 +253,9 @@ impl<'a> Stream<'a> {
 
         let data = self.raw_data();
         let filters_and_params = self.filters_and_params();
+        // quail: every layer is capped by what is left of the file's decode budget and
+        // charged to it, so the total decoded per file stays bounded.
+        let budget = self.dict.ctx().xref().decode_budget().or(fallback_budget);
 
         let mut current: Option<FilterResult<'a>> = None;
 
@@ -220,11 +269,18 @@ impl<'a> Stream<'a> {
                 continue;
             }
 
+            let limits = crate::budget::DecodeLimits::from_budget(budget);
             let new = filter.apply(
                 current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data),
                 params,
                 image_params,
+                &limits,
             )?;
+            // quail: charge the layer's output; refuse once the budget is spent.
+            let produced = new.data.len() as u64;
+            if produced > limits.max_out || budget.is_some_and(|b| !b.charge(produced)) {
+                return Err(DecodeFailure::StreamDecode);
+            }
             current = Some(new);
         }
 
