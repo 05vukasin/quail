@@ -97,4 +97,4 @@ description = "BLAKE3 of files that are near-duplicates of this one"
 keys = ["sketch.near_duplicate_of"]
 normalize = "identifier"
 multi = true
-pending = "quail-sketch #14"
+pending = "cross-file: quail-sketch emits per-file sketch.minhash / sketch.minhash_bands; matching them across files is the service's job"

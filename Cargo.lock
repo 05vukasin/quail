@@ -988,6 +988,7 @@ dependencies = [
  "quail-parties",
  "quail-refs",
  "quail-signals",
+ "quail-sketch",
  "quail-text",
  "serde",
  "serde_json",

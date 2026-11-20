@@ -564,6 +564,17 @@ fn keys_and_version() {
     if cfg!(feature = "parties") {
         expected.push("party.candidates@1");
     }
+    if cfg!(feature = "sketch") {
+        expected.extend([
+            "sketch.minhash@1",
+            "sketch.simhash_text@1",
+            "sketch.simhash_template@1",
+            "sketch.layout@1",
+            "sketch.invoice_layout@1",
+            "sketch.text_key@1",
+            "sketch.minhash_sada@1",
+        ]);
+    }
     assert_eq!(ids, expected);
     // Deterministic.
     let again: Json = serde_json::from_slice(&run(&["version", "--json"]).stdout).unwrap();

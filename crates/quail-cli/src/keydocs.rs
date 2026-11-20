@@ -494,3 +494,84 @@ pub const PARTIES: &[KeyDoc] = &[
         doc: "Lines of signature blocks naming a signatory by title or label (Int).",
     },
 ];
+
+/// Keys of `quail_sketch::keys`.
+#[cfg(feature = "sketch")]
+pub const SKETCH: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_sketch::keys::MINHASH,
+        doc: "MinHash signature of the word 3-shingles of the normalized, folded text (`Value::Bytes`, 128 rows × 4 bytes little-endian; see `crate::minhash`). Compare with `crate::jaccard_estimate`. Absent below `crate::minhash::MIN_SHINGLES` distinct shingles.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::MINHASH_BANDS,
+        doc: "LSH band keys of `MINHASH` (`Value::List` of 32 `Value::U64`, band index mixed in, so all bands can share one index). Two files sharing any key are candidates.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::MINHASH_SHINGLES,
+        doc: "Distinct word 3-shingles behind `MINHASH` (`Value::Int`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SIMHASH_TEXT,
+        doc: "64-bit SimHash of the weighted word 3-shingles (`Value::U64`). Compare with `crate::hamming`.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SIMHASH_TEMPLATE,
+        doc: "64-bit SimHash of the entity-masked words: numbers, dates, amounts, codes, names, URLs and e-mail addresses replaced by their class (`Value::U64`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::LAYOUT,
+        doc: "64-bit SimHash of the page geometry: quantized block boxes, kinds and zones of the first pages (`Value::U64`). Only for documents with block boxes (PDF).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::LAYOUT_BLOCKS,
+        doc: "Blocks with a box that went into `LAYOUT` (`Value::Int`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::STRUCTURE,
+        doc: "64-bit SimHash of the block-kind sequence: headings and levels, lists, tables and their shape, paragraph runs (`Value::U64`). Any format with blocks.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::HEADINGS,
+        doc: "Digest of the heading skeleton (heading texts, numbering stripped, lowercased), the `structural_fp` of `crate::sada` as a big-endian integer (`Value::U64`). Compare for equality. Absent with fewer than two headings.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::INVOICE_LAYOUT,
+        doc: "Invoice layout digest: which of 16 invoice labels occur, plus the shapes of invoice-number-like codes (`Value::U64`, see `crate::invoice`). Compare for equality.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::INVOICE_LABELS,
+        doc: "Invoice labels found (`Value::Int`, 1..=16).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::INVOICE_NUMBER_PATTERNS,
+        doc: "Distinct invoice-number shapes found (`Value::Int`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::TEXT_KEY,
+        doc: "XXH3-128 of the folded words joined by one space (`Value::Bytes`, 16 bytes): the same words, whatever the bytes, spacing, case, diacritics or script. Absent below 400 characters.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SADA_MINHASH,
+        doc: "Python-compatible version signature (`Value::Bytes`, 128 rows × 8 bytes little-endian), see `crate::sada`.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SADA_MINHASH_BANDS,
+        doc: "Python-compatible LSH bucket keys of `SADA_MINHASH` (`Value::List` of 32 `Value::Text`, `\"<band>:<16 hex>\"`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SADA_SHINGLES,
+        doc: "Distinct shingles behind `SADA_MINHASH` (`Value::Int`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SADA_TEMPLATE,
+        doc: "Python-compatible template SimHash of the entity-masked words (`Value::U64`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::PAGE_PHASH,
+        doc: "64-bit DCT pHash per scanned page (`Value::List` of `Value::U64`), aligned with `PAGE_PHASH_PAGES`.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::PAGE_PHASH_PAGES,
+        doc: "Zero-based page indices of `PAGE_PHASH` (`Value::List` of `Value::Int`).",
+    },
+];

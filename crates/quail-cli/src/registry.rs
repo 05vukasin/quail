@@ -102,6 +102,57 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "Company mentions with roles and defined terms, ranked candidates, name statements.",
     },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::MinHashAnalyzer::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "MinHash of word 3-shingles with 32 LSH band keys.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::SimHashText::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "64-bit SimHash of weighted word 3-shingles.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::SimHashTemplate::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "64-bit SimHash of entity-masked words (same template, other values).",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::LayoutAnalyzer::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Page-geometry and block-structure SimHashes, heading skeleton digest.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::InvoiceLayout::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Invoice labels and number-pattern digest.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::TextKey::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "128-bit key of the folded words (same words whatever the bytes).",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::SadaMinHash::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Byte-compatible port of the reference service's MinHash and template sketches.",
+    },
+    // TODO(quail-pdf #7): `sketch.page_phash@1` needs the `raster` artifact, which only the
+    // PDF extractor provides; register it (StepDoc + builder) with `all(sketch, pdf)`.
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
@@ -128,6 +179,16 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     let b = b.analyzer(Box::new(quail_refs::RefAnalyzer::new()));
     #[cfg(feature = "parties")]
     let b = b.analyzer(Box::new(quail_parties::PartyCandidates));
+    // `sketch.minhash_sada@1` is Standard: the engine leaves it out under `Profile::Fast`.
+    #[cfg(feature = "sketch")]
+    let b = b
+        .analyzer(Box::new(quail_sketch::MinHashAnalyzer))
+        .analyzer(Box::new(quail_sketch::SimHashText))
+        .analyzer(Box::new(quail_sketch::SimHashTemplate))
+        .analyzer(Box::new(quail_sketch::LayoutAnalyzer))
+        .analyzer(Box::new(quail_sketch::InvoiceLayout))
+        .analyzer(Box::new(quail_sketch::TextKey))
+        .analyzer(Box::new(quail_sketch::SadaMinHash));
     b
 }
 
@@ -149,6 +210,8 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     v.push(("quail-refs", keydocs::REFS));
     #[cfg(feature = "parties")]
     v.push(("quail-parties", keydocs::PARTIES));
+    #[cfg(feature = "sketch")]
+    v.push(("quail-sketch", keydocs::SKETCH));
     v
 }
 
@@ -177,6 +240,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The Standard sketch runs under the default profile and is inactive under Fast.
+    #[test]
+    #[cfg(feature = "sketch")]
+    fn standard_sketches_follow_the_profile() {
+        let standard = [quail_sketch::SadaMinHash::ID];
+        let fast = builder(Profile::Fast, Limits::default()).build().unwrap();
+        let std_ = builder(Profile::Standard, Limits::default())
+            .build()
+            .unwrap();
+        for id in standard {
+            assert!(fast.inactive().contains(&id), "{id} active under fast");
+            assert!(!fast.plan().any(|x| x == id));
+            assert!(
+                std_.plan().any(|x| x == id),
+                "{id} not planned under standard"
+            );
+        }
+        assert!(fast.plan().any(|x| x == quail_sketch::MinHashAnalyzer::ID));
     }
 
     /// Every key the evaluation task map reads exists in this build, unless the task is
@@ -226,6 +309,8 @@ mod tests {
             ("quail-refs", "quail-refs/src/lib.rs"),
             #[cfg(feature = "parties")]
             ("quail-parties", "quail-parties/src/lib.rs"),
+            #[cfg(feature = "sketch")]
+            ("quail-sketch", "quail-sketch/src/lib.rs"),
         ];
         let tables = key_tables();
         for (krate, file) in sources {

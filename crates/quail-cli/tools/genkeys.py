@@ -17,6 +17,7 @@ SPECS = [
     ("SIGNALS", "quail_signals::keys", "quail-signals/src/lib.rs", "keys", "signals"),
     ("REFS", "quail_refs::keys", "quail-refs/src/lib.rs", "keys", "refs"),
     ("PARTIES", "quail_parties::keys", "quail-parties/src/lib.rs", "keys", "parties"),
+    ("SKETCH", "quail_sketch::keys", "quail-sketch/src/lib.rs", "keys", "sketch"),
 ]
 
 HEADER = '''//! One-line docs of every fact key, per crate, for `quail keys`.

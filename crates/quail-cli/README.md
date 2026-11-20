@@ -39,7 +39,7 @@ quail scan /data | head -3
 | `--max-in-flight N`, `--max-in-flight-bytes SIZE` | memory bound between source and sink (default 2 × threads, 1G) |
 | `--ordered` | records in source order |
 | `--include GLOB`, `--exclude GLOB`, `--ext a,b`, `--skip-hidden`, `--sorted`, `--follow-symlinks` | walk filters (`quail-io`'s `FsSource`) |
-| `--max-bytes SIZE`, `--max-pages N`, `--timeout DUR` | per-file `Limits` overrides |
+| `--max-bytes SIZE`, `--max-decompressed SIZE`, `--max-pages N`, `--timeout DUR` | per-file `Limits` overrides |
 | `-q, --quiet` / `--json-stats` | no stderr output / final stats as one JSON object |
 
 Behaviour:
@@ -113,6 +113,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `signals` (default) | quail-signals | `signal.scan@1` |
 | `refs` (default) | quail-refs | `ref.references@1` |
 | `parties` (default) | quail-parties | `party.candidates@1` |
+| `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); `sketch.page_phash@1` needs the PDF raster, wired with `pdf` |
 | `zstd` | (quail-io) | `--zstd` output |
 
 Key docs (`src/keydocs.rs`) are generated from each crate's `keys` module by
