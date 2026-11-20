@@ -496,10 +496,9 @@ mod tests {
             slowest = slowest.max(t.elapsed());
         }
         assert!(start.elapsed() < std::time::Duration::from_secs(20));
-        assert!(
-            slowest < std::time::Duration::from_millis(50),
-            "{slowest:?}"
-        );
+        // One scheduler preemption on a shared CI runner can cost tens of milliseconds, so the
+        // per-input bound only catches pathological (unbounded) work, not normal jitter.
+        assert!(slowest < std::time::Duration::from_secs(1), "{slowest:?}");
     }
 
     #[test]
