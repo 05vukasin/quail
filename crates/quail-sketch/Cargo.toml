@@ -1,0 +1,27 @@
+[package]
+name = "quail-sketch"
+description = "Per-file similarity sketches: MinHash + LSH bands, text and template SimHash, layout and structure sketches, page pHash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+quail-text = { path = "../quail-text" }
+# Exact versions: these decide stored sketch values (see README, "Stability").
+xxhash-rust = { version = "=0.8.21", features = ["xxh3"] }
+blake2b_simd = { version = "=1.0.5", default-features = false, features = ["std"] }
+regex = { version = "=1.13.2", default-features = false, features = ["std", "perf", "unicode"] }
+fancy-regex = { version = "=0.16.2", default-features = false, features = ["std", "unicode", "perf"] }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "sketch"
+harness = false
+
+[lints]
+workspace = true
