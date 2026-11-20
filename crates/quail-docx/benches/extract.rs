@@ -75,8 +75,14 @@ fn bench(c: &mut Criterion) {
     let limits = Limits::default();
     let mut g = c.benchmark_group("docx_extract");
     for (name, articles) in [("contract_20", 20), ("contract_500", 500)] {
-        let blob = Blob::from(contract(articles));
-        g.throughput(Throughput::Bytes(blob.len() as u64));
+        let bytes = contract(articles);
+        // Throughput in inflated (XML) bytes: what the parser actually reads.
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let inflated: u64 = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().size())
+            .sum();
+        let blob = Blob::from(bytes);
+        g.throughput(Throughput::Bytes(inflated));
         g.bench_function(name, |b| {
             b.iter(|| {
                 let mut out = Emitter::new(quail_docx::ID);
