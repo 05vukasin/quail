@@ -9,6 +9,18 @@ rust-version.workspace = true
 
 [dependencies]
 quail-core.workspace = true
+# `pure`: Rust intrinsics instead of assembly, so the build needs no C toolchain. SIMD
+# (SSE4.1/AVX2 on x86_64, NEON on aarch64) is still selected at runtime.
+blake3 = { version = "1.8", default-features = false, features = ["std", "pure"] }
+fastcdc = { version = "5.0", default-features = false }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "identity"
+harness = false
 
 [lints]
 workspace = true
