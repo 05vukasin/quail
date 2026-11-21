@@ -322,3 +322,89 @@ fn empty_scan_still_gets_a_card_and_a_sentence() {
     );
     assert!(!out.iter().any(|f| f.key == keys::SUBJECT));
 }
+
+fn contract_facts(expiry: Value) -> Vec<Fact> {
+    vec![
+        fact("engine.format", text("pdf"), 1.0),
+        fact("text.lang", text("en"), 0.98),
+        fact("ref.instrument_kind", text("contract"), 0.9),
+        fact("ref.title", text("SUPPLY AGREEMENT"), 0.9),
+        fact(
+            "party.candidates",
+            Value::List(vec![
+                candidate("Northwind Foods Inc.", 0.9, &["customer"]),
+                candidate("II, LLC", 0.8, &["supplier"]),
+                candidate("Blue River Mills LLC", 0.7, &["supplier"]),
+            ]),
+            0.9,
+        ),
+        fact("signal.date_effective", date(2020, 3, 1), 0.8),
+        fact("signal.date_expiry", expiry, 0.6),
+    ]
+}
+
+const SUPPLY_TEXT: &str = "SUPPLY AGREEMENT\n\
+This Supply Agreement is made between Northwind Foods Inc. and Blue River Mills LLC.\n\
+WITNESSETH:\n\
+WHEREAS, Blue River Mills LLC operates flour mills in the northern region; and\n\
+WHEREAS, Northwind Foods Inc. desires to purchase milled flour from Blue River Mills LLC for its \
+bakeries, and Blue River Mills LLC wishes to supply it on the terms of this Agreement.\n\
+NOW, THEREFORE, in consideration of the mutual covenants herein, the parties agree as follows:\n\
+1. Definitions. \"Products\" means the flour listed in Exhibit A.\n\
+2. Notices. All notices shall be in writing and delivered to the addresses above.\n";
+
+#[test]
+fn the_purpose_recital_is_the_subject() {
+    let facts = contract_facts(date(2023, 2, 28));
+    let out = run(&SummaryExtractive, &facts, doc(&[SUPPLY_TEXT]));
+    let subject = get(&out, &keys::SUBJECT);
+    assert_eq!(
+        subject.field("method").and_then(Value::as_text),
+        Some("recital")
+    );
+    assert_eq!(
+        subject.field("text").and_then(Value::as_text),
+        Some(
+            "Northwind Foods Inc. desires to purchase milled flour from Blue River Mills LLC for \
+             its bakeries, and Blue River Mills LLC wishes to supply it on the terms of this \
+             Agreement."
+        )
+    );
+    let s = get(&out, &keys::EXTRACTIVE).as_text().unwrap();
+    // A name cut at its start is no party.
+    assert!(!s.contains("II, LLC"), "{s}");
+    assert!(s.contains("expiring 2023-02-28"), "{s}");
+}
+
+#[test]
+fn the_first_operative_clause_follows_now_therefore() {
+    let facts = contract_facts(date(2023, 2, 28));
+    let t = "SUPPLY AGREEMENT\nThis Supply Agreement is made between Northwind Foods Inc. and \
+             Blue River Mills LLC.\nNOW, THEREFORE, the parties agree as follows:\n\
+             1. Definitions. \"Products\" means the flour listed in Exhibit A.\n\
+             2. SUPPLY. Blue River Mills LLC shall supply the Products to the bakeries of \
+             Northwind Foods Inc. in the quantities set out in each purchase order.\n\
+             3. Notices. All notices shall be in writing.\n";
+    let out = run(&SummaryExtractive, &facts, doc(&[t]));
+    let subject = get(&out, &keys::SUBJECT);
+    assert_eq!(
+        subject.field("method").and_then(Value::as_text),
+        Some("operative")
+    );
+    assert_eq!(
+        subject.field("text").and_then(Value::as_text),
+        Some(
+            "Blue River Mills LLC shall supply the Products to the bakeries of Northwind Foods \
+             Inc. in the quantities set out in each purchase order."
+        )
+    );
+}
+
+#[test]
+fn an_expiry_before_the_effective_date_is_dropped() {
+    let facts = contract_facts(date(2019, 9, 30));
+    let out = run(&SummaryExtractive, &facts, doc(&[SUPPLY_TEXT]));
+    let s = get(&out, &keys::EXTRACTIVE).as_text().unwrap();
+    assert!(s.contains("effective 2020-03-01"), "{s}");
+    assert!(!s.contains("expiring"), "{s}");
+}

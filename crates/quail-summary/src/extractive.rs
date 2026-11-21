@@ -5,14 +5,18 @@
 //!   114/23 between X (supplier) and Y (customer), signed 2023-09-12, total EUR 4,200.00."
 //!   English words, card values verbatim.
 //! - [`subject`]: the first sentence of the subject clause ("Subject of the Agreement",
-//!   "Purpose", "Scope of Work", "Article 1", "Predmet ugovora", "Član 1", in Latin or
-//!   Cyrillic), else the top sentence of a `TextRank` over the first pages.
+//!   "Purpose", "Scope of Work", "Predmet ugovora", in Latin or Cyrillic), else the recital
+//!   that states why the parties contract ("WHEREAS, … desires to …"), else the first
+//!   operative clause after "NOW, THEREFORE … agree as follows", else a weak heading
+//!   ("Article 1", "Član 1"), else the top sentence of a `TextRank` over the first pages with
+//!   boilerplate ranked down.
 //! - [`summary`]: both, bounded. A non-English subject sentence is quoted in its original
 //!   language and marked with the language code.
 
 use std::fmt::Write as _;
 
 use quail_core::{Document, TextSource};
+use quail_text::NormalizedText;
 use quail_text::fold::{FoldOptions, fold};
 use quail_text::normalize::{NormalizeOptions, normalize};
 
@@ -35,15 +39,21 @@ pub const MAX_RANKED: usize = 150;
 pub enum SubjectMethod {
     /// Under a subject / purpose / scope heading or label.
     Clause,
+    /// The recital stating why the parties contract (`WHEREAS, … desires to …`).
+    Recital,
+    /// The first operative clause after `NOW, THEREFORE … agree as follows`.
+    Operative,
     /// Top sentence of `TextRank` over the first pages.
     TextRank,
 }
 
 impl SubjectMethod {
-    /// `clause` or `textrank`.
+    /// `clause`, `recital`, `operative` or `textrank`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Clause => "clause",
+            Self::Recital => "recital",
+            Self::Operative => "operative",
             Self::TextRank => "textrank",
         }
     }
@@ -96,6 +106,13 @@ const LABELS: &[(&str, u8)] = &[
     ("svrha", 2),
     ("opis usluga", 2),
     ("obim usluga", 2),
+    ("appointment", 2),
+    ("engagement", 2),
+    ("grant of license", 2),
+    ("grant of licenses", 2),
+    ("license grant", 2),
+    ("grant of rights", 2),
+    ("services", 2),
     ("background", 1),
 ];
 
@@ -389,14 +406,23 @@ pub fn kind_name(kind: &str) -> &str {
 /// The first pages of `doc`, normalized, as `(page index, text)`, at most [`MAX_PAGES`] pages
 /// and [`MAX_BYTES`] bytes.
 pub fn head_pages(doc: &Document) -> Vec<(u32, String)> {
+    head_pages_with(doc, None)
+}
+
+/// [`head_pages`], taking each page from the shared `normalized_text` artifact of
+/// `text.stats` when it holds that whole page (same text, normalized once per file).
+pub fn head_pages_with(doc: &Document, shared: Option<&NormalizedText>) -> Vec<(u32, String)> {
     let opts = NormalizeOptions::default();
     let mut out = Vec::new();
     let mut bytes = 0;
-    for p in doc.pages.iter().take(MAX_PAGES) {
+    for (pos, p) in doc.pages.iter().enumerate().take(MAX_PAGES) {
         if p.text_source == TextSource::None && p.text.trim().is_empty() {
             continue;
         }
-        let mut t = normalize(&p.text, &opts).into_owned();
+        let mut t = match shared.and_then(|n| n.page(pos, &p.text)) {
+            Some(n) => n.text().to_owned(),
+            None => normalize(&p.text, &opts).into_owned(),
+        };
         if bytes + t.len() > MAX_BYTES {
             let mut end = MAX_BYTES.saturating_sub(bytes);
             while end > 0 && !t.is_char_boundary(end) {
@@ -413,9 +439,21 @@ pub fn head_pages(doc: &Document) -> Vec<(u32, String)> {
     out
 }
 
-/// The document's subject sentence: a subject clause, else the `TextRank` top sentence.
+/// The document's subject sentence, in this order: a subject, purpose or scope clause; the
+/// recital that states why the parties contract (`WHEREAS, the Company wishes to …`, the
+/// last one first); the first operative clause after `NOW, THEREFORE … agree as follows`;
+/// a weak clause heading (`Background`, `Article 1`); else the `TextRank` top sentence, with
+/// boilerplate (notices, counterparts, governing law, severability, entire agreement)
+/// ranked down.
 pub fn subject(pages: &[(u32, String)]) -> Option<Subject> {
-    clause(pages).or_else(|| textrank(pages))
+    let clause = clause(pages);
+    if let Some(c) = clause.as_ref().filter(|c| c.strength >= 2) {
+        return Some(c.subject.clone());
+    }
+    recital(pages)
+        .or_else(|| operative(pages))
+        .or_else(|| clause.map(|c| c.subject))
+        .or_else(|| textrank(pages))
 }
 
 /// Kinds whose summary is the template sentence alone.
@@ -510,7 +548,13 @@ fn ends_clause(line: &str) -> bool {
     numbered && ws.len() <= 8 && !line.trim_end().ends_with(['.', ',', ';'])
 }
 
-fn clause(pages: &[(u32, String)]) -> Option<Subject> {
+/// A clause subject and the strength of its heading.
+struct Found {
+    subject: Subject,
+    strength: u8,
+}
+
+fn clause(pages: &[(u32, String)]) -> Option<Found> {
     let mut best: Option<(u8, Subject)> = None;
     for (page, text) in pages {
         let lines: Vec<&str> = text.lines().collect();
@@ -563,6 +607,9 @@ fn clause(pages: &[(u32, String)]) -> Option<Subject> {
             let Some(sentence) = first_sentence(&content) else {
                 continue;
             };
+            if boilerplate(&sentence) || fragment(&sentence) {
+                continue;
+            }
             best = Some((
                 strength,
                 Subject {
@@ -573,11 +620,14 @@ fn clause(pages: &[(u32, String)]) -> Option<Subject> {
                 },
             ));
             if strength >= 3 {
-                return best.map(|(_, s)| s);
+                break;
             }
         }
+        if best.as_ref().is_some_and(|(s, _)| *s >= 3) {
+            break;
+        }
     }
-    best.map(|(_, s)| s)
+    best.map(|(strength, subject)| Found { subject, strength })
 }
 
 /// The first full sentence of `text` with at least four words, at most
@@ -717,6 +767,12 @@ fn is_definition(s: &str) -> bool {
         " terms defined ",
         " for the purposes of this ",
         " for purposes of this ",
+        " as used in this ",
+        " as used herein ",
+        " indicates that ",
+        " shall not include ",
+        " shall include ",
+        " defined term",
     ]
     .iter()
     .any(|d| f.contains(d))
@@ -789,6 +845,243 @@ fn strip_enumerator(s: &str) -> String {
     ws.join(" ")
 }
 
+/// Folded cue words of a recital that states why the parties contract.
+const INTENT: &[&str] = &[
+    "desire", "desires", "desirous", "wish", "wishes", "intend", "intends", "willing", "agree",
+    "agrees", "propose", "proposes", "seek", "seeks", "want", "wants",
+];
+
+/// The text of the first pages as one line.
+fn joined(pages: &[(u32, String)]) -> Vec<(u32, String)> {
+    pages
+        .iter()
+        .map(|(p, t)| (*p, one_line(&t.replace('\n', " "))))
+        .collect()
+}
+
+/// `NOW, THEREFORE`, `NOW THEREFORE`, `IT IS AGREED`, `agree as follows`: where the operative
+/// part starts.
+fn operative_start(t: &str) -> Option<usize> {
+    [
+        "NOW, THEREFORE",
+        "NOW THEREFORE",
+        "Now, therefore",
+        "Now, Therefore",
+        "THEREFORE, in consideration",
+        "Therefore, in consideration",
+        "IN CONSIDERATION OF",
+        "In consideration of the mutual",
+        "IT IS AGREED",
+        "It is agreed",
+    ]
+    .iter()
+    .filter_map(|m| t.find(m))
+    .min()
+}
+
+/// The recital that states why the parties contract: of the `WHEREAS` recitals before the
+/// operative part, the last one with an intent word (`desires to`, `wishes to`), else none.
+/// A sentence `The Company wishes to …` outside recitals counts too.
+fn recital(pages: &[(u32, String)]) -> Option<Subject> {
+    for (page, t) in joined(pages) {
+        let end = operative_start(&t).unwrap_or(t.len());
+        let head = &t[..end];
+        let starts: Vec<usize> = head
+            .match_indices("WHEREAS")
+            .chain(head.match_indices("Whereas"))
+            .map(|(i, _)| i)
+            .collect();
+        let mut starts = starts;
+        starts.sort_unstable();
+        let mut best: Option<String> = None;
+        for (n, &a) in starts.iter().enumerate() {
+            let b = starts.get(n + 1).copied().unwrap_or(end);
+            let body = head[a..b]
+                .trim_start_matches(|c: char| c.is_alphabetic())
+                .trim_start_matches([',', ':', ' '])
+                .trim_end()
+                .trim_end_matches(|c: char| c == ';' || c == ',' || c.is_whitespace())
+                .trim_end_matches(" and")
+                .trim_end_matches([';', ',', ' ']);
+            let ws = words_of(body);
+            let n_words = body.split_whitespace().count();
+            if n_words >= 6 && ws.iter().any(|w| INTENT.contains(&w.as_str())) {
+                best = Some(body.to_owned());
+            }
+        }
+        if starts.is_empty() {
+            // `The Company wishes to engage …` stated in prose.
+            best = sentences(head).into_iter().find(|s| {
+                let f = format!(" {} ", words_of(s).join(" "));
+                (f.contains(" wishes to ")
+                    || f.contains(" desires to ")
+                    || f.contains(" desire to "))
+                    && rankable(s)
+            });
+        }
+        if let Some(b) = best {
+            // Its first sentence, without a recital letter (`E. The Parties desire …`).
+            let first = sentences(&b).into_iter().next().unwrap_or(b);
+            let first = strip_recital_letter(&strip_enumerator(&first));
+            let text = capitalize(&limit_words(&first, MAX_SUBJECT_WORDS));
+            return Some(Subject {
+                text,
+                page,
+                method: SubjectMethod::Recital,
+                label: Some("whereas"),
+            });
+        }
+    }
+    None
+}
+
+/// `E. The Parties …`, `(B) Company …`: drops a recital letter.
+fn strip_recital_letter(s: &str) -> String {
+    let mut ws = s.split_whitespace();
+    match ws.next() {
+        Some(w)
+            if w.len() <= 4
+                && w.trim_matches(|c: char| matches!(c, '(' | ')' | '.'))
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase())
+                && (w.ends_with('.') || w.ends_with(')')) =>
+        {
+            ws.collect::<Vec<_>>().join(" ")
+        }
+        _ => s.to_owned(),
+    }
+}
+
+/// The first operative clause after `NOW, THEREFORE … agree as follows:`: the first sentence
+/// that is no heading, definition, list fragment or boilerplate.
+fn operative(pages: &[(u32, String)]) -> Option<Subject> {
+    let all = joined(pages);
+    for (i, (page, t)) in all.iter().enumerate() {
+        let Some(at) = operative_start(t) else {
+            continue;
+        };
+        // From the end of `… as follows:` (or of the `NOW, THEREFORE` sentence).
+        let rest = &t[at..];
+        let from = rest
+            .find("follows:")
+            .map(|k| k + "follows:".len())
+            .or_else(|| rest.find("follows").map(|k| k + "follows".len()))
+            .or_else(|| rest.find(':').map(|k| k + 1))
+            .unwrap_or(0);
+        let mut tail = rest[from..].to_owned();
+        for (_, next) in all.iter().skip(i + 1) {
+            if tail.len() > 6000 {
+                break;
+            }
+            tail.push(' ');
+            tail.push_str(next);
+        }
+        for (seen, sent) in sentences(&tail).into_iter().enumerate() {
+            if seen >= 25 {
+                break;
+            }
+            let sent = strip_heading(&strip_enumerator(&sent));
+            // `"Products" means …`, `A "Link" indicates …`: a definition list.
+            let quoted_term = sent
+                .split_whitespace()
+                .take(3)
+                .any(|w| w.starts_with(['"', '“']));
+            if rankable(&sent) && !boilerplate(&sent) && !fragment(&sent) && !quoted_term {
+                return Some(Subject {
+                    text: limit_words(&sent, MAX_SUBJECT_WORDS),
+                    page: *page,
+                    method: SubjectMethod::Operative,
+                    label: Some("now therefore"),
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Drops a run-in heading: `Appointment. Company appoints …` → `Company appoints …`,
+/// `DEFINITIONS 1.1 …`.
+fn strip_heading(s: &str) -> String {
+    let ws: Vec<&str> = s.split_whitespace().collect();
+    // `Owner's Duties and Warranties 2.1 The Owner shall …`: a heading before a clause number.
+    if let Some(k) = ws.iter().take(7).position(|w| {
+        let b = w.trim_end_matches('.');
+        b.contains('.') && b.chars().all(|c| c.is_ascii_digit() || c == '.')
+    }) && k > 0
+        && k + 1 < ws.len()
+    {
+        return ws[k + 1..].join(" ");
+    }
+    // Leading words in capitals (`GRANT OF LICENSE`).
+    let caps = ws
+        .iter()
+        .take_while(|w| {
+            let l: Vec<char> = w.chars().filter(|c| c.is_alphabetic()).collect();
+            l.len() >= 2 && l.iter().all(|c| c.is_uppercase())
+        })
+        .count();
+    if caps >= 1 && caps < ws.len() && caps <= 6 {
+        return strip_enumerator(&ws[caps..].join(" "));
+    }
+    s.to_owned()
+}
+
+/// A list item cut out of its sentence: it opens in lower case or with `(xi)`, `or`, `and`.
+fn fragment(s: &str) -> bool {
+    let t = s.trim_start_matches(['"', '“', '(', ' ']);
+    t.starts_with(|c: char| c.is_lowercase())
+        || s.trim_start().starts_with('(')
+        || matches!(s.split_whitespace().next(), Some("or" | "and" | "provided"))
+}
+
+/// Folded phrases of clauses that say nothing about what the document is about.
+const BOILERPLATE_CLAUSES: &[&str] = &[
+    "notice",
+    "notices",
+    "counterpart",
+    "counterparts",
+    "governing law",
+    "governed by",
+    "construed in accordance",
+    "severab",
+    "invalid or unenforceable",
+    "entire agreement",
+    "entire understanding",
+    "supersedes all prior",
+    "excluded information",
+    "competitive harm",
+    "confidential treatment",
+    "omitted",
+    "waiver",
+    "force majeure",
+    "headings",
+    "now therefore",
+    "witnesseth",
+    "in witness whereof",
+    "receipt and sufficiency",
+    "good and valuable consideration",
+    "arbitration",
+    "exclusive jurisdiction",
+    "assignment",
+    "may not assign",
+    "binding upon",
+    "successors and assigns",
+    "facsimile",
+    "electronic signature",
+    "registrant",
+    "indemnif",
+    "hold harmless",
+];
+
+/// A boilerplate clause: notices, counterparts, governing law, severability, entire
+/// agreement, redaction notes and the like.
+fn boilerplate(s: &str) -> bool {
+    let f = format!(" {} ", words_of(s).join(" "));
+    BOILERPLATE_CLAUSES
+        .iter()
+        .any(|b| f.contains(&format!(" {b}")))
+}
+
 fn textrank(pages: &[(u32, String)]) -> Option<Subject> {
     let mut cands: Vec<(u32, String, Vec<String>)> = Vec::new();
     'pages: for (page, text) in pages {
@@ -843,7 +1136,14 @@ fn textrank(pages: &[(u32, String)]) -> Option<Subject> {
         let raw: Vec<f64> = (0..n)
             .map(|i| {
                 let cue = if has_cue(&cands[i].1) { 3.0 } else { 1.0 };
-                cue / (1.0 + i as f64 / 8.0)
+                // Boilerplate and list fragments are ranked down, not out: a document of
+                // nothing else still gets a sentence.
+                let penalty = if boilerplate(&cands[i].1) || fragment(&cands[i].1) {
+                    0.05
+                } else {
+                    1.0
+                };
+                cue * penalty / (1.0 + i as f64 / 8.0)
             })
             .collect();
         let s: f64 = raw.iter().sum();
@@ -864,7 +1164,14 @@ fn textrank(pages: &[(u32, String)]) -> Option<Subject> {
         }
         score = next;
     }
-    let best = (0..n).max_by(|&a, &b| score[a].total_cmp(&score[b]).then(b.cmp(&a)))?;
+    // The best sentence that is no boilerplate or fragment, if there is one.
+    let clean = |i: usize| !boilerplate(&cands[i].1) && !fragment(&cands[i].1);
+    let pick = |ok: &dyn Fn(usize) -> bool| {
+        (0..n)
+            .filter(|&i| ok(i))
+            .max_by(|&a, &b| score[a].total_cmp(&score[b]).then(b.cmp(&a)))
+    };
+    let best = pick(&clean).or_else(|| pick(&|_| true))?;
     let (page, s, _) = &cands[best];
     Some(Subject {
         text: limit_words(s, MAX_SUBJECT_WORDS),
