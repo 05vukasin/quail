@@ -66,6 +66,11 @@ pub struct TaskSpec {
     /// Pending tasks are still scored (as abstentions) and flagged in the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<String>,
+    /// Gold labels are rows (`match = "row"`, an object value) and predictions are the
+    /// record values of `keys`, matched one to one by [`crate::items`] (price, page and
+    /// description); `normalize`, `field`, `only`, `except` and `aliases` do not apply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows: bool,
     /// What the task is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -162,6 +167,8 @@ mod tests {
         assert_eq!(m.get("party").unwrap().field.as_deref(), Some("surface"));
         assert!(m.get("party").unwrap().pending.is_none());
         assert!(m.get("term").unwrap().pending.is_some());
+        assert!(m.get("items").unwrap().rows);
+        assert!(!m.get("party").unwrap().rows);
     }
 
     #[test]

@@ -157,3 +157,12 @@ keys = ["sketch.near_duplicate_of"]
 normalize = "identifier"
 multi = true
 pending = "cross-file: quail-sketch emits per-file sketch.minhash / sketch.minhash_bands; matching them across files is the service's job"
+
+[task.items]
+description = "Price lines: description, quantity, unit, unit price, total, currency, CPV"
+# Gold rows (`match = "row"`) matched one to one with `item.line` records by page, price
+# within 0.5 % and description token Jaccard >= 0.3; field accuracy and CPV hit@3 on the
+# matched pairs (see src/items.rs).
+keys = ["item.line"]
+rows = true
+multi = true

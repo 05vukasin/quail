@@ -76,6 +76,8 @@ pub fn label_matches(label: &Label, norm: Normalizer, pred: &str) -> bool {
             (Some(g), Some(p)) => (g - p).abs() <= label.tol.unwrap_or(0.01) + 1e-9,
             _ => false,
         },
+        // Rows are matched by `crate::items`, never as values.
+        MatchMode::Row => false,
     })
 }
 

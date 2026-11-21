@@ -21,6 +21,7 @@ pub mod adapters;
 pub mod compare;
 pub mod gold;
 pub mod inspect;
+pub mod items;
 pub mod normalize;
 pub mod records;
 pub mod report;

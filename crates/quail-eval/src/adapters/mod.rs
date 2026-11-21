@@ -13,9 +13,11 @@ use crate::{Error, Result};
 
 pub mod cuad;
 pub mod kleister;
+pub mod realkie;
 
 pub use cuad::Cuad;
 pub use kleister::KleisterNda;
+pub use realkie::RealkieFcc;
 
 /// Options shared by adapters.
 #[derive(Clone, Debug)]
@@ -65,7 +67,7 @@ pub trait GoldAdapter {
 
 /// Every built-in adapter.
 pub fn all() -> Vec<Box<dyn GoldAdapter>> {
-    vec![Box::new(KleisterNda), Box::new(Cuad)]
+    vec![Box::new(KleisterNda), Box::new(Cuad), Box::new(RealkieFcc)]
 }
 
 /// The adapter called `name`.
