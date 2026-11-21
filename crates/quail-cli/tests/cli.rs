@@ -596,7 +596,7 @@ fn keys_and_version() {
         ]);
     }
     if cfg!(all(feature = "sketch", feature = "pdf")) {
-        expected.push("sketch.page_phash@2");
+        expected.push("sketch.page_phash@3");
     }
     if cfg!(feature = "items") {
         expected.push("item.lines@4");

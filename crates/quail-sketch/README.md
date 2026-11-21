@@ -23,7 +23,7 @@ All require the `document` artifact.
 | `sketch.invoice_layout@2` | Fast | `sketch.invoice_layout`, `sketch.invoice_labels`, `sketch.invoice_number_patterns` | U64, Int, Int | equality | gate on `invoice_labels` ≥ 4 to treat the file as an invoice |
 | `sketch.text_key@2` | Fast | `sketch.text_key` | Bytes, 16 (XXH3-128) | equality | same words (≥ 400 chars) |
 | `sketch.minhash_sada@2` | Standard only (backtracking regexes, see Limits) | `sketch.sada_minhash`, `sketch.sada_minhash_bands`, `sketch.sada_shingles`, `sketch.sada_template` | Bytes 128 × u64 LE, List of Text, Int, U64 | as the Python service | see below |
-| `sketch.page_phash@2` | Standard (needs `raster`) | `sketch.page_phash`, `sketch.page_phash_pages` | List of U64, List of Int | `hamming` per page | ≤ 8 per page, all pages, equal counts |
+| `sketch.page_phash@3` | Standard (needs `raster`) | `sketch.page_phash`, `sketch.page_phash_pages` | List of U64, List of Int | `hamming` per page | ≤ 8 per page, all pages, equal counts |
 
 Pure helpers: `hamming(a, b)`, `jaccard_estimate(sig_a, sig_b)` (works on both signature
 layouts), `minhash::band_collision_probability(j)`, and every sketch as a function
@@ -73,9 +73,12 @@ layouts), `minhash::band_collision_probability(j)`, and every sketch as a functi
   rest). **Structure** = SimHash-64 of block-kind symbols (heading levels, list, table shape,
   paragraph runs) and their 3-grams; needs two block kinds, so all-paragraph PDFs get none.
 - **pHash** = 32 × 32 box-filtered gray, DCT-II, top-left 8 × 8 > median; embedded scan when
-  the page is one image, else rendered at 36 dpi; at most 4 pages: all candidate pages (scans
-  and pages needing OCR) up to 4, else the first 3 and the last (`phash_pages`). `@1` hashed the
-  first 16; the hash of each page is unchanged.
+  the page is one image, decoded at reduced resolution (`PageRaster::embedded_scan_reduced`,
+  longer side ≥ `PHASH_SCAN_SIDE` = 128 px; quail-pdf reduces JPEG 2000 only), else rendered
+  at 36 dpi; at most 4 pages: all candidate pages (scans and pages needing OCR) up to 4, else
+  the first 3 and the last (`phash_pages`). `@3` changed the pixels of reduced scans (`@2`
+  decoded them at full size), so hashes are not comparable across `@2` and `@3`; `@1` hashed
+  the first 16 pages.
 
 The module docs carry the full definitions. `tests/golden.rs` pins every sketch of a generated
 sample. **A golden diff means stored sketches change: bump that analyzer's version**

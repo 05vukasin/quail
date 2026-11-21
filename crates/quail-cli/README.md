@@ -144,7 +144,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `refs` (default) | quail-refs | `ref.references@1` |
 | `parties` (default) | quail-parties | `party.candidates@1` |
 | `clauses` (default) | quail-clauses | `clause.terms@1` |
-| `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@2` (Standard, runs only on documents with a scanned page or a page needing OCR) |
+| `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@3` (Standard, runs only on documents with a scanned page or a page needing OCR) |
 | `zstd` | (quail-io) | `--zstd` output |
 | `test-hooks` | - | test-only: `QUAIL_TEST_CRASH_ON=<substring>` makes `--isolate` workers abort on matching locators. Never ship it |
 

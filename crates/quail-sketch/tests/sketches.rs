@@ -389,6 +389,54 @@ fn page_phash_hashes_the_first_three_and_the_last_page() {
     );
 }
 
+/// A raster whose scans differ by call: the full scan is a horizontal ramp, the reduced one
+/// a vertical ramp, and the reduced call records the side it was asked for.
+struct Scans(std::sync::Mutex<Vec<u32>>);
+
+fn ramp(w: u32, h: u32, vertical: bool) -> Image {
+    let data = (0..h)
+        .flat_map(|y| (0..w).map(move |x| if vertical { y } else { x }))
+        .map(|v| u8::try_from(v.min(255)).unwrap())
+        .collect();
+    Image {
+        width: w,
+        height: h,
+        channels: 1,
+        data,
+    }
+}
+
+impl PageRaster for Scans {
+    fn render(&self, _: u32, _: f32, _: &Limits) -> Result<Image> {
+        Err(quail_core::Error::Other("no render".to_owned()))
+    }
+    fn embedded_scan(&self, _: u32, _: &Limits) -> Option<Result<Image>> {
+        Some(Ok(ramp(256, 256, false)))
+    }
+    fn embedded_scan_reduced(&self, _: u32, side: u32, _: &Limits) -> Option<Result<Image>> {
+        self.0.lock().unwrap().push(side);
+        Some(Ok(ramp(side, side, true)))
+    }
+}
+
+#[test]
+fn page_phash_hashes_the_reduced_scan() {
+    let mut p0 = common::text_page(0, "");
+    p0.needs_ocr = true;
+    let scans = Arc::new(Scans(std::sync::Mutex::new(Vec::new())));
+    let mut arts = Artifacts::new();
+    arts.insert(Raster(scans.clone()));
+    let facts = run(&PagePHash, Document { pages: vec![p0] }, Some(arts));
+    let Value::List(hashes) = &facts[0].value else {
+        panic!()
+    };
+    let side = quail_sketch::PHASH_SCAN_SIDE;
+    assert_eq!(*scans.0.lock().unwrap(), [side]);
+    let reduced = ramp(side, side, true);
+    let want = quail_sketch::phash::phash(side, side, 1, &reduced.data).unwrap();
+    assert_eq!(hashes, &[Value::U64(want)]);
+}
+
 #[test]
 fn hostile_inputs_do_not_panic() {
     let nasty = [

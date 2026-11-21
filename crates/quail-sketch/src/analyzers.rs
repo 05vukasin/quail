@@ -397,6 +397,10 @@ impl SadaMinHash {
 pub const MAX_PHASH_PAGES: usize = 4;
 /// Resolution pages are rendered at for the hash when they hold no single scan.
 pub const PHASH_DPI: f32 = 36.0;
+/// Pixels `sketch.page_phash` asks for on an embedded scan's longer side
+/// ([`PageRaster::embedded_scan_reduced`](quail_core::PageRaster::embedded_scan_reduced)):
+/// 4 × the 32-px thumbnail edge, so every thumbnail cell still averages at least 16 pixels.
+pub const PHASH_SCAN_SIDE: u32 = 128;
 
 /// Which of `n` candidate pages (scans or pages needing OCR, in order) `sketch.page_phash`
 /// hashes: all of them up to [`MAX_PHASH_PAGES`], else the first `MAX_PHASH_PAGES - 1` and
@@ -410,19 +414,22 @@ pub fn phash_pages(n: usize) -> impl Iterator<Item = usize> {
     (0..head).chain((n > MAX_PHASH_PAGES).then(|| n - 1))
 }
 
-/// `sketch.page_phash@2`: 64-bit pHash ([`crate::phash`]) of scanned pages
+/// `sketch.page_phash@3`: 64-bit pHash ([`crate::phash`]) of scanned pages
 /// ([`quail_core::Page::is_scan`]) and pages needing OCR: all of them up to 4, else the first
 /// 3 and the last ([`phash_pages`]) ([`keys::PAGE_PHASH`], [`keys::PAGE_PHASH_PAGES`]). Takes
-/// the embedded scan when there is one, else renders the page at 36 dpi. Requires the `raster`
-/// artifact. Every hash is computed as in `@1`; `@2` hashes fewer pages (`@1`: the first 16),
-/// because decoding full-resolution scans dominated the cost of scan-heavy corpora.
+/// the embedded scan when there is one, decoded at reduced resolution (at least
+/// [`PHASH_SCAN_SIDE`] px on the longer side, see
+/// [`PageRaster::embedded_scan_reduced`](quail_core::PageRaster::embedded_scan_reduced)),
+/// else renders the page at 36 dpi. Requires the `raster` artifact. `@2` hashed the
+/// full-resolution scan; `@3` hashes of JPEG 2000 scans differ from `@2` by a few bits, so
+/// do not compare hashes across versions. `@2` hashed the same pages as `@3`; `@1` the first 16.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PagePHash;
 
 analyzer!(
     PagePHash,
     "sketch.page_phash",
-    2,
+    3,
     Profile::Standard,
     &["document", "raster"],
     &[],
@@ -457,10 +464,14 @@ impl PagePHash {
         }
         for page in phash_pages(wanted.len()).filter_map(|i| wanted.get(i).copied()) {
             out.check_deadline()?;
-            let image = match raster.0.embedded_scan(page.index, ctx.limits) {
-                Some(r) => r,
-                None => raster.0.render(page.index, PHASH_DPI, ctx.limits),
-            };
+            let image =
+                match raster
+                    .0
+                    .embedded_scan_reduced(page.index, PHASH_SCAN_SIDE, ctx.limits)
+                {
+                    Some(r) => r,
+                    None => raster.0.render(page.index, PHASH_DPI, ctx.limits),
+                };
             match image {
                 Ok(im) => match phash::phash(im.width, im.height, im.channels, &im.data) {
                     Some(h) => {
