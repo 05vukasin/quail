@@ -18,7 +18,7 @@ pub enum Normalizer {
     Text,
     /// Folded (Serbian Cyrillic → Latin, no diacritics), `text`, then a leading `the` and
     /// leading forms (`jp`, `jkp`) and trailing legal-form tokens (`inc`, `llc`, `ltd`,
-    /// `gmbh`, `d o o`, `доо`, `а д`, ...) are dropped.
+    /// `gmbh`, `d o o`, `доо`, `а д`, ...) are dropped; `&` reads as `and`.
     Company,
     /// A date in ISO form `YYYY-MM-DD` when it parses (ISO, `D.M.YYYY`, US `M/D/YYYY`,
     /// `Month D, YYYY`, `D Month YYYY`, `Dth day of Month, YYYY`; English and Serbian month
@@ -211,7 +211,8 @@ const LEADING_FORMS: &[&[&str]] = &[
 ];
 
 fn company(s: &str) -> String {
-    let t = text(&folded(s));
+    // `&` is `and` (Kleister-NDA's gold writes "Leggett and Platt" for "Leggett & Platt").
+    let t = text(&folded(&s.replace('&', " and ")));
     let mut toks: Vec<&str> = t.split(' ').filter(|x| !x.is_empty()).collect();
     if toks.len() > 1 && toks.first() == Some(&"the") {
         toks.remove(0);
@@ -459,6 +460,10 @@ mod tests {
         assert_eq!(company("The Alpha Holdings, Inc."), "alpha holdings");
         assert_eq!(company("Beta d.o.o."), "beta");
         assert_eq!(company("Gamma Co., Ltd."), "gamma");
+        assert_eq!(
+            company("Leggett & Platt, Inc."),
+            company("Leggett and Platt Inc.")
+        );
         // Never strips the whole name.
         assert_eq!(company("Inc"), "inc");
     }

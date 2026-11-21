@@ -14,14 +14,15 @@
 //! Calibration pools every scored prediction (correct = TP) into ten equal-width `conf` bins;
 //! ECE is the support-weighted mean of |accuracy − mean conf|.
 
-use std::collections::BTreeMap;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap};
 
-use quail_core::{FileRecord, Status};
+use quail_core::{FileRecord, Status, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::gold::{GoldDoc, Split};
 use crate::normalize::label_matches;
-use crate::records::{MatchedBy, RecordIndex, Records, filtered_field_strings};
+use crate::records::{MatchedBy, RecordIndex, Records, field_strings, filtered_field_strings};
 use crate::tasks::{TaskMap, TaskSpec};
 use crate::{Error, Result};
 
@@ -425,6 +426,9 @@ pub struct Prediction {
     pub key: String,
     /// Index of the fact in the record.
     pub fact: usize,
+    /// Values of the record's alternative fields (`TaskSpec::alt_fields`), which may claim
+    /// gold labels too.
+    pub alts: Vec<String>,
 }
 
 /// The predictions of `spec` in `rec`, most confident first (stable), and how many were
@@ -445,7 +449,7 @@ pub fn predictions(
         if !spec.keys.iter().any(|k| k == f.key.as_str()) {
             continue;
         }
-        for v in filtered_field_strings(&f.value, spec.field.as_deref(), &spec.only, &spec.except) {
+        for (v, alts) in record_values(&f.value, spec) {
             if f.conf < threshold {
                 dropped += 1;
                 continue;
@@ -455,17 +459,61 @@ pub fn predictions(
                 conf: f.conf,
                 key: f.key.to_string(),
                 fact: i,
+                alts,
             });
         }
     }
     out.sort_by(|a, b| b.conf.total_cmp(&a.conf));
     if spec.multi {
-        let mut seen = std::collections::HashSet::new();
-        out.retain(|p| seen.insert(spec.normalize.apply(&p.value)));
+        // A dropped repeat hands its alternative values to the one kept.
+        let mut at: HashMap<String, usize> = HashMap::new();
+        let mut kept: Vec<Prediction> = Vec::with_capacity(out.len());
+        for p in out {
+            match at.entry(spec.normalize.apply(&p.value)) {
+                Entry::Occupied(e) => {
+                    let k = &mut kept[*e.get()];
+                    for a in p.alts {
+                        if !k.alts.contains(&a) {
+                            k.alts.push(a);
+                        }
+                    }
+                }
+                Entry::Vacant(e) => {
+                    e.insert(kept.len());
+                    kept.push(p);
+                }
+            }
+        }
+        out = kept;
     } else {
         out.truncate(1);
     }
     (out, dropped)
+}
+
+/// The prediction strings of a fact value, each with the values of `spec.alt_fields` of the
+/// record it came from (lists of records are taken record by record).
+fn record_values(v: &Value, spec: &TaskSpec) -> Vec<(String, Vec<String>)> {
+    if spec.alt_fields.is_empty() {
+        return filtered_field_strings(v, spec.field.as_deref(), &spec.only, &spec.except)
+            .into_iter()
+            .map(|s| (s, Vec::new()))
+            .collect();
+    }
+    if let Value::List(items) = v {
+        return items.iter().flat_map(|x| record_values(x, spec)).collect();
+    }
+    let main = filtered_field_strings(v, spec.field.as_deref(), &spec.only, &spec.except);
+    if main.is_empty() {
+        return Vec::new();
+    }
+    let alts: Vec<String> = spec
+        .alt_fields
+        .iter()
+        .flat_map(|f| field_strings(v, Some(f.as_str())))
+        .filter(|a| !a.trim().is_empty())
+        .collect();
+    main.into_iter().map(|m| (m, alts.clone())).collect()
 }
 
 /// `v`, or the gold-vocabulary value `spec.aliases` gives for it (compared normalized).
@@ -515,18 +563,25 @@ pub fn score_doc_task(
     if spec.multi {
         let mut used = vec![false; labels.len()];
         for p in preds {
-            let hit = labels
-                .iter()
-                .enumerate()
-                .find(|(j, l)| !used[*j] && label_matches(l, spec.normalize, &p.value))
-                .map(|(j, _)| j);
-            if let Some(j) = hit {
-                used[j] = true;
-                dt.tp += 1;
+            // The value claims one label, then each alternative value one more.
+            let mut claimed = 0;
+            for v in std::iter::once(&p.value).chain(&p.alts) {
+                let hit = labels
+                    .iter()
+                    .enumerate()
+                    .find(|(j, l)| !used[*j] && label_matches(l, spec.normalize, v))
+                    .map(|(j, _)| j);
+                if let Some(j) = hit {
+                    used[j] = true;
+                    claimed += 1;
+                }
+            }
+            if claimed > 0 {
+                dt.tp += claimed;
             } else {
                 dt.fp += 1;
             }
-            dt.pred.push(outcome(p, hit.is_some()));
+            dt.pred.push(outcome(p, claimed > 0));
         }
         for (j, l) in labels.iter().enumerate() {
             if !used[j] {
@@ -535,9 +590,11 @@ pub fn score_doc_task(
             }
         }
     } else if let Some(p) = preds.into_iter().next() {
-        let ok = labels
-            .iter()
-            .any(|l| label_matches(l, spec.normalize, &p.value));
+        let ok = labels.iter().any(|l| {
+            std::iter::once(&p.value)
+                .chain(&p.alts)
+                .any(|v| label_matches(l, spec.normalize, v))
+        });
         if ok {
             dt.tp = 1;
         } else {
@@ -929,6 +986,55 @@ mod tests {
         assert_eq!(values, ["ALPHA INC", "Gamma Ltd"]);
         let dt = score_doc_task(&doc, "party", &s, preds).unwrap();
         assert_eq!((dt.tp, dt.fp, dt.fn_), (1, 1, 0));
+    }
+
+    #[test]
+    fn alt_fields_claim_more_labels_without_more_false_positives() {
+        let mut s = spec("p.company", true, Normalizer::Company);
+        s.field = Some("surface".into());
+        s.alt_fields = vec!["defined_term".into()];
+        let doc = gold(
+            1,
+            vec![
+                Label::text("party", "Alpha Inc.", MatchMode::Normalized),
+                Label::text("party", "the \"Licensor\"", MatchMode::Normalized),
+                Label::text("party", "Distributor", MatchMode::Normalized),
+            ],
+            &[],
+        );
+        let company = |surface: &str, term: Option<&str>, conf| {
+            let mut f = vec![("surface", Value::text(surface))];
+            if let Some(t) = term {
+                f.push(("defined_term", Value::text(t)));
+            }
+            Fact {
+                value: Value::record(f),
+                ..fact("p.company", "", conf)
+            }
+        };
+        let rec = record(
+            1,
+            vec![
+                company("ALPHA INC", Some("Licensor"), 0.9),
+                // A repeat hands its term to the kept one.
+                company("Alpha, Inc.", Some("Distributor"), 0.5),
+                company("Gamma Ltd", Some("Supplier"), 0.4),
+            ],
+            Status::Ok,
+            1,
+        );
+        let (preds, _) = predictions(&rec, &s, None);
+        assert_eq!(preds.len(), 2);
+        assert_eq!(preds[0].alts, ["Licensor", "Distributor"]);
+        let dt = score_doc_task(&doc, "party", &s, preds).unwrap();
+        // One prediction claims all three labels; the unmatched one is a single FP.
+        assert_eq!((dt.tp, dt.fp, dt.fn_), (3, 1, 0));
+
+        // Without alt_fields the defined terms are not predictions.
+        s.alt_fields.clear();
+        let (preds, _) = predictions(&rec, &s, None);
+        let dt = score_doc_task(&doc, "party", &s, preds).unwrap();
+        assert_eq!((dt.tp, dt.fp, dt.fn_), (1, 1, 2));
     }
 
     #[test]
