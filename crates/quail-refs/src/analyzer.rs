@@ -1,4 +1,4 @@
-//! `ref.references@2`.
+//! `ref.references@3`.
 
 use quail_core::{
     Analyzer, AnalyzerId, Artifact, Ctx, Date, Document, Emitter, Evidence, Page, Profile, Result,
@@ -43,7 +43,7 @@ impl Default for RefAnalyzer {
 
 impl RefAnalyzer {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("ref.references", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("ref.references", 3);
 
     /// Compiles the patterns (a few milliseconds); build once and share.
     pub fn new() -> Self {

@@ -584,7 +584,7 @@ fn keys_and_version() {
         expected.push("signal.scan@3");
     }
     if cfg!(feature = "refs") {
-        expected.push("ref.references@2");
+        expected.push("ref.references@3");
     }
     if cfg!(feature = "parties") {
         expected.push("party.candidates@3");

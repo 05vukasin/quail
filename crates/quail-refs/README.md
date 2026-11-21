@@ -4,7 +4,7 @@ Per-file candidates for linking documents into contract families (MSA → SOW / 
 → PO → invoice) and multi-part documents. Namespace `ref.*`. Serbian (Latin and Cyrillic) and
 English, a few French kind words.
 
-- Analyzer: `ref.references@1` (`RefAnalyzer`), `Profile::Fast`, requires `document`.
+- Analyzer: `ref.references@3` (`RefAnalyzer`), `Profile::Fast`, requires `document`.
 - Public API: `RefAnalyzer`, `keys::*`, `Kind`, `Relation`, `field` (wrapper over `Value::field`),
   `number::*` (the number rules, usable by the linking service), the `MAX_*` caps.
 
@@ -84,6 +84,19 @@ amendment, *prilog* an annex. Bank accounts ("tekući račun"), "P.O. Box", "Exe
   print "ОДЛУКА О ИЗМЕНИ УГОВОРА" there); a field label naming a contract in an oblique case
   ("Prvobitna vrednost ugovora") is not; a title does not run on into "ЗА ЈАВНУ НАБАВКУ ...".
   *ugovor* / *sporazum* match only as nouns (`ugovorne strane` is no mention).
+- **Split titles** (`ref.references@3`): a title set over short lines in one style is joined.
+  Up to two lines before a line that ends on its noun ("WIDGET POLISHING" / "OUTSOURCING
+  AGREEMENT", "FORM OF" / "LICENSE AGREEMENT") are joined, and so is the line after a head line
+  that breaks after its link ("AMENDMENT NO. 4 TO THE NONEXCLUSIVE" / "GADGET RESELLER AGREEMENT"). Both
+  lines must be at most 8 tokens, in capitals (or both large heading lines) and in the same
+  zone. A line holding a legal form (a party), a NOT-a-title phrase ("Execution Copy"), an
+  exhibit or schedule tag, a number, a field, a symbol or prose never joins, and neither does a
+  line that names its own instrument ("ADDENDUM TO"). With line geometry the lines must also
+  stack as one title: at most half a line of space between them, heights within a factor of 1.6,
+  centred on one axis or flush left. A name far above the title or a margin note
+  ("EXECUTION VERSION") stays out. A short title-case line that ends on its noun is a title
+  line however long its modifiers are ("Garden Design, Planting and Upkeep Agreement").
+  CUAD dev title F1 went from 93.6 to 94.2 with these rules.
 
 ## How
 
