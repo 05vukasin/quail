@@ -358,6 +358,38 @@ fn page_phash_hashes_pages_needing_ocr() {
 }
 
 #[test]
+fn page_phash_hashes_the_first_three_and_the_last_page() {
+    assert_eq!(quail_sketch::phash_pages(0).count(), 0);
+    assert_eq!(quail_sketch::phash_pages(3).collect::<Vec<_>>(), [0, 1, 2]);
+    assert_eq!(
+        quail_sketch::phash_pages(4).collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert_eq!(
+        quail_sketch::phash_pages(5).collect::<Vec<_>>(),
+        [0, 1, 2, 4]
+    );
+    let pages = (0..10)
+        .map(|i| {
+            let mut p = common::text_page(i, if i == 4 { "native" } else { "" });
+            p.needs_ocr = i != 4;
+            p
+        })
+        .collect();
+    let mut arts = Artifacts::new();
+    arts.insert(Raster(Arc::new(Pictures)));
+    let facts = run(&PagePHash, Document { pages }, Some(arts));
+    let Value::List(pages) = &facts[1].value else {
+        panic!()
+    };
+    // Candidates are pages 0-3 and 5-9: the first three and the last.
+    assert_eq!(
+        pages,
+        &[Value::Int(0), Value::Int(1), Value::Int(2), Value::Int(9)]
+    );
+}
+
+#[test]
 fn hostile_inputs_do_not_panic() {
     let nasty = [
         String::new(),
