@@ -602,7 +602,7 @@ fn keys_and_version() {
         expected.push("item.lines@4");
     }
     if cfg!(feature = "summary") {
-        expected.extend(["summary.card@1", "summary.extractive@1"]);
+        expected.extend(["summary.card@2", "summary.extractive@2"]);
     }
     assert_eq!(ids, expected);
     // Deterministic.

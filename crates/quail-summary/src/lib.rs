@@ -1,11 +1,11 @@
 //! Per-file cards and English summaries for LLM agents. Namespace `summary.*`.
 //!
-//! - [`SummaryCard`] (`summary.card@1`, Fast): a deterministic **file card** built only from
+//! - [`SummaryCard`] (`summary.card@2`, Fast): a deterministic **file card** built only from
 //!   the facts of the other steps (type, title, language, pages, own number, cited documents,
 //!   parties with roles, dates by role, amounts, identifiers, price items, sketches, producer,
 //!   flags), stored as a record and rendered as compact `key: value` text under a hard token
 //!   budget ([`tokens`]).
-//! - [`SummaryExtractive`] (`summary.extractive@1`, Fast): 1–3 English sentences without a
+//! - [`SummaryExtractive`] (`summary.extractive@2`, Fast): 1–3 English sentences without a
 //!   model: a template sentence from the card plus the document's subject sentence
 //!   ([`extractive`]).
 //! - `SummaryLlm` (`summary.llm@1`, Deep, feature `llm`, opt-in): a local GGUF model writes
@@ -62,8 +62,8 @@ pub mod keys {
     pub const CARD_TOKENS: FactKey = FactKey::new("summary.card_tokens");
     /// 1–3 sentence English summary without a model (Text).
     pub const EXTRACTIVE: FactKey = FactKey::new("summary.extractive");
-    /// The subject sentence, verbatim (Record: `text`, `lang`?, `method` = `clause` or
-    /// `textrank`, `label`?), evidence: its page.
+    /// The subject sentence, verbatim (Record: `text`, `lang`?, `method` = `clause`,
+    /// `recital`, `operative` or `textrank`, `label`?), evidence: its page.
     pub const SUBJECT: FactKey = FactKey::new("summary.subject");
     /// The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or
     /// `extractive_fallback`, `model`, `checked`, `cached`). Feature `llm`.

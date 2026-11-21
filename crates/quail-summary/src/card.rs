@@ -359,6 +359,17 @@ impl FileCard {
                 }
             }
         }
+        // `"KI Inc.`: a stray quote of the defining clause is no part of the name.
+        for p in &mut parties {
+            let t = p
+                .name
+                .trim_matches(|c: char| matches!(c, '"' | '“' | '”' | '\'' | '‘' | '’'));
+            if t.len() != p.name.len() {
+                p.name = t.trim().to_owned();
+            }
+        }
+        // "II, LLC", "GP, LLC", ", Inc.": the tail of a name cut at its start is no party.
+        parties.retain(|p| !truncated(&p.name));
         // "Cisco" after "Cisco Systems, Inc.": a shorter name inside a stronger one is the same
         // party.
         let mut kept: Vec<Party> = Vec::new();
@@ -388,6 +399,16 @@ impl FileCard {
             && let Some(Value::Date(d)) = f.best(k::SIGNAL_DATE).map(|x| &x.value)
         {
             self.dates.push(("date", *d));
+        }
+        // An expiry before the agreement takes effect (or is signed) is a misread date.
+        let start = self
+            .dates
+            .iter()
+            .find(|(r, _)| *r == "effective")
+            .or_else(|| self.dates.iter().find(|(r, _)| *r == "signed"))
+            .map(|(_, d)| *d);
+        if let Some(start) = start {
+            self.dates.retain(|(r, d)| *r != "expires" || *d >= start);
         }
         self.dates.truncate(MAX_DATES);
     }
@@ -950,6 +971,25 @@ fn more(parts: &mut Vec<String>, total: usize, shown: usize) {
 }
 
 /// Folded words of a name, legal forms and punctuation dropped (for duplicate checks).
+/// A name cut at its start: it opens with a comma, `&` or a lower-case word, or nothing but a
+/// roman numeral or a two-letter word stands before its legal form (`II, LLC`, `GP, LLC`).
+fn truncated(name: &str) -> bool {
+    let t = name.trim();
+    if t.starts_with([',', '&', '.', ';']) || t.starts_with(|c: char| c.is_lowercase()) {
+        return true;
+    }
+    let words = name_words(t);
+    match words.as_slice() {
+        [] => true,
+        // `GP, LLC`, but not `HP Inc.` or `3M Company`.
+        [w] => {
+            (w.len() <= 4 && w.chars().all(|c| matches!(c, 'i' | 'v' | 'x')))
+                || (w.len() <= 2 && t.split_once(',').is_some_and(|(a, _)| a.trim().len() <= 2))
+        }
+        _ => false,
+    }
+}
+
 fn name_words(name: &str) -> Vec<String> {
     const FORMS: &[&str] = &[
         "inc",
@@ -1030,6 +1070,18 @@ mod tests {
             name_words("Балкан Логистик д.о.о."),
             vec!["balkan", "logistik"]
         );
+    }
+
+    #[test]
+    fn truncated_names_are_no_parties() {
+        assert!(truncated("II, LLC"));
+        assert!(truncated("GP, LLC"));
+        assert!(truncated(", Inc."));
+        assert!(truncated("LLC"));
+        assert!(!truncated("HP Inc."));
+        assert!(!truncated("3M Company"));
+        assert!(!truncated("ValueAct Capital Master Fund II, L.P."));
+        assert!(!truncated("Cisco Systems, Inc."));
     }
 
     #[test]

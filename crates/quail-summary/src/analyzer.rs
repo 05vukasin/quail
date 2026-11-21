@@ -1,6 +1,7 @@
-//! The analyzers: `summary.card@1` and `summary.extractive@1`.
+//! The analyzers: `summary.card@2` and `summary.extractive@2`.
 
 use quail_core::{Analyzer, AnalyzerId, Ctx, Emitter, Evidence, Profile, Result, Value};
+use quail_text::NormalizedText;
 
 use crate::card::{DEFAULT_MAX_TOKENS, FileCard};
 use crate::extractive;
@@ -8,9 +9,9 @@ use crate::keys;
 
 /// Artifacts every fact-producing step of the workspace may provide. Declared as `after` so
 /// the summary steps run once those steps are done (see the crate docs on ordering).
-pub const AFTER: &[&str] = &["revised_document", "ocr_text", "raster"];
+pub const AFTER: &[&str] = &["revised_document", "ocr_text", "raster", "normalized_text"];
 
-/// `summary.card@1`: the file card from every fact produced before it.
+/// `summary.card@2`: the file card from every fact produced before it.
 ///
 /// Emits [`keys::CARD`] (record), [`keys::CARD_TEXT`] (text, at most `max_tokens` estimated
 /// tokens) and [`keys::CARD_TOKENS`].
@@ -21,7 +22,7 @@ pub struct SummaryCard {
 
 impl SummaryCard {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.card", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.card", 2);
 
     /// With the default budget, [`DEFAULT_MAX_TOKENS`].
     pub const fn new() -> Self {
@@ -83,7 +84,7 @@ impl Analyzer for SummaryCard {
     }
 }
 
-/// `summary.extractive@1`: a 1–3 sentence English summary without a model.
+/// `summary.extractive@2`: a 1–3 sentence English summary without a model.
 ///
 /// Emits [`keys::EXTRACTIVE`] (text) and, when a subject sentence is found,
 /// [`keys::SUBJECT`] (record `text lang? method label?`, evidence: its page).
@@ -92,7 +93,7 @@ pub struct SummaryExtractive;
 
 impl SummaryExtractive {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.extractive", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.extractive", 2);
 }
 
 impl Analyzer for SummaryExtractive {
@@ -118,15 +119,18 @@ impl Analyzer for SummaryExtractive {
 
     fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
         let card = card_of(ctx);
+        let shared = ctx.get::<NormalizedText>();
         let pages = ctx
             .document()
-            .map(extractive::head_pages)
+            .map(|d| extractive::head_pages_with(d, shared))
             .unwrap_or_default();
         out.check_deadline()?;
         let subject = extractive::subject(&pages);
         let text = extractive::summary(&card, subject.as_ref());
         let conf = match subject.as_ref().map(|s| s.method) {
             Some(extractive::SubjectMethod::Clause) => 0.9,
+            Some(extractive::SubjectMethod::Recital) => 0.85,
+            Some(extractive::SubjectMethod::Operative) => 0.8,
             Some(extractive::SubjectMethod::TextRank) => 0.6,
             None => 0.7,
         };
@@ -140,10 +144,11 @@ impl Analyzer for SummaryExtractive {
             if let Some(l) = s.label {
                 f.push(("label", Value::text(l)));
             }
-            let conf = if s.method == extractive::SubjectMethod::Clause {
-                0.85
-            } else {
-                0.5
+            let conf = match s.method {
+                extractive::SubjectMethod::Clause => 0.85,
+                extractive::SubjectMethod::Recital => 0.75,
+                extractive::SubjectMethod::Operative => 0.7,
+                extractive::SubjectMethod::TextRank => 0.5,
             };
             out.push(
                 keys::SUBJECT,

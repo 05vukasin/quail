@@ -13,8 +13,8 @@ original script; a non-English subject sentence is quoted and marked with its la
 
 | id | profile | requires / after | emits |
 |---|---|---|---|
-| `summary.card@1` (`SummaryCard`) | Fast | `document` / `revised_document ocr_text raster` | `summary.card`, `summary.card_text`, `summary.card_tokens` |
-| `summary.extractive@1` (`SummaryExtractive`) | Fast | same | `summary.extractive`, `summary.subject` |
+| `summary.card@2` (`SummaryCard`) | Fast | `document` / `revised_document ocr_text raster normalized_text` | `summary.card`, `summary.card_text`, `summary.card_tokens` |
+| `summary.extractive@2` (`SummaryExtractive`) | Fast | same | `summary.extractive`, `summary.subject` |
 | `summary.llm@1` (`SummaryLlm`, feature `llm`) | Deep, opt-in | same | `summary.llm` |
 
 **Ordering.** They read `ctx.facts`, so they must run after every fact producer. The engine
@@ -31,7 +31,7 @@ core "finalizer" flag that makes this explicit is requested in the PR.
 | `summary.card_text` | Text: compact `key: value` lines, at most 300 estimated tokens |
 | `summary.card_tokens` | Int: estimated tokens of `card_text` |
 | `summary.extractive` | Text: template sentence + subject sentence |
-| `summary.subject` | record `text lang? method label?` (`method`: `clause` / `textrank`), evidence: page |
+| `summary.subject` | record `text lang? method label?` (`method`: `clause` / `recital` / `operative` / `textrank`), evidence: page |
 | `summary.llm` | record `text subject? title_en? method model checked cached` (`method`: `llm` / `extractive_fallback`) |
 
 `summary.card` fields, in this order:
@@ -87,19 +87,34 @@ tokenizer is loaded.
   `contract` or when nothing else identifies the document), parent document ("to the master
   services agreement 114/23"), up to three parties with roles ("and others" beyond), dates by
   role, up to two amounts, `scanned`. It adds no number the card does not hold.
-- Subject sentence: the first sentence under a subject heading or label (`Subject of the
-  Agreement`, `Subject matter`, `Purpose`, `Scope of Work`, `Description of Services`,
-  `Article 1` + title line, `Predmet ugovora`, `Predmet`, `Svrha`, `Član 1`, in Latin or Cyrillic,
-  folded), at most 40 words; else the top sentence of a `TextRank` over the first 4 pages
-  (≤ 150 sentences of 8–60 words; definitions, parties blocks, addresses and signature lines
-  filtered out; clause numbers stripped; a position prior, tripled for sentences that say who
-  provides what: "agrees to", "shall provide", "hereby", "grants", "whereas", ...).
+- Subject sentence, in this order (`summary.subject.method`):
+  1. `clause`: the first sentence under a subject, purpose or scope heading or label
+     (`Subject of the Agreement`, `Subject matter`, `Purpose`, `Scope of Work`, `Description of
+     Services`, `Appointment`, `Grant of License`, `Services`, `Predmet ugovora`, `Predmet`,
+     `Svrha`, in Latin or Cyrillic, folded), at most 40 words; a boilerplate sentence under it is
+     skipped;
+  2. `recital`: the last `WHEREAS` recital before the operative part that states an intent
+     (`desires to`, `wishes to`, `intends`, `agree`), its first sentence, recital letter
+     dropped; or a `The Company wishes to …` sentence in prose;
+  3. `operative`: the first sentence after `NOW, THEREFORE … agree as follows:` (or `In
+     consideration of …`, `It is agreed`) that is no heading, definition, list fragment or
+     boilerplate, run-in heading dropped (`2. SUPPLY. Supplier shall …`);
+  4. `clause` under a weak heading (`Background`, `Article 1` + title line, `Član 1`);
+  5. `textrank`: the top sentence of a `TextRank` over the first 4 pages (≤ 150 sentences of
+     8–60 words; definitions, parties blocks, addresses and signature lines filtered out; clause
+     numbers stripped; a position prior, tripled for sentences that say who provides what,
+     and boilerplate (notices, counterparts, governing law, severability, entire agreement,
+     redaction notes, waiver, assignment, indemnity) and list fragments ranked down to 5 %;
+     the best sentence that is neither wins when there is one).
+- The first pages come from the shared `normalized_text` artifact of `text.stats` when it holds
+  the whole page (same text; normalized here otherwise).
 - English documents: `… Subject: <sentence>`; others: `… Subject (sr, original): "<sentence>"`.
   Invoices, orders, quotes and price lists get the template sentence alone (their prose is terms
   and conditions); `summary.subject` is still emitted.
 - Card tweaks that keep it useful: parties whose name words are all inside a stronger party's
-  name are merged ("Cisco" into "Cisco Systems, Inc."); item categories need a top score ≥ 0.3;
-  a role-less largest amount needs ≥ 100.
+  name are merged ("Cisco" into "Cisco Systems, Inc."); a name cut at its start (`II, LLC`,
+  `GP, LLC`, `, Inc.`) is left out; an expiry date before the effective (else signed) date is
+  left out; item categories need a top score ≥ 0.3; a role-less largest amount needs ≥ 100.
 
 ## LLM summary (feature `llm`)
 
