@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::gold::{GoldDoc, Split};
 use crate::normalize::label_matches;
-use crate::records::{MatchedBy, RecordIndex, Records, field_strings};
+use crate::records::{MatchedBy, RecordIndex, Records, filtered_field_strings};
 use crate::tasks::{TaskMap, TaskSpec};
 use crate::{Error, Result};
 
@@ -442,13 +442,13 @@ pub fn predictions(
         if !spec.keys.iter().any(|k| k == f.key.as_str()) {
             continue;
         }
-        for v in field_strings(&f.value, spec.field.as_deref()) {
+        for v in filtered_field_strings(&f.value, spec.field.as_deref(), &spec.only, &spec.except) {
             if f.conf < threshold {
                 dropped += 1;
                 continue;
             }
             out.push(Prediction {
-                value: v,
+                value: alias(spec, v),
                 conf: f.conf,
                 key: f.key.to_string(),
                 fact: i,
@@ -463,6 +463,18 @@ pub fn predictions(
         out.truncate(1);
     }
     (out, dropped)
+}
+
+/// `v`, or the gold-vocabulary value `spec.aliases` gives for it (compared normalized).
+fn alias(spec: &TaskSpec, v: String) -> String {
+    if spec.aliases.is_empty() {
+        return v;
+    }
+    let n = spec.normalize.apply(&v);
+    spec.aliases
+        .iter()
+        .find(|(from, _)| spec.normalize.apply(from) == n)
+        .map_or(v, |(_, to)| to.clone())
 }
 
 /// Scores one task of one gold document, or `None` when the task is not annotated in it.
@@ -483,6 +495,16 @@ pub fn score_doc_task(
         ..DocTask::default()
     };
     if absent {
+        // "Absent because it equals task X": a prediction equal to X's gold is not wrong.
+        let mut preds = preds;
+        if let Some(other) = spec.absent_if_equals.as_deref() {
+            let same: Vec<_> = doc.labels_for(other).collect();
+            preds.retain(|p| {
+                !same
+                    .iter()
+                    .any(|l| label_matches(l, spec.normalize, &p.value))
+            });
+        }
         dt.fp = preds.len() as u64;
         dt.pred = preds.into_iter().map(|p| outcome(p, false)).collect();
         return Some(dt);
@@ -713,6 +735,7 @@ mod tests {
             field: None,
             pending: None,
             description: None,
+            ..TaskSpec::default()
         }
     }
 
@@ -792,6 +815,74 @@ mod tests {
         let dt = score_doc_task(&doc, "party", &s, preds).unwrap();
         assert_eq!((dt.tp, dt.fp, dt.fn_), (1, 1, 1));
         assert_eq!(dt.missed, vec!["Beta LLC"]);
+    }
+
+    #[test]
+    fn only_and_except_filter_records() {
+        let number = |kind: &str, raw: &str| Fact {
+            value: Value::record([("kind", Value::text(kind)), ("raw", Value::text(raw))]),
+            ..fact("r.num", "", 0.8)
+        };
+        let rec = record(
+            1,
+            vec![number("registry", "92/16"), number("contract", "73-7/17")],
+            Status::Ok,
+            1,
+        );
+        let mut s = spec("r.num", true, Normalizer::Identifier);
+        s.field = Some("raw".into());
+        s.only.insert("kind".into(), vec!["registry".into()]);
+        let (preds, _) = predictions(&rec, &s, None);
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].value, "92/16");
+        s.only.clear();
+        s.except.insert("kind".into(), vec!["registry".into()]);
+        let (preds, _) = predictions(&rec, &s, None);
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].value, "73-7/17");
+    }
+
+    #[test]
+    fn aliases_map_to_the_gold_vocabulary() {
+        let mut s = spec("r.kind", false, Normalizer::Text);
+        s.aliases.insert("amendment".into(), "annex".into());
+        let rec = record(1, vec![fact("r.kind", "amendment", 0.8)], Status::Ok, 1);
+        let doc = gold(
+            1,
+            vec![Label::text("doc_type", "annex", MatchMode::Normalized)],
+            &[],
+        );
+        let (preds, _) = predictions(&rec, &s, None);
+        let dt = score_doc_task(&doc, "doc_type", &s, preds).unwrap();
+        assert_eq!((dt.tp, dt.fp, dt.fn_), (1, 0, 0));
+    }
+
+    #[test]
+    fn absent_if_equals_forgives_the_equal_value() {
+        let mut s = spec("s.date", false, Normalizer::Date);
+        s.absent_if_equals = Some("agreement_date".into());
+        let doc = gold(
+            1,
+            vec![Label::text(
+                "agreement_date",
+                "2020-03-01",
+                MatchMode::Normalized,
+            )],
+            &["effective_date"],
+        );
+        let equal = record(1, vec![fact("s.date", "2020-03-01", 0.8)], Status::Ok, 1);
+        let (preds, _) = predictions(&equal, &s, None);
+        let dt = score_doc_task(&doc, "effective_date", &s, preds).unwrap();
+        assert_eq!((dt.tp, dt.fp, dt.fn_), (0, 0, 0));
+        let other = record(1, vec![fact("s.date", "2021-01-01", 0.8)], Status::Ok, 1);
+        let (preds, _) = predictions(&other, &s, None);
+        let dt = score_doc_task(&doc, "effective_date", &s, preds).unwrap();
+        assert_eq!((dt.tp, dt.fp, dt.fn_), (0, 1, 0));
+        // Without the option the equal value is an FP, as before.
+        s.absent_if_equals = None;
+        let (preds, _) = predictions(&equal, &s, None);
+        let dt = score_doc_task(&doc, "effective_date", &s, preds).unwrap();
+        assert_eq!(dt.fp, 1);
     }
 
     #[test]

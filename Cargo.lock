@@ -2763,6 +2763,7 @@ dependencies = [
  "quail-engine",
  "quail-hash",
  "quail-io",
+ "quail-text",
  "serde",
  "serde_json",
  "tempfile",

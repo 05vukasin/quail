@@ -73,15 +73,34 @@ One JSON file per document, in a dataset directory outside the repository:
 
 ## Task map (`tasks.toml`)
 
-Committed in this crate and compiled in (override with `--tasks`). Per task: `keys` (fact
-keys pooled as predictions), `normalize` (`none`, `text`, `company`, `date`, `identifier`,
-`number`, `bool`, `language`), `multi` (set semantics), `min_conf`, `field` (for record
-values: the field that is the prediction, e.g. `surface` of `party.company`, `raw` of
-`ref.doc_number`; lists of records are flattened) and `pending` (why the task has no producer
-yet; its keys are the planned names, it is scored as abstentions and flagged in the report). Tasks: `doc_type`,
-`doc_title`, `party`, `effective_date`, `agreement_date`, `expiration_date`,
-`jurisdiction`, `term`, `contract_number`, `iban`, `amount_total`, `language`,
-`is_scanned`, `near_duplicate_of`.
+Committed in this crate and compiled in (override with `--tasks`). Per task:
+
+- `keys`: fact keys pooled as predictions.
+- `normalize`: `none`, `text`, `company`, `date`, `identifier`, `bank_account`, `number`,
+  `bool`, `language`. `company`, `date` and `identifier` fold Serbian Cyrillic to Latin
+  (`quail-text`): `company` also drops `д.о.о.`/`доо`/`а.д.`/`d.0.0.`/`preduzetnik` at the end and
+  `JP`/`JKP` at the start; `date` reads Serbian month names (nominative and genitive, `1. јула
+  2026. године`); `identifier` keeps letters and digits and maps Cyrillic look-alikes to Latin
+  (`ОС 90` = `OC 90`); `bank_account` reads `BBB-N-KK` as 18 digits (`840-26650-09` =
+  `840-0000000026650-09`).
+- `multi` (set semantics), `min_conf`.
+- `field`: for record values, the field that is the prediction (`surface` of `party.company`,
+  `raw` of `ref.doc_number`; lists of records are flattened).
+- `only` / `except`: for record values, keep / drop records by a field's value
+  (`only = { kind = ["registry"] }`).
+- `aliases`: predicted value → the gold vocabulary's value (`{ amendment = "annex" }`).
+- `absent_if_equals`: the gold leaves this task out when it equals the named task's value (CUAD
+  drops `effective_date` when it is the agreement date). On such documents a prediction equal
+  to a gold label of the named task is neither a TP nor an FP; any other prediction is an FP as
+  usual.
+- `pending`: why the task has no producer yet; its keys are the planned names, it is scored as
+  abstentions and flagged in the report.
+
+Tasks: `doc_type`, `doc_title`, `party`, `effective_date`, `agreement_date`,
+`expiration_date`, `jurisdiction`, `term`, `contract_number`, `document_number`,
+`parent_contract_number`, `procurement_number`, `tax_id`, `registration_number`,
+`bank_account`, `iban`, `amount_total`, `language`, `script`, `is_scanned`,
+`near_duplicate_of`.
 
 ## Metrics
 

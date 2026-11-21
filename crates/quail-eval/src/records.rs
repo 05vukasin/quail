@@ -1,6 +1,6 @@
 //! Reading quail records back and finding the record of a gold document.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use quail_core::{FileRecord, Value};
@@ -67,6 +67,39 @@ pub fn field_strings(v: &Value, field: Option<&str>) -> Vec<String> {
             .flat_map(|x| field_strings(x, Some(name)))
             .collect(),
         other => vec![value_string(other)],
+    }
+}
+
+/// Like [`field_strings`], keeping only records that pass `only` / `except` (field → allowed
+/// or refused values; see `TaskSpec::only`).
+pub fn filtered_field_strings(
+    v: &Value,
+    field: Option<&str>,
+    only: &BTreeMap<String, Vec<String>>,
+    except: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    if only.is_empty() && except.is_empty() {
+        return field_strings(v, field);
+    }
+    match v {
+        Value::Record(_) => {
+            let has = |name: &str, vals: &[String]| {
+                v.field(name)
+                    .is_some_and(|x| vals.iter().any(|w| *w == value_string(x)))
+            };
+            let pass = only.iter().all(|(n, vals)| has(n, vals))
+                && !except.iter().any(|(n, vals)| has(n, vals));
+            if pass {
+                field_strings(v, field)
+            } else {
+                Vec::new()
+            }
+        }
+        Value::List(items) => items
+            .iter()
+            .flat_map(|x| filtered_field_strings(x, field, only, except))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
