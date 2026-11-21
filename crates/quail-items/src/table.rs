@@ -133,10 +133,11 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
     }
     let mut best: Option<(usize, &str)> = None;
     for (keys, kind) in TOTAL_KEYS {
-        if w.len() >= keys.len() && w.iter().zip(keys.iter()).all(|(a, b)| a == b) {
-            if best.is_none_or(|(n, _)| keys.len() > n) {
-                best = Some((keys.len(), kind));
-            }
+        if w.len() >= keys.len()
+            && w.iter().zip(keys.iter()).all(|(a, b)| a == b)
+            && best.is_none_or(|(n, _)| keys.len() > n)
+        {
+            best = Some((keys.len(), kind));
         }
     }
     let kind = match best {
@@ -265,14 +266,12 @@ pub(crate) fn unit_after(text: &str, at: usize) -> Option<(&'static str, String)
 pub(crate) fn unit_in_desc(desc: &str) -> Option<(&'static str, String)> {
     let w = header::words(desc);
     for (i, x) in w.iter().enumerate() {
-        if matches!(x.as_str(), "po" | "per" | "za") {
-            if let Some(n) = w.get(i + 1) {
-                if let Some(u) = unit::normalize(n) {
-                    if !matches!(u, "pcs" | "m" | "g" | "t" | "l" | "item" | "service") {
-                        return Some((u, format!("{x} {n}")));
-                    }
-                }
-            }
+        if matches!(x.as_str(), "po" | "per" | "za")
+            && let Some(n) = w.get(i + 1)
+            && let Some(u) = unit::normalize(n)
+            && !matches!(u, "pcs" | "m" | "g" | "t" | "l" | "item" | "service")
+        {
+            return Some((u, format!("{x} {n}")));
         }
         if matches!(
             x.as_str(),
@@ -822,19 +821,20 @@ pub(crate) fn parse(
         Some(r) => r,
         None => match prev {
             Some(p) if p.cols.len() == grid.ncols && p.from_header => p.clone(),
-            _ => match {
-                if grid.rows.len() > 1 && is_label_row(&grid.rows[0]) {
-                    label_row = Some(0);
-                    start = 1;
-                }
-                infer_roles(grid, start, hints)
-            } {
-                Some(r) => r,
-                None => {
+            _ => {
+                if let Some(r) = {
+                    if grid.rows.len() > 1 && is_label_row(&grid.rows[0]) {
+                        label_row = Some(0);
+                        start = 1;
+                    }
+                    infer_roles(grid, start, hints)
+                } {
+                    r
+                } else {
                     out.unused_rows = (0..grid.rows.len()).collect();
                     return out;
                 }
-            },
+            }
         },
     };
     if !roles.priced() {
@@ -928,7 +928,7 @@ pub(crate) fn parse(
             for c in 0..first_value_col {
                 let t = cell_text(row, c);
                 if letters(t) >= 3 && Some(c) != code_col {
-                    desc = t.to_owned();
+                    t.clone_into(&mut desc);
                     break;
                 }
             }

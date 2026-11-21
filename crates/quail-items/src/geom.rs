@@ -139,14 +139,14 @@ pub(crate) fn lines(page: &Page) -> Vec<Line> {
 
 /// Lines grouped into rows, top to bottom.
 pub(crate) fn rows(mut lines: Vec<Line>) -> Vec<Row> {
-    let yc = |l: &Line| (l.bbox.y0 + l.bbox.y1) / 2.0;
+    let yc = |l: &Line| f32::midpoint(l.bbox.y0, l.bbox.y1);
     lines.sort_by(|a, b| yc(a).total_cmp(&yc(b)));
     let mut rows: Vec<Row> = Vec::new();
     for l in lines {
         let c = yc(&l);
         let h = (l.bbox.y1 - l.bbox.y0).max(1.0);
         if let Some(r) = rows.last_mut() {
-            let rc = (r.y0 + r.y1) / 2.0;
+            let rc = f32::midpoint(r.y0, r.y1);
             if (c - rc).abs() <= 0.5 * h.min(r.h()) {
                 r.y0 = r.y0.min(l.bbox.y0);
                 r.y1 = r.y1.max(l.bbox.y1);
@@ -454,7 +454,7 @@ fn place(l: &Line, bands: &[(f32, f32)], cells: &mut [Option<GCell>]) {
         let band = hit
             .first()
             .copied()
-            .unwrap_or_else(|| nearest(bands, (lx.0 + lx.1) / 2.0));
+            .unwrap_or_else(|| nearest(bands, f32::midpoint(lx.0, lx.1)));
         put(cells, band, &l.text, l.span, l.bbox);
         return;
     }

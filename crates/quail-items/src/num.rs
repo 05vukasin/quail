@@ -408,7 +408,7 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
             let glued_by_letter = glued_next && after_word.is_none();
             // `No. 11129984`, `#4521`, `br. 12`, `ID: 773882`: an identifier.
             let after_label = text.get(..start_b).is_some_and(|h| {
-                let h = h.trim_end_matches(|c: char| c == ' ' || c == ':' || c == '\u{a0}');
+                let h = h.trim_end_matches([' ', ':', '\u{a0}']);
                 // Only the last few characters matter (the text before can be long).
                 let tail_start = h.char_indices().rev().nth(12).map_or(0, |(k, _)| k);
                 let h = &h[tail_start..];

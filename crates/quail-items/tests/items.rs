@@ -1,3 +1,4 @@
+#![allow(clippy::cast_precision_loss)]
 //! End-to-end tests over documents built in code: DOCX-style tables (`TableCell` blocks, as
 //! `quail-docx` emits them) and PDF-style pages (paragraph blocks with boxes, as `quail-pdf`
 //! emits them).

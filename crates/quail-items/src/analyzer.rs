@@ -144,12 +144,10 @@ pub(crate) fn hints(doc: &Document) -> DocHints {
             }
         }
     }
-    let dec = if comma > dot {
-        Dec::Comma
-    } else if dot > comma {
-        Dec::Dot
-    } else {
-        Dec::Unknown
+    let dec = match comma.cmp(&dot) {
+        std::cmp::Ordering::Greater => Dec::Comma,
+        std::cmp::Ordering::Less => Dec::Dot,
+        std::cmp::Ordering::Equal => Dec::Unknown,
     };
     let currency = cur
         .iter()
@@ -255,9 +253,12 @@ pub(crate) fn hints(doc: &Document) -> DocHints {
     }
 }
 
+/// A cell with its row and column.
+type CellAt = (u16, u16, GCell);
+
 /// DOCX-style tables of a page: `TableCell` blocks grouped by table index.
 fn cell_grids(page: &Page) -> Vec<Grid> {
-    let mut tables: Vec<(u16, Vec<(u16, u16, GCell)>)> = Vec::new();
+    let mut tables: Vec<(u16, Vec<CellAt>)> = Vec::new();
     for b in &page.blocks {
         let BlockKind::TableCell { table, row, col } = b.kind else {
             continue;
@@ -525,7 +526,7 @@ pub(crate) fn emit(found: &Found, cpv: Option<&CpvIndex>, out: &mut Emitter) {
                         q.push_str(s);
                     }
                     Value::List(
-                        ix.top(&q, TOP_K)
+                        ix.top_with(&q, TOP_K, crate::cpv::reads_as_service(&q, it.unit))
                             .into_iter()
                             .filter_map(|c| {
                                 let e = ix.entries().get(c.entry)?;

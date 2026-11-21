@@ -52,6 +52,13 @@
 // Table and line parsers walk rows (`r`), columns (`c`) and tokens (`t`).
 #![allow(clippy::many_single_char_names)]
 #![allow(clippy::similar_names)]
+// Row and line parsers are long sequences of small, ordered rules; splitting them would scatter
+// the order that matters.
+#![allow(clippy::too_many_lines)]
+// `DocHints` is passed by reference everywhere so it can grow without touching every call.
+#![allow(clippy::trivially_copy_pass_by_ref)]
+// Counting a byte in a short slice; not worth a dependency.
+#![allow(clippy::naive_bytecount)]
 
 mod analyzer;
 mod geom;

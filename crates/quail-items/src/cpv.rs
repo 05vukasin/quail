@@ -244,6 +244,12 @@ impl CpvIndex {
 
     /// The best `k` categories for a description, best first, scores ≥ [`MIN_SCORE`].
     pub fn top(&self, text: &str, k: usize) -> Vec<Candidate> {
+        self.top_with(text, k, false)
+    }
+
+    /// Like [`CpvIndex::top`]; with `service` (the line is billed by time, or reads as a role
+    /// or a service), service codes (divisions 50–98) are preferred over goods and works.
+    pub fn top_with(&self, text: &str, k: usize, service: bool) -> Vec<Candidate> {
         let w = folded_words(text);
         if w.is_empty() {
             return Vec::new();
@@ -261,6 +267,15 @@ impl CpvIndex {
                 continue;
             }
             if let Some(&e) = self.doc_entry.get(doc as usize) {
+                let s = if service {
+                    let services = self
+                        .entries
+                        .get(e as usize)
+                        .is_some_and(|x| x.code.as_bytes().first().is_some_and(|d| *d >= b'5'));
+                    if services { s * 1.15 } else { s * 0.85 }
+                } else {
+                    s
+                };
                 let b = best.entry(e).or_default();
                 *b = b.max(s);
             }
@@ -276,6 +291,68 @@ impl CpvIndex {
             })
             .collect()
     }
+}
+
+/// Words that make a line read as a service or a role billed by time.
+const SERVICE_WORDS: &[&str] = &[
+    "service",
+    "services",
+    "fee",
+    "fees",
+    "consulting",
+    "consultancy",
+    "consultant",
+    "support",
+    "management",
+    "manager",
+    "director",
+    "lead",
+    "analyst",
+    "specialist",
+    "engineer",
+    "developer",
+    "architect",
+    "associate",
+    "principal",
+    "partner",
+    "advisor",
+    "maintenance",
+    "repair",
+    "installation",
+    "training",
+    "design",
+    "audit",
+    "development",
+    "usluga",
+    "usluge",
+    "uslugu",
+    "servis",
+    "odrzavanje",
+    "odrzavanja",
+    "popravka",
+    "konsultant",
+    "savetovanje",
+    "obuka",
+    "projektovanje",
+    "izrada",
+    "ispitivanje",
+    "kontrola",
+    "nadzor",
+    "prevoz",
+    "dostava",
+];
+
+/// Whether a description (or its unit) says the line is a service.
+pub(crate) fn reads_as_service(text: &str, unit: Option<&str>) -> bool {
+    if matches!(
+        unit,
+        Some("h" | "day" | "week" | "month" | "year" | "person" | "trip" | "service" | "lump_sum")
+    ) {
+        return true;
+    }
+    folded_words(text)
+        .iter()
+        .any(|w| SERVICE_WORDS.contains(&w.as_str()))
 }
 
 #[cfg(test)]

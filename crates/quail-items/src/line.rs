@@ -266,20 +266,20 @@ pub(crate) fn parse(
                 .is_some_and(|x| num::currency_word(&unit::key(x), false).is_some())
         {
             w.pop();
-            desc = clean_desc(&w.join(" ")).to_owned();
+            clean_desc(&w.join(" ")).clone_into(&mut desc);
         }
         // `2 x 3.500,00`: quantity times price.
         if w.len() >= 3 && matches!(w[w.len() - 1], "x" | "X" | "×" | "*") {
             if let Some(q) = num::parse_number(w[w.len() - 2], hints.dec) {
                 qty = Some((q, None));
                 w.truncate(w.len() - 2);
-                desc = clean_desc(&w.join(" ")).to_owned();
+                clean_desc(&w.join(" ")).clone_into(&mut desc);
             }
         } else if w.len() >= 3 {
             let (n, u) = (w[w.len() - 2], w[w.len() - 1]);
             if let (Some(q), Some(un)) = (num::parse_number(n, hints.dec), unit::of_phrase(u)) {
                 qty = Some((q, Some((un, u.to_owned()))));
-                desc = clean_desc(&w[..w.len() - 2].join(" ")).to_owned();
+                clean_desc(&w[..w.len() - 2].join(" ")).clone_into(&mut desc);
             }
         }
     }
