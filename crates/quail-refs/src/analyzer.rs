@@ -41,7 +41,7 @@ impl Default for RefAnalyzer {
 
 impl RefAnalyzer {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("ref.references", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("ref.references", 2);
 
     /// Compiles the patterns (a few milliseconds); build once and share.
     pub fn new() -> Self {
@@ -60,12 +60,16 @@ impl Analyzer for RefAnalyzer {
         &["document"]
     }
 
+    fn after(&self) -> &'static [&'static str] {
+        &["revised_document"]
+    }
+
     fn profile(&self) -> Profile {
         Profile::Fast
     }
 
     fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
-        let Some(doc) = ctx.get::<Document>() else {
+        let Some(doc) = ctx.document() else {
             return Ok(());
         };
         let budget = usize::try_from(ctx.limits.max_text_bytes).unwrap_or(usize::MAX);
