@@ -439,6 +439,26 @@ pub const TEXT: &[KeyDoc] = &[
         key: quail_text::keys::PAGE_LANG,
         doc: "Language of one page, with the page as evidence; `conf` is its score (Text).",
     },
+    KeyDoc {
+        key: quail_text::keys::ENCODING,
+        doc: "Plain-text files: lowercase WHATWG name of the detected encoding (`utf-8`, `utf-16le`, `windows-1250`, `iso-8859-5`, ...); `conf` is its confidence (Text).",
+    },
+    KeyDoc {
+        key: quail_text::keys::ENCODING_CONFIDENCE,
+        doc: "Plain-text files: confidence of the encoding, 1 for a BOM or valid UTF-8, a heuristic in `[0.3, 0.9]` for a guessed legacy encoding, see `crate::decode` (Float).",
+    },
+    KeyDoc {
+        key: quail_text::keys::ENCODING_BOM,
+        doc: "Plain-text files: the file starts with a byte-order mark (Bool).",
+    },
+    KeyDoc {
+        key: quail_text::keys::DECODE_ERRORS,
+        doc: "Plain-text files: byte sequences that could not be decoded and became U+FFFD; absent when there were none (Int).",
+    },
+    KeyDoc {
+        key: quail_text::keys::LINE_ENDINGS,
+        doc: "Plain-text files: line endings before normalization to LF: `lf`, `crlf`, `cr`, `mixed` or `none` (Text).",
+    },
 ];
 
 /// Keys of `quail_signals::keys`.
@@ -752,7 +772,7 @@ pub const SUMMARY: &[KeyDoc] = &[
     },
     KeyDoc {
         key: quail_summary::keys::SUBJECT,
-        doc: "The subject sentence, verbatim (Record: `text`, `lang`?, `method` = `clause` or `textrank`, `label`?), evidence: its page.",
+        doc: "The subject sentence, verbatim (Record: `text`, `lang`?, `method` = `clause`, `recital`, `operative` or `textrank`, `label`?), evidence: its page.",
     },
     KeyDoc {
         key: quail_summary::keys::LLM,

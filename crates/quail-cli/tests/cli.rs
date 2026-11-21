@@ -302,8 +302,9 @@ fn dump_documents_writes_sidecar_lines() {
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    // Only extracted documents are dumped: the two DOCX files.
-    assert_eq!(lines.len(), 2);
+    // Only extracted documents are dumped: the two DOCX files, and with the text extractor
+    // the two text files (not the junk).
+    assert_eq!(lines.len(), if cfg!(feature = "text") { 4 } else { 2 });
     for l in &lines {
         let obj = l.as_object().unwrap();
         let mut keys: Vec<_> = obj.keys().map(String::as_str).collect();
@@ -317,7 +318,8 @@ fn dump_documents_writes_sidecar_lines() {
         // The document is quail-core's serde form.
         let doc: quail_core::Document = serde_json::from_value(l["document"].clone()).unwrap();
         assert_eq!(doc.pages.len(), 1);
-        assert!(doc.pages[0].text.contains("text") || doc.pages[0].text.contains("agree"));
+        let t = &doc.pages[0].text;
+        assert!(t.contains("text") || t.contains("agree") || t.contains("hidden"));
         assert_eq!(rec.status, Status::Ok);
     }
     // The dump leaves the records untouched: no extra step.
@@ -333,7 +335,9 @@ fn dump_documents_writes_sidecar_lines() {
     let sidecar = Sidecar::load(&dump, None).unwrap();
     for r in &recs {
         let doc = sidecar.document(r).unwrap();
-        assert_eq!(doc.is_some(), r.format == Format::Docx, "{}", r.locator);
+        let extracted =
+            r.format == Format::Docx || (cfg!(feature = "text") && r.format == Format::Text);
+        assert_eq!(doc.is_some(), extracted, "{}", r.locator);
     }
 }
 
@@ -568,7 +572,11 @@ fn keys_and_version() {
     if cfg!(feature = "pdf") {
         expected.push("pdf.extract@2");
     }
-    expected.extend(["docx.extract@1", "hash.identity@1"]);
+    expected.push("docx.extract@1");
+    if cfg!(feature = "text") {
+        expected.push("text.extract@1");
+    }
+    expected.push("hash.identity@1");
     if cfg!(feature = "text") {
         expected.extend(["text.stats@3", "text.lang@2"]);
     }
@@ -652,6 +660,75 @@ fn docx_gets_text_facts() {
     }
     let lang = recs[0].facts_for("text.lang").next().unwrap();
     assert_eq!(lang.value, quail_core::Value::text("en"));
+}
+
+/// A plain-text contract (Windows-1252 with CRLF line endings) goes through the whole pipeline
+/// like a DOCX: text, signal, ref, party and summary facts.
+#[test]
+#[cfg(all(
+    feature = "text",
+    feature = "signals",
+    feature = "refs",
+    feature = "parties",
+    feature = "summary"
+))]
+fn text_file_gets_the_full_pipeline() {
+    let t = tempfile::tempdir().unwrap();
+    let body = "SUPPLY AGREEMENT\r\n\r\n\
+                This Agreement No. 114/23 is made between Alpha Widgets LLC (the \"Supplier\")\r\n\
+                and Beta Components GmbH (the \"Customer\").\r\n\r\n\
+                Effective Date: March 1, 2021. Payments go to IBAN DE89 3704 0044 0532 0130 00.\r\n\
+                Total: EUR 4,200.50 for the delivery of widgets to the M\u{fc}nchen site.\r\n\
+                \r\n\
+                The Supplier shall deliver the goods within thirty days of the Effective Date.\r\n";
+    // Windows-1252: every char of the body is Latin-1, one byte each.
+    let bytes: Vec<u8> = body
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap())
+        .collect();
+    assert!(std::str::from_utf8(&bytes).is_err());
+    let a = write(t.path(), "contract.txt", &bytes);
+    let out = t.path().join("out.jsonl");
+    let o = run(&[
+        "scan",
+        a.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--quiet",
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let recs = records(&fs::read_to_string(&out).unwrap());
+    let r = &recs[0];
+    assert_eq!(r.format, Format::Text);
+    assert_eq!(r.status, Status::Ok, "{:?}", r.warnings);
+    assert_eq!(r.pages, Some(1));
+    assert!(r.steps.iter().any(|s| s.name == "text.extract"));
+    let keys: Vec<&str> = r.facts.iter().map(|f| f.key.as_str()).collect();
+    for k in [
+        "text.encoding",
+        "text.line_endings",
+        "text.chars",
+        "text.lang",
+        "signal.iban",
+        "signal.date_effective",
+        "ref.instrument_kind",
+        "party.company",
+    ] {
+        assert!(keys.contains(&k), "{k} missing in {keys:?}");
+    }
+    assert!(
+        keys.iter().any(|k| k.starts_with("summary.")),
+        "no summary.* in {keys:?}"
+    );
+    let enc = r.facts_for("text.encoding").next().unwrap();
+    assert_eq!(enc.value, quail_core::Value::text("windows-1252"));
+    let le = r.facts_for("text.line_endings").next().unwrap();
+    assert_eq!(le.value, quail_core::Value::text("crlf"));
+    let iban = r.facts_for("signal.iban").next().unwrap();
+    assert_eq!(
+        iban.value,
+        quail_core::Value::text("DE89370400440532013000")
+    );
 }
 
 /// With the signals, refs and parties features, a contract-like DOCX gets their facts, and

@@ -1,6 +1,7 @@
 # quail-text
 
-Text utilities every text analyzer builds on, plus two text-level analyzers. Namespace `text.*`.
+Text utilities every text analyzer builds on, the plain-text extractor and two text-level analyzers.
+Namespace `text.*`.
 
 ## Utilities
 
@@ -15,6 +16,7 @@ Text utilities every text analyzer builds on, plus two text-level analyzers. Nam
 | `garbage` | `garbage_report` / `garbage_ratio`: share of broken-text-layer characters, including Cyrillic read as Latin look-alikes (`OKBMPHM CnOPA3YM`, whole page judged; `is_lookalike()`, `broken_ratio()` without that class); `verdict()` → `Clean`, `Garbage` (ratio > `NEEDS_OCR_RATIO` = 0.10) or `TooShort` (< 20 characters, never an OCR reason by itself) |
 | `money` | exact-decimal numbers and amounts: `parse_number` with a `NumberFormat` (`MONEY`: two decimals, no sign; `QUANTITY`: four decimals, sign, `1'200`) and a `DecimalHint` for `1,500`; `parse_money` with currency (symbol, word in any case incl. Cyrillic `дин.`, ISO code in capitals), multiplier (`5 million`, `2 miliona`) and sign (`-1,200.00`, `1.200,00-`, `(1,200.00)`); `Decimal` with `Display`; the currency and multiplier tables. Shared by `quail-signals` and `quail-items` |
 | `lang` | `LanguageDetector`: Lingua (high accuracy, 11 languages) + an sr/hr/bs marker layer, scored candidates |
+| `decode` | bytes of a plain-text file to text: BOM (UTF-8, UTF-16LE/BE), UTF-16 without BOM (NUL positions), valid or almost-valid UTF-8, else a legacy encoding guessed by `chardetng` and decoded by `encoding_rs`; a confidence and a count of replaced sequences |
 | `normalized` | the `normalized_text` artifact (`NormalizedText`): per page the default-normalized text, its `OffsetMap`, every token (`tokens_with_symbols`) with its `FoldOptions::KEY` key, and the source length |
 
 ## Stability of stored sketches
@@ -32,6 +34,29 @@ regenerate the vectors (`QUAIL_GOLDEN_PRINT=1 cargo test -p quail-text --test go
 Lingua's preload/unload, which run on rayon's global pool, so building and using the detector starts no
 threads (measured: 1 thread in the process after construction and detection). The detector is `Clone`
 (an `Arc`) and safe to use from many threads.
+
+## Extractor: `text.extract@1`
+
+`TextExtractor` turns `Format::Text` files into a `Document`, so plain text gets the same pipeline as
+PDF and DOCX.
+
+- **Encoding** (`decode`): emits `text.encoding` (lowercase WHATWG name, `conf` = confidence),
+  `text.encoding_confidence` (1 for a BOM or valid UTF-8; a heuristic in `[0.3, 0.9]` for a legacy
+  guess: more non-ASCII characters and a larger share of letters among them raise it),
+  `text.encoding_bom`, and `text.decode_errors` + a warning when bytes were replaced by U+FFFD. A
+  confidence below 0.6 adds a warning.
+- **Line endings**: CRLF and CR become LF before pages and blocks are built, so spans index the stored
+  page text; `text.line_endings` = `lf|crlf|cr|mixed|none` (before normalization).
+- **Pages**: split on form feed into `Logical` pages (a trailing form feed opens no empty page), else
+  one page. `text_source = Native`, `needs_ocr = false`.
+- **Blocks**: paragraphs separated by blank lines, trimmed; a page with no blank line but several lines
+  gets a block per line. A one-line block of 3-80 characters with 2+ letters, not ending in `.,;`, is a
+  `Heading` level 1 when all its letters are upper case, level 2 when it starts with a capital or digit,
+  has at most 8 words, no trailing `:` and every word of 4+ letters is capitalized. Zone `Body` (no
+  header/footer inference).
+- **Limits**: reads at most `max_bytes` (and at most 2 × `max_text_bytes` + 4), keeps at most
+  `max_text_bytes` (cut on a char boundary), at most `max_pages` pages: each is a `problem`. Deadline
+  checked per page and every 4096 blocks.
 
 ## Analyzers
 
