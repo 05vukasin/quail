@@ -3,7 +3,7 @@
 //! E-mail addresses and URLs come from `quail-text` tokens ([`TokenKind::Email`],
 //! [`TokenKind::Url`]); only their domain is kept, so no personal address leaves the file.
 //! Free-mail domains (`gmail.com`, ...) identify a person, not a company, and are dropped
-//! (the list of sada's `GENERIC_EMAIL_DOMAINS`).
+//! (the free-mail list of an existing deployment, kept for compatibility).
 //!
 //! Phone numbers are read from a bounded run of digits, spaces and `+ ( ) - . /`:
 //! international numbers (`+381 11 123 4567`, `00381 ...`, `+44 (0)20 7946 0958`) always;
@@ -21,7 +21,7 @@ use crate::page::{PageText, span};
 use crate::phrase::{Reach, find_before};
 use crate::scan::Cand;
 
-/// Free-mail hosts, verbatim from sada `GENERIC_EMAIL_DOMAINS`.
+/// Free-mail hosts, verbatim from the free-mail list of an existing deployment (compatibility mode).
 pub const GENERIC_EMAIL_DOMAINS: &[&str] = &[
     "gmail.com",
     "googlemail.com",

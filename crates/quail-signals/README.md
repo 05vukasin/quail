@@ -30,7 +30,7 @@ range of the **original** page text (scanning runs on normalized text and maps b
 | `signal.amount` | Money | amount with currency, exact decimal |
 | `signal.amount_total` | Money | amount after a total keyword (`Ukupno`, `UKUPNO ZA UPLATU`, `Total`, `Amount due`) |
 | `signal.amount_net` / `signal.amount_gross` | Money | amount marked without / with VAT (`bez PDV-a`, `excl. VAT`, `Net Total`; `sa PDV-om`, `incl. VAT`, `Gross Total`) |
-| `signal.email_domain` | Text | domain of an e-mail address; free-mail domains (sada's `GENERIC_EMAIL_DOMAINS`) dropped |
+| `signal.email_domain` | Text | domain of an e-mail address; free-mail domains (the list of an existing deployment, compatibility mode) dropped |
 | `signal.web_domain` | Text | domain of a URL, `www.` host or bare domain with a common TLD |
 | `signal.phone` | Text | phone number in E.164 |
 

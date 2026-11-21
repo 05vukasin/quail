@@ -22,14 +22,14 @@ All require the `document` artifact.
 | | | `sketch.headings` | U64 | equality | same heading skeleton |
 | `sketch.invoice_layout@2` | Fast | `sketch.invoice_layout`, `sketch.invoice_labels`, `sketch.invoice_number_patterns` | U64, Int, Int | equality | gate on `invoice_labels` ≥ 4 to treat the file as an invoice |
 | `sketch.text_key@2` | Fast | `sketch.text_key` | Bytes, 16 (XXH3-128) | equality | same words (≥ 400 chars) |
-| `sketch.minhash_sada@2` | Standard only (backtracking regexes, see Limits) | `sketch.sada_minhash`, `sketch.sada_minhash_bands`, `sketch.sada_shingles`, `sketch.sada_template` | Bytes 128 × u64 LE, List of Text, Int, U64 | as the Python service | see below |
+| `sketch.minhash_compat@3` | Standard only (backtracking regexes, see Limits) | `sketch.compat_minhash`, `sketch.compat_minhash_bands`, `sketch.compat_shingles`, `sketch.compat_template` | Bytes 128 × u64 LE, List of Text, Int, U64 | as the existing deployment | see below |
 | `sketch.page_phash@3` | Standard (needs `raster`) | `sketch.page_phash`, `sketch.page_phash_pages` | List of U64, List of Int | `hamming` per page | ≤ 8 per page, all pages, equal counts |
 
 Pure helpers: `hamming(a, b)`, `jaccard_estimate(sig_a, sig_b)` (works on both signature
 layouts), `minhash::band_collision_probability(j)`, and every sketch as a function
 (`minhash::text_minhash`, `simhash::text_simhash`, `template::template_simhash`,
 `layout::{geometry_sketch, structure_sketch}`, `invoice::features`, `phash::phash`,
-`text_key`, `sada::*`).
+`text_key`, `compat::*`).
 
 ### How the service should use them
 
@@ -85,17 +85,17 @@ sample. **A golden diff means stored sketches change: bump that analyzer's versi
 (`sketch.<name>@N+1`). The crates that decide the values are pinned with `=` versions
 (`xxhash-rust`, `blake2b_simd`, `regex`, `fancy-regex`, plus `quail-text`'s own pins).
 
-## Python compatibility (`sketch.minhash_sada@2`, `sketch.invoice_layout@2`, `sketch.headings`)
+## Python compatibility (`sketch.minhash_compat@3`, `sketch.invoice_layout@2`, `sketch.headings`)
 
-A port of the fingerprints an existing Python service stores (tokens `<\w+>|\w+` over
-`lower()`, BLAKE2b-64 personalized `sada-fp-v1`, the same 128 permutations and 32 × 4 bands,
+A port of the fingerprints an existing deployment (compatibility mode) stores (tokens `<\w+>|\w+` over
+`lower()`, BLAKE2b-64 personalized with the personalization string of the compatible deployment (`compat::PERSONALIZATION`), the same 128 permutations and 32 × 4 bands,
 bucket strings `"band:hex"`, template SimHash over entity-masked unigrams, invoice labels +
 number shapes, heading skeleton). Python's `\w`, `\s`, `\b` and case-insensitive `i` are
 emulated exactly. Given the same text the values are identical: checked on the text of 380
 private PDF/DOCX files (352 version signatures, 352 bucket lists, 352 template
 fingerprints, 276 invoice fingerprints: 100 % equal) and on 120 000 random strings over a
 pool of tricky Unicode (marks, superscripts, `İ ı ſ K`, U+001C–U+001F, NBSP, U+2028, …).
-The Python service's thresholds: version ≥ 0.90, ≥ 0.75 with an identity tie, near-dup
+That deployment's thresholds: version ≥ 0.90, ≥ 0.75 with an identity tie, near-dup
 ≥ 0.60, another rendering of one invoice < 0.40, template within 8 bits, scanned page within
 8 bits. It masks caller-supplied entity names too; this port is called without them.
 
@@ -133,7 +133,7 @@ Cost per document (laptop, shared machine, `profiling` build), median / p95 / ma
 | `sketch.layout` | 19 / 94 / 1 900 | max 0.35 MB |
 | `sketch.invoice_layout` | 170 / 7 100 / 17 300 | max 1.5 MB |
 | `sketch.text_key` | 180 / 6 900 / 22 200 | max 0.6 MB |
-| `sketch.minhash_sada` | 440 / 14 600 / 34 400 | max 3.6 MB |
+| `sketch.minhash_compat` | 440 / 14 600 / 34 400 | max 3.6 MB |
 | `sketch.page_phash` (47 docs, 290 pages) | 156 000 / 770 000 / 1 578 000 | median 12 MB, max 29 MB (one decoded scan) |
 
 The text sketches are linear in the text; the largest document's MinHash (about 100 000
@@ -145,22 +145,22 @@ shingles) takes about 50 ms. For comparison, `pdf.extract` takes 6 ms median on 
   shingling. Pages needing OCR are skipped by the text sketches.
 - Structure: at most 20 000 blocks; layout: first 8 pages; pHash: 16 pages (warning beyond),
   render refused by the raster over `max_render_pixels`, failures per page are warnings.
-- **Backtracking regexes (why `sketch.minhash_sada` is Standard-profile only).** The `sada`
+- **Backtracking regexes (why `sketch.minhash_compat` is Standard-profile only).** The `compat`
   port must reproduce Python's `\b`, so four patterns (month date, numeric date, number,
   invoice number) need lookarounds, which only `fancy-regex`'s **backtracking** VM offers. They
   are never run as unanchored VM searches (one VM attempt per start position, superlinear on
-  hostile text). Instead `sada::Bounded` scans like Python's `re`: candidates are found with
+  hostile text). Instead `compat::Bounded` scans like Python's `re`: candidates are found with
   the linear `regex` crate (first character of the pattern, previous character not a word
   character), a lookaround-free core must match there (linear `regex`), and only then the full
   pattern runs **anchored** in the VM with an explicit `backtrack_limit`
-  (`sada::backtrack_limit`: max(100 000, 4 × remaining bytes)). The number pattern needs no VM
+  (`compat::backtrack_limit`: max(100 000, 4 × remaining bytes)). The number pattern needs no VM
   at all (longest prefix of the greedy core that ends on a boundary). E-mail and party-name
   masking have no lookarounds and run on `regex`. A VM attempt past its limit returns
   `RegexLimit`: the analyzer adds a warning and skips that sketch (nothing emitted); it never
   panics or hangs. `tests/adversarial.rs` feeds 18 kinds of 1 MB hostile text (`aa-aa-…`,
   `1.1.…`, `1/1/1/…`, unterminated word and digit runs, `a@a@…`, capitalized runs without a
   legal form, month/date near-misses, Cyrillic with `İ ı`, combining marks). Per input, in a
-  debug build: the patterns alone take ≤ 0.65 s, and the whole `minhash_sada` +
+  debug build: the patterns alone take ≤ 0.65 s, and the whole `minhash_compat` +
   `invoice_layout` path ≤ 1.0 s. The bound asserted is 2 s. Even so, the Python-compatible
   path costs several times the native sketches (BLAKE2b per shingle, regex masking), so it
   stays out of `Fast`. `sketch.invoice_layout` keeps `Fast`: it has one pattern behind the

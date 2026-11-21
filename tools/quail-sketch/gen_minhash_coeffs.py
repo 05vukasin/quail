@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Writes crates/quail-sketch/src/coeffs.rs: the 128 MinHash permutations (a, b) as const tables.
 
-They are exactly the ones a CPython service computes with
+They are exactly the ones an existing deployment (compatibility mode) computes in CPython with
 ``random.Random(0x5ADAF19315).randrange(1, p)`` (128 values of a) then ``randrange(0, p)``
-(128 values of b), p = 2^61 - 1, so `sketch.minhash_sada` signatures are byte-identical to it.
+(128 values of b), p = 2^61 - 1, so `sketch.minhash_compat` signatures are byte-identical to it.
 The native `sketch.minhash` reuses the same table. CPython's Mersenne Twister and randrange are
 stable across versions for integer seeds, so re-running this script must give the same file.
 

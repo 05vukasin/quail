@@ -1,17 +1,17 @@
-//! Invoice layout fingerprint, ported as-is from the Python service of [`crate::sada`].
+//! Invoice layout fingerprint, ported as-is from the existing deployment of [`crate::compat`].
 //!
 //! Features: `label:<l>` for each of the 16 [`LABELS`] that occurs as whole words in the
 //! lowercased, white-space-collapsed text, plus `num:<shape>` for each distinct
 //! invoice-number-like code (`\b[A-Za-z]{2,}(?:[-/][A-Za-z0-9]+){1,4}\b` containing a digit)
 //! with digit runs collapsed to `#` and lowercased (`ABC-US-1024` → `abc-us-#`). Both lists
-//! sorted, labels first, joined by `'\n'` and digested with BLAKE2b-64 (`sada-fp-v1`).
+//! sorted, labels first, joined by `'\n'` and digested with BLAKE2b-64 ([`crate::compat::PERSONALIZATION`]).
 //!
 //! Compare for **equality**: one issuer's invoices from one billing system share labels and
 //! number shape. The value is the Python `invoice_layout_fp` hex read as a big-endian integer.
 
 use std::sync::LazyLock;
 
-use crate::sada::{Bounded, RegexLimit, digest_int};
+use crate::compat::{Bounded, RegexLimit, digest_int};
 
 /// Invoice field labels, lowercase and space-separated.
 pub const LABELS: [&str; 16] = [

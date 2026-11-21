@@ -3,7 +3,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use quail_sketch::{invoice, minhash, phash, sada, simhash, template};
+use quail_sketch::{compat, invoice, minhash, phash, simhash, template};
 use quail_text::normalize::{NormalizeOptions, normalize};
 
 fn text(words: usize) -> String {
@@ -47,11 +47,11 @@ fn bench(c: &mut Criterion) {
     g.bench_function("invoice_layout", |b| {
         b.iter(|| invoice::features(black_box(&raw)));
     });
-    g.bench_function("sada raw_minhash", |b| {
-        b.iter(|| sada::raw_minhash(black_box(&raw)));
+    g.bench_function("compat raw_minhash", |b| {
+        b.iter(|| compat::raw_minhash(black_box(&raw)));
     });
-    g.bench_function("sada template_fp", |b| {
-        b.iter(|| sada::template_fp(black_box(&raw)));
+    g.bench_function("compat template_fp", |b| {
+        b.iter(|| compat::template_fp(black_box(&raw)));
     });
     g.finish();
 }

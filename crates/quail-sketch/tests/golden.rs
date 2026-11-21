@@ -9,14 +9,14 @@
 //! whose sketch changed (`sketch.<name>@N+1`), then regenerate with
 //! `QUAIL_GOLDEN_PRINT=1 cargo test -p quail-sketch --test golden -- --nocapture`.
 //!
-//! The `sada` vectors were checked against the Python original (`QUAIL_GOLDEN_DUMP=<file>`
+//! The `compat` vectors were checked against the Python original (`QUAIL_GOLDEN_DUMP=<file>`
 //! writes the sample text for that check).
 
 mod common;
 
 use common::{boxed_page, form, join, kinds_page, prose};
 use quail_core::{BlockKind, Document};
-use quail_sketch::{invoice, layout, minhash, phash, sada, simhash, template};
+use quail_sketch::{compat, invoice, layout, minhash, phash, simhash, template};
 use quail_text::normalize::{NormalizeOptions, normalize};
 use quail_text::shingle::hash_bytes;
 
@@ -63,11 +63,11 @@ fn golden_text_sketches() {
 }
 
 #[test]
-fn golden_sada() {
+fn golden_compat() {
     let text = sample();
-    let (sig, n) = sada::raw_minhash(&text).unwrap();
+    let (sig, n) = compat::raw_minhash(&text).unwrap();
     let bytes: Vec<u8> = sig.iter().flat_map(|r| r.to_le_bytes()).collect();
-    let buckets = sada::lsh_buckets(&sig);
+    let buckets = compat::lsh_buckets(&sig);
     let inv = invoice::features(&text).unwrap();
     let got = (
         n,
@@ -75,27 +75,27 @@ fn golden_sada() {
         hash_bytes(&bytes),
         buckets[0].clone(),
         buckets[31].clone(),
-        sada::template_fp(&text).unwrap(),
+        compat::template_fp(&text).unwrap(),
         format!("{:016x}", inv.fingerprint()),
         format!(
             "{:016x}",
-            sada::structural_fp(["1. Scope of Work", "II) Fees", "a) Term"])
+            compat::structural_fp(["1. Scope of Work", "II) Fees", "a) Term"])
         ),
     );
     if print() {
-        println!("SADA {got:?}");
+        println!("COMPAT {got:?}");
     }
     assert_eq!(
         got,
         (
-            GOLDEN_SADA.0,
-            GOLDEN_SADA.1.to_vec(),
-            GOLDEN_SADA.2,
-            GOLDEN_SADA.3.to_owned(),
-            GOLDEN_SADA.4.to_owned(),
-            GOLDEN_SADA.5,
-            GOLDEN_SADA.6.to_owned(),
-            GOLDEN_SADA.7.to_owned(),
+            GOLDEN_COMPAT.0,
+            GOLDEN_COMPAT.1.to_vec(),
+            GOLDEN_COMPAT.2,
+            GOLDEN_COMPAT.3.to_owned(),
+            GOLDEN_COMPAT.4.to_owned(),
+            GOLDEN_COMPAT.5,
+            GOLDEN_COMPAT.6.to_owned(),
+            GOLDEN_COMPAT.7.to_owned(),
         )
     );
 }
@@ -186,7 +186,7 @@ fn golden_text() -> TextGolden {
 }
 
 /// Checked against the Python original on the same text.
-const GOLDEN_SADA: (usize, [u64; 3], u64, &str, &str, u64, &str, &str) = (
+const GOLDEN_COMPAT: (usize, [u64; 3], u64, &str, &str, u64, &str, &str) = (
     874,
     [
         9_747_362_861_646_355,

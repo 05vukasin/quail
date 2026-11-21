@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 pub enum Profile {
     /// Rules and statistics only, about a millisecond per file.
     Fast,
-    /// Plus static embeddings and small linear models. Pure Rust. The default.
+    /// Every default analyzer, including the Standard-only ones (e.g. the backtracking-regex
+    /// sketches). Pure Rust. The default.
     #[default]
     Standard,
-    /// Plus neural models (OCR, NER) through ONNX, run where cheaper layers are unsure.
+    /// Standard plus the expensive steps (OCR, LLM) of analyzers built with those features.
     Deep,
 }
 

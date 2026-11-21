@@ -18,7 +18,7 @@ use quail_sketch::minhash::{MIN_SHINGLES, text_minhash};
 use quail_sketch::simhash::{TEXT_HAMMING_MAX, text_simhash};
 use quail_sketch::template::template_simhash;
 use quail_sketch::{
-    InvoiceLayout, LayoutAnalyzer, MinHashAnalyzer, PagePHash, SadaMinHash, SimHashTemplate,
+    CompatMinHash, InvoiceLayout, LayoutAnalyzer, MinHashAnalyzer, PagePHash, SimHashTemplate,
     SimHashText, TextKey, hamming, jaccard_estimate, keys,
 };
 
@@ -137,11 +137,11 @@ fn template_masking_makes_forms_collide() {
 }
 
 #[test]
-fn sada_template_masking_makes_forms_collide() {
-    let a = quail_sketch::sada::template_fp(&form(21, 1)).unwrap();
-    let b = quail_sketch::sada::template_fp(&form(21, 2)).unwrap();
-    let c = quail_sketch::sada::template_fp(&form(22, 1)).unwrap();
-    assert!(hamming(a, b) <= quail_sketch::sada::TEMPLATE_HAMMING_MAX);
+fn compat_template_masking_makes_forms_collide() {
+    let a = quail_sketch::compat::template_fp(&form(21, 1)).unwrap();
+    let b = quail_sketch::compat::template_fp(&form(21, 2)).unwrap();
+    let c = quail_sketch::compat::template_fp(&form(22, 1)).unwrap();
+    assert!(hamming(a, b) <= quail_sketch::compat::TEMPLATE_HAMMING_MAX);
     assert!(hamming(a, c) > 16);
 }
 
@@ -287,23 +287,23 @@ fn text_key_same_words_any_bytes() {
 }
 
 #[test]
-fn sada_analyzer_emits_compatible_sketches() {
-    let facts = run(&SadaMinHash, text_doc(&join(&prose(9, 300))), None);
+fn compat_analyzer_emits_compatible_sketches() {
+    let facts = run(&CompatMinHash, text_doc(&join(&prose(9, 300))), None);
     let names: Vec<&str> = facts.iter().map(|f| f.key.as_str()).collect();
     assert_eq!(
         names,
         [
-            "sketch.sada_minhash",
-            "sketch.sada_minhash_bands",
-            "sketch.sada_shingles",
-            "sketch.sada_template"
+            "sketch.compat_minhash",
+            "sketch.compat_minhash_bands",
+            "sketch.compat_shingles",
+            "sketch.compat_template"
         ]
     );
     match &facts[0].value {
         Value::Bytes(b) => assert_eq!(b.len(), 1024),
         v => panic!("{v:?}"),
     }
-    let short = run(&SadaMinHash, text_doc("a few words"), None);
+    let short = run(&CompatMinHash, text_doc("a few words"), None);
     assert_eq!(short.len(), 1, "template only");
 }
 
@@ -456,7 +456,7 @@ fn hostile_inputs_do_not_panic() {
             &LayoutAnalyzer,
             &InvoiceLayout,
             &TextKey,
-            &SadaMinHash,
+            &CompatMinHash,
         ] {
             let _ = run(a, text_doc(t), None);
         }

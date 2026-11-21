@@ -600,7 +600,7 @@ fn keys_and_version() {
             "sketch.layout@2",
             "sketch.invoice_layout@2",
             "sketch.text_key@2",
-            "sketch.minhash_sada@2",
+            "sketch.minhash_compat@3",
         ]);
     }
     if cfg!(all(feature = "sketch", feature = "pdf")) {
@@ -613,6 +613,13 @@ fn keys_and_version() {
         expected.extend(["summary.card@2", "summary.extractive@2"]);
     }
     assert_eq!(ids, expected);
+    let features: Vec<_> = v["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    assert_eq!(features.contains(&"clauses"), cfg!(feature = "clauses"));
     // Deterministic.
     let again: Json = serde_json::from_slice(&run(&["version", "--json"]).stdout).unwrap();
     assert_eq!(again["fingerprint"], v["fingerprint"]);

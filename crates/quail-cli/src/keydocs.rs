@@ -690,7 +690,7 @@ pub const SKETCH: &[KeyDoc] = &[
     },
     KeyDoc {
         key: quail_sketch::keys::HEADINGS,
-        doc: "Digest of the heading skeleton (heading texts, numbering stripped, lowercased), the `structural_fp` of `crate::sada` as a big-endian integer (`Value::U64`). Compare for equality. Absent with fewer than two headings.",
+        doc: "Digest of the heading skeleton (heading texts, numbering stripped, lowercased), the `structural_fp` of `crate::compat` as a big-endian integer (`Value::U64`). Compare for equality. Absent with fewer than two headings.",
     },
     KeyDoc {
         key: quail_sketch::keys::INVOICE_LAYOUT,
@@ -709,19 +709,19 @@ pub const SKETCH: &[KeyDoc] = &[
         doc: "XXH3-128 of the folded words joined by one space (`Value::Bytes`, 16 bytes): the same words, whatever the bytes, spacing, case, diacritics or script. Absent below 400 characters.",
     },
     KeyDoc {
-        key: quail_sketch::keys::SADA_MINHASH,
-        doc: "Python-compatible version signature (`Value::Bytes`, 128 rows × 8 bytes little-endian), see `crate::sada`.",
+        key: quail_sketch::keys::COMPAT_MINHASH,
+        doc: "Python-compatible version signature (`Value::Bytes`, 128 rows × 8 bytes little-endian), see `crate::compat`.",
     },
     KeyDoc {
-        key: quail_sketch::keys::SADA_MINHASH_BANDS,
-        doc: "Python-compatible LSH bucket keys of `SADA_MINHASH` (`Value::List` of 32 `Value::Text`, `\"<band>:<16 hex>\"`).",
+        key: quail_sketch::keys::COMPAT_MINHASH_BANDS,
+        doc: "Python-compatible LSH bucket keys of `COMPAT_MINHASH` (`Value::List` of 32 `Value::Text`, `\"<band>:<16 hex>\"`).",
     },
     KeyDoc {
-        key: quail_sketch::keys::SADA_SHINGLES,
-        doc: "Distinct shingles behind `SADA_MINHASH` (`Value::Int`).",
+        key: quail_sketch::keys::COMPAT_SHINGLES,
+        doc: "Distinct shingles behind `COMPAT_MINHASH` (`Value::Int`).",
     },
     KeyDoc {
-        key: quail_sketch::keys::SADA_TEMPLATE,
+        key: quail_sketch::keys::COMPAT_TEMPLATE,
         doc: "Python-compatible template SimHash of the entity-masked words (`Value::U64`).",
     },
     KeyDoc {

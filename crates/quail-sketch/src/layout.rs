@@ -35,7 +35,7 @@
 //!
 //! # `sketch.headings`
 //!
-//! [`crate::sada::structural_fp`] over the heading blocks' texts: equal skeletons, equal
+//! [`crate::compat::structural_fp`] over the heading blocks' texts: equal skeletons, equal
 //! values. Emitted with at least two headings.
 
 use quail_core::{Block, BlockKind, Document, Page, Zone};
