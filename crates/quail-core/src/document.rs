@@ -168,3 +168,14 @@ impl Document {
 impl Artifact for Document {
     const NAME: &'static str = "document";
 }
+
+/// An improved version of the extracted [`Document`], produced by a later step (OCR filling
+/// pages that had no usable text layer). Text consumers read it through
+/// [`Ctx::document`](crate::Ctx::document), which prefers it over the original, and declare
+/// `after(&["revised_document"])` so they run once it exists. Page indices match the original.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RevisedDocument(pub Document);
+
+impl Artifact for RevisedDocument {
+    const NAME: &'static str = "revised_document";
+}

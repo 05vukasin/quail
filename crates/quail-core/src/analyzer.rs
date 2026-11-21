@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::{Artifact, Artifacts};
 use crate::blob::Blob;
+use crate::document::{Document, RevisedDocument};
 use crate::error::{Error, Result};
 use crate::fact::{Evidence, Fact, FactKey};
 use crate::format::Format;
@@ -80,6 +81,14 @@ impl Ctx<'_> {
     /// Shortcut for `self.artifacts.get::<T>()`.
     pub fn get<T: Artifact>(&self) -> Option<&T> {
         self.artifacts.get::<T>()
+    }
+
+    /// The best available document: the [`RevisedDocument`] (e.g. with OCR text) when a step
+    /// produced one, otherwise the extracted [`Document`].
+    pub fn document(&self) -> Option<&Document> {
+        self.get::<RevisedDocument>()
+            .map(|r| &r.0)
+            .or_else(|| self.get::<Document>())
     }
 }
 
@@ -194,6 +203,13 @@ pub trait Analyzer: Send + Sync {
 
     /// Artifact names it may produce.
     fn provides(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Soft ordering: if an active step provides one of these artifacts, run after it; if none
+    /// does (or it produced nothing for this file), run anyway. Text consumers use
+    /// `&["revised_document"]` so they see OCR text when OCR is active.
+    fn after(&self) -> &'static [&'static str] {
         &[]
     }
 

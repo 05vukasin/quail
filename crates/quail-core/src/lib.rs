@@ -37,7 +37,9 @@ mod value;
 pub use analyzer::{Analyzer, AnalyzerId, Ctx, Emitter};
 pub use artifact::{Artifact, Artifacts};
 pub use blob::Blob;
-pub use document::{Block, BlockKind, Document, Page, PageImage, PageKind, Span, TextSource};
+pub use document::{
+    Block, BlockKind, Document, Page, PageImage, PageKind, RevisedDocument, Span, TextSource,
+};
 pub use error::{Error, Result};
 pub use extractor::Extractor;
 pub use fact::{BBox, Evidence, Fact, FactKey, Zone};
