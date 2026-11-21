@@ -78,6 +78,7 @@ pub(crate) fn arm_cpu_limit(_secs: u64) {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Death {
     /// Killed by a signal (Unix).
+    #[cfg_attr(not(unix), allow(dead_code))]
     Signal(i32),
     /// Exited with a code.
     Exit(i32),

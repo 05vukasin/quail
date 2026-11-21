@@ -146,6 +146,7 @@ pub(crate) fn path_to_bytes(p: &std::path::Path) -> Vec<u8> {
 }
 
 /// Inverse of [`path_to_bytes`].
+#[cfg_attr(not(unix), allow(clippy::needless_pass_by_value))]
 pub(crate) fn path_from_bytes(b: Vec<u8>) -> std::path::PathBuf {
     #[cfg(unix)]
     {
