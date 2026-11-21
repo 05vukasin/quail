@@ -130,9 +130,12 @@ fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> 
         );
     }
 
-    let doc = pages(pdf, blob, &budget, limits, out);
+    let (doc, no_scan) = pages(pdf, blob, &budget, limits, out);
     // Later steps (OCR) get pixels through the core trait and never depend on this crate.
-    out.provide(Raster(Arc::new(PdfRaster::new(blob.clone()))));
+    out.provide(Raster(Arc::new(PdfRaster::with_no_scan(
+        blob.clone(),
+        no_scan,
+    ))));
     Ok(doc)
 }
 
@@ -191,6 +194,9 @@ struct Walk<'o> {
     fonts: BTreeSet<String>,
     pending: Vec<Pending>,
     image_only_pages: usize,
+    /// Per page: interpreted completely (no abort, no refused decode) and drew a number of
+    /// images other than one, so it holds no single embedded scan.
+    no_scan: Vec<bool>,
 }
 
 /// Whether to go on with the next page.
@@ -206,7 +212,7 @@ fn pages(
     budget: &Arc<DecodeBudget>,
     limits: &Limits,
     out: &mut Emitter,
-) -> Document {
+) -> (Document, Vec<bool>) {
     let total = first.pages().len();
     out.fact(keys::PAGE_COUNT, int(total));
     let max = usize::try_from(limits.max_pages).unwrap_or(usize::MAX);
@@ -230,6 +236,7 @@ fn pages(
         fonts: BTreeSet::new(),
         pending: Vec::new(),
         image_only_pages: 0,
+        no_scan: Vec::new(),
     };
     let settings = InterpreterSettings::default();
     let mut next = 0usize;
@@ -279,6 +286,7 @@ fn pages(
         fonts,
         mut pending,
         image_only_pages,
+        no_scan,
         ..
     } = walk;
 
@@ -306,7 +314,7 @@ fn pages(
         keys::PAGES_NEEDING_OCR,
         int(doc.pages.iter().filter(|p| p.needs_ocr).count()),
     );
-    doc
+    (doc, no_scan)
 }
 
 fn assign_zones(pending: &mut [Pending]) {
@@ -338,6 +346,14 @@ fn assign_zones(pending: &mut [Pending]) {
 }
 
 impl Walk<'_> {
+    fn mark_no_scan(&mut self, index: u32, no_scan: bool) {
+        // `index` is below `max_pages` and the page count: the vector stays page-sized.
+        if let (true, Ok(i)) = (no_scan, usize::try_from(index)) {
+            self.no_scan.resize(self.no_scan.len().max(i + 1), false);
+            self.no_scan[i] = true;
+        }
+    }
+
     fn failed_page(&mut self, index: u32, size: (f32, f32), needs_ocr: bool) {
         self.pending.push(Pending {
             page: Page {
@@ -407,7 +423,9 @@ impl Walk<'_> {
             }
         };
         let mut flow = Flow::Continue;
-        if self.budget.take_limit_hit() {
+        let limit_hit = self.budget.take_limit_hit();
+        self.mark_no_scan(index, !limit_hit && cap.images != 1);
+        if limit_hit {
             self.out.problem(format!(
                 "page {index}: a stream or image exceeded max_decompressed or max_render_pixels and was skipped"
             ));

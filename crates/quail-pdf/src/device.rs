@@ -18,7 +18,7 @@ use hayro_interpret::{
 };
 use quail_core::{BBox, Emitter, PageImage};
 
-use crate::layout::Glyph;
+use crate::layout::{Glyph, GlyphText};
 
 /// Glyphs kept per page; a hostile page drawing millions of glyphs is truncated.
 pub(crate) const MAX_GLYPHS_PER_PAGE: usize = 400_000;
@@ -205,8 +205,8 @@ impl<'a> Device<'a> for PageCapture<'_> {
         // OCR'd scans.
         for g in run.glyphs() {
             let text = match g.as_unicode() {
-                Some(BfString::Char(c)) => c.to_string(),
-                Some(BfString::String(s)) => s,
+                Some(BfString::Char(c)) => GlyphText::from_char(c),
+                Some(BfString::String(s)) => GlyphText::from(s),
                 None => {
                     self.unmapped = self.unmapped.saturating_add(1);
                     continue;

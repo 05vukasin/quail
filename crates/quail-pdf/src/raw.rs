@@ -102,11 +102,13 @@ fn trim_start(b: &[u8]) -> &[u8] {
     b.get(n..).unwrap_or(&[])
 }
 
+/// First occurrence of `needle` (`None` for an empty needle). `memchr`'s two-way/SIMD search
+/// with runtime CPU detection: the naive window scan cost a sixth of extraction on large files.
 pub(crate) fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || hay.len() < needle.len() {
+    if needle.is_empty() {
         return None;
     }
-    hay.windows(needle.len()).position(|w| w == needle)
+    memchr::memmem::find(hay, needle)
 }
 
 #[cfg(test)]

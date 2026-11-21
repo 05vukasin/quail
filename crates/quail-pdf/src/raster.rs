@@ -39,6 +39,8 @@ pub const SCAN_COVERAGE: f64 = 0.98;
 pub struct PdfRaster {
     blob: Blob,
     state: Mutex<State>,
+    /// Pages known to hold no single embedded scan (see [`PdfRaster::with_no_scan`]).
+    no_scan: Vec<bool>,
 }
 
 struct State {
@@ -58,6 +60,15 @@ impl std::fmt::Debug for PdfRaster {
 impl PdfRaster {
     /// A raster over the PDF in `blob`. Nothing is parsed until the first call.
     pub fn new(blob: Blob) -> Self {
+        Self::with_no_scan(blob, Vec::new())
+    }
+
+    /// Like [`PdfRaster::new`], told which pages hold no single embedded scan: `no_scan[i]`
+    /// means page `i` was interpreted completely and drew zero or several images, so
+    /// [`PageRaster::embedded_scan`] answers `None` for it without parsing or decoding
+    /// anything (a page with a scan and a stamp would otherwise decode the scan only to
+    /// discard it). Pages past the end of the vector are examined as usual.
+    pub fn with_no_scan(blob: Blob, no_scan: Vec<bool>) -> Self {
         Self {
             blob,
             state: Mutex::new(State {
@@ -65,6 +76,7 @@ impl PdfRaster {
                 pdf: None,
                 decoded_since_open: 0,
             }),
+            no_scan,
         }
     }
 
@@ -240,6 +252,15 @@ impl PageRaster for PdfRaster {
     /// of the page; rendering is the fallback for everything else. Image masks come back as
     /// gray, ink dark.
     fn embedded_scan(&self, page: u32, limits: &Limits) -> Option<Result<Image>> {
+        if usize::try_from(page)
+            .ok()
+            .and_then(|i| self.no_scan.get(i))
+            .copied()
+            .unwrap_or(false)
+            && page < limits.max_pages
+        {
+            return None;
+        }
         let deadline = Instant::now() + limits.timeout;
         let found = self.with_page(page, limits, |p, budget| {
             let (w, h) = p.render_dimensions();

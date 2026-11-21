@@ -209,6 +209,31 @@ fn image_only_page_needs_ocr() {
 }
 
 #[test]
+fn no_scan_hints_skip_pages_without_a_single_image() {
+    use quail_core::PageRaster;
+    let scan = PageSpec {
+        lines: vec![],
+        full_page_image: true,
+    };
+    let blob = Blob::from(pdf(&[text_page(1, 3), scan], &Extras::default()));
+    let limits = Limits::default();
+    let plain = quail_pdf::PdfRaster::new(blob.clone());
+    assert!(plain.embedded_scan(1, &limits).is_some());
+    // A hint is trusted: the page is not even parsed.
+    let hinted = quail_pdf::PdfRaster::with_no_scan(blob.clone(), vec![true, true]);
+    assert!(hinted.embedded_scan(0, &limits).is_none());
+    assert!(hinted.embedded_scan(1, &limits).is_none());
+    // Past the hints, pages are examined as usual; past max_pages, still refused.
+    let short = quail_pdf::PdfRaster::with_no_scan(blob, vec![true]);
+    assert!(short.embedded_scan(1, &limits).is_some());
+    let tight = Limits {
+        max_pages: 0,
+        ..Limits::default()
+    };
+    assert!(matches!(short.embedded_scan(0, &tight), Some(Err(_))));
+}
+
+#[test]
 fn raster_renders_pages_within_limits() {
     let r = run(pdf(&[text_page(1, 3)], &Extras::default()));
     let raster = r.raster.expect("raster artifact");
