@@ -1,0 +1,40 @@
+[package]
+name = "quail-summary"
+description = "Per-file cards and English summaries for LLM agents: a deterministic fact card, an extractive summary, an optional local-LLM abstract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# `summary.llm@1`: a local GGUF model through llama.cpp (`llama-cpp-2`). Builds llama.cpp with
+# CMake and a C++ compiler; `dynamic-backends` builds one CPU backend per microarchitecture and
+# picks one at load time (no `target-cpu=native`). Never in the default build.
+llm = ["dep:llama-cpp-2", "dep:sha2"]
+# `fetch_models`: downloads the GGUF files of the manifest, checking SHA-256.
+fetch = ["dep:ureq", "dep:sha2"]
+
+[dependencies]
+quail-core.workspace = true
+quail-text = { path = "../quail-text" }
+serde_json.workspace = true
+# `pure`: Rust intrinsics instead of assembly (no C toolchain), as in quail-hash.
+blake3 = { version = "1.8", default-features = false, features = ["std", "pure"] }
+
+# Exact version: the research measured this release (llama.cpp with Qwen3.5 support), and the
+# wrapper's API still changes between patch releases.
+llama-cpp-2 = { version = "=0.1.161", default-features = false, features = ["dynamic-backends"], optional = true }
+sha2 = { version = "0.11", optional = true }
+ureq = { version = "3.1", optional = true }
+
+[dev-dependencies]
+quail-engine = { path = "../quail-engine" }
+
+[lints]
+workspace = true
+
+[[example]]
+name = "fetch_models"
+required-features = ["fetch"]
