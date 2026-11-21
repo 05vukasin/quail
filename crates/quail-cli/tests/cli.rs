@@ -610,7 +610,11 @@ fn keys_and_version() {
         expected.push("item.lines@5");
     }
     if cfg!(feature = "summary") {
-        expected.extend(["summary.card@2", "summary.extractive@2"]);
+        expected.extend([
+            "summary.card@2",
+            "summary.extractive@2",
+            "summary.outline@1",
+        ]);
     }
     assert_eq!(ids, expected);
     let features: Vec<_> = v["features"]
