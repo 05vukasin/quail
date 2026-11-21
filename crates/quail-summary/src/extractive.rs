@@ -588,6 +588,9 @@ fn first_sentence(text: &str) -> Option<String> {
         if is_definition(&s) {
             return None;
         }
+        if is_filler(&s) {
+            continue;
+        }
         let n = s.split_whitespace().count();
         if n >= 4 && s.len() >= 20 {
             return Some(limit_words(&s, MAX_SUBJECT_WORDS));
@@ -668,11 +671,36 @@ fn rankable(s: &str) -> bool {
     if total == 0 || letters * 10 < total * 7 || upper * 2 > letters {
         return false;
     }
-    if s.contains("/s/") || s.contains("By:") || s.contains("Name:") || is_definition(s) {
+    if s.contains("/s/")
+        || s.contains("By:")
+        || s.contains("Name:")
+        || is_definition(s)
+        || is_filler(s)
+    {
         return false;
     }
     let f = format!(" {} ", words_of(s).join(" "));
     !BOILERPLATE.iter().any(|b| f.contains(&format!(" {b} ")))
+}
+
+/// Headings set in capitals, filing notes and "referred to herein" recitals.
+fn is_filler(s: &str) -> bool {
+    let letters = s.chars().filter(|c| c.is_alphabetic()).count();
+    let upper = s.chars().filter(|c| c.is_uppercase()).count();
+    if letters == 0 || upper * 2 > letters {
+        return true;
+    }
+    let f = format!(" {} ", words_of(s).join(" "));
+    [
+        " referred to herein ",
+        " referred to individually ",
+        " text omitted ",
+        " confidential treatment ",
+        " filed separately ",
+        " redacted ",
+    ]
+    .iter()
+    .any(|d| f.contains(d))
 }
 
 /// A definition ("\"Affiliate\" shall mean ...") says nothing about the subject.
