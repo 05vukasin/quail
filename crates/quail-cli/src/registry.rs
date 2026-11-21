@@ -170,6 +170,27 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "64-bit DCT pHash of each scanned page (embedded scan or 36 dpi render; needs `raster`).",
     },
+    #[cfg(feature = "items")]
+    StepDoc {
+        id: quail_items::ItemLines::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Price items from tables and rate lines: description, quantity, unit, prices, CPV top-3.",
+    },
+    #[cfg(feature = "summary")]
+    StepDoc {
+        id: quail_summary::SummaryCard::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "File card from all facts (finalizer): kind, parties, dates, amounts, ids, items, flags.",
+    },
+    #[cfg(feature = "summary")]
+    StepDoc {
+        id: quail_summary::SummaryExtractive::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "1-3 sentence English summary without a model: card template + subject clause.",
+    },
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
@@ -208,6 +229,14 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     // Needs the `raster` artifact, which only the PDF extractor provides.
     #[cfg(all(feature = "sketch", feature = "pdf"))]
     let b = b.analyzer(Box::new(quail_sketch::PagePHash));
+    // Builds its CPV index once; shared by every worker.
+    #[cfg(feature = "items")]
+    let b = b.analyzer(Box::new(quail_items::ItemLines::new()));
+    // Finalizers: the engine runs them after every other step.
+    #[cfg(feature = "summary")]
+    let b = b
+        .analyzer(Box::new(quail_summary::SummaryCard::new()))
+        .analyzer(Box::new(quail_summary::SummaryExtractive));
     b
 }
 
@@ -232,6 +261,10 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     v.push(("quail-parties", keydocs::PARTIES));
     #[cfg(feature = "sketch")]
     v.push(("quail-sketch", keydocs::SKETCH));
+    #[cfg(feature = "items")]
+    v.push(("quail-items", keydocs::ITEMS));
+    #[cfg(feature = "summary")]
+    v.push(("quail-summary", keydocs::SUMMARY));
     v
 }
 
@@ -333,6 +366,10 @@ mod tests {
             ("quail-parties", "quail-parties/src/lib.rs"),
             #[cfg(feature = "sketch")]
             ("quail-sketch", "quail-sketch/src/lib.rs"),
+            #[cfg(feature = "items")]
+            ("quail-items", "quail-items/src/lib.rs"),
+            #[cfg(feature = "summary")]
+            ("quail-summary", "quail-summary/src/lib.rs"),
         ];
         let tables = key_tables();
         for (krate, file) in sources {

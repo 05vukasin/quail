@@ -50,6 +50,10 @@ pub fn card_of(ctx: &Ctx<'_>) -> FileCard {
 }
 
 impl Analyzer for SummaryCard {
+    fn finalizer(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> AnalyzerId {
         Self::ID
     }
@@ -92,6 +96,10 @@ impl SummaryExtractive {
 }
 
 impl Analyzer for SummaryExtractive {
+    fn finalizer(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> AnalyzerId {
         Self::ID
     }

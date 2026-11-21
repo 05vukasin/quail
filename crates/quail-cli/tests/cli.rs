@@ -595,6 +595,12 @@ fn keys_and_version() {
     if cfg!(all(feature = "sketch", feature = "pdf")) {
         expected.push("sketch.page_phash@1");
     }
+    if cfg!(feature = "items") {
+        expected.push("item.lines@2");
+    }
+    if cfg!(feature = "summary") {
+        expected.extend(["summary.card@1", "summary.extractive@1"]);
+    }
     assert_eq!(ids, expected);
     // Deterministic.
     let again: Json = serde_json::from_slice(&run(&["version", "--json"]).stdout).unwrap();

@@ -680,3 +680,49 @@ pub const SKETCH: &[KeyDoc] = &[
         doc: "Zero-based page indices of `PAGE_PHASH` (`Value::List` of `Value::Int`).",
     },
 ];
+
+/// Keys of `quail_items::keys`.
+#[cfg(feature = "items")]
+pub const ITEMS: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_items::keys::LINE,
+        doc: "One price item (Record, see the crate documentation).",
+    },
+    KeyDoc {
+        key: quail_items::keys::TABLE_TOTAL,
+        doc: "A subtotal / VAT / total row of a price table (Record).",
+    },
+    KeyDoc {
+        key: quail_items::keys::COUNT,
+        doc: "Number of `item.line` facts (Int).",
+    },
+];
+
+/// Keys of `quail_summary::keys`.
+#[cfg(feature = "summary")]
+pub const SUMMARY: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_summary::keys::CARD,
+        doc: "The file card (Record: `format kind ordinal title title_source lang script pages number cites cites_total parties parties_total dates amounts currencies ids personal_ids items sketch producer author company flags`, absent fields left out; see the README).",
+    },
+    KeyDoc {
+        key: quail_summary::keys::CARD_TEXT,
+        doc: "The card as compact `key: value` lines within the token budget (Text).",
+    },
+    KeyDoc {
+        key: quail_summary::keys::CARD_TOKENS,
+        doc: "Estimated tokens of `CARD_TEXT` (Int, see `crate::tokens`).",
+    },
+    KeyDoc {
+        key: quail_summary::keys::EXTRACTIVE,
+        doc: "1–3 sentence English summary without a model (Text).",
+    },
+    KeyDoc {
+        key: quail_summary::keys::SUBJECT,
+        doc: "The subject sentence, verbatim (Record: `text`, `lang`?, `method` = `clause` or `textrank`, `label`?), evidence: its page.",
+    },
+    KeyDoc {
+        key: quail_summary::keys::LLM,
+        doc: "The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`). Feature `llm`.",
+    },
+];

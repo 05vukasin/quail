@@ -188,6 +188,12 @@ fn features() -> Vec<&'static str> {
     if cfg!(feature = "sketch") {
         v.push("sketch");
     }
+    if cfg!(feature = "items") {
+        v.push("items");
+    }
+    if cfg!(feature = "summary") {
+        v.push("summary");
+    }
     if cfg!(feature = "zstd") {
         v.push("zstd");
     }
