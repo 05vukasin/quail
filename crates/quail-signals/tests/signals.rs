@@ -204,6 +204,59 @@ fn iban_spaced_unspaced_and_invalid() {
     assert!(conf_of(&f, &keys::IBAN) <= 0.25);
 }
 
+fn iban_de() -> String {
+    let bban = "512080001234567890";
+    for k in 2..=98 {
+        let s = format!("DE{k:02}{bban}");
+        if checksum::iban(&s) {
+            return s;
+        }
+    }
+    unreachable!()
+}
+
+#[test]
+fn iban_wrapped_over_one_line_break() {
+    for i in [iban_rs(), iban_de()] {
+        let s = spaced(&i);
+        // Break after the third group (the head is then too short for the tokenizer) and
+        // after the fourth (the head is a spaced run of its own).
+        for at in [14, 19] {
+            let (a, b) = s.split_at(at);
+            let text = format!("IBAN: {}\n{} BIC: AAAARSBG", a.trim_end(), b.trim_start());
+            let f = run(&text);
+            assert_eq!(texts(&f, &keys::IBAN), std::slice::from_ref(&i), "{text}");
+            assert!(conf_of(&f, &keys::IBAN) >= 0.99, "{text}");
+            assert_eq!(texts(&f, &keys::BIC), ["AAAARSBG"], "{text}");
+            // Unlabelled, inside a sentence.
+            let text = format!("pay to {}\n{} by Friday", a.trim_end(), b.trim_start());
+            assert_eq!(
+                texts(&run(&text), &keys::IBAN),
+                std::slice::from_ref(&i),
+                "{text}"
+            );
+            // Never across a paragraph.
+            let text = format!("IBAN: {}\n\n{}", a.trim_end(), b.trim_start());
+            assert!(texts(&run(&text), &keys::IBAN).is_empty(), "{text}");
+        }
+        // Wrong check digits after the join: nothing.
+        let bad = format!(
+            "{}{:02}{}",
+            &i[..2],
+            (i[2..4].parse::<u32>().unwrap() + 1) % 100,
+            &i[4..]
+        );
+        let s = spaced(&bad);
+        let (a, b) = s.split_at(14);
+        let text = format!("ref {}\n{}", a.trim_end(), b.trim_start());
+        assert!(texts(&run(&text), &keys::IBAN).is_empty(), "{text}");
+    }
+    // Too many groups: the next line is something else.
+    let s = spaced(&iban_de());
+    let text = format!("ref {}\n{} 1234", &s[..14], &s[15..]);
+    assert!(texts(&run(&text), &keys::IBAN).is_empty(), "{text}");
+}
+
 #[test]
 fn bic_needs_label_or_iban() {
     let i = iban_rs();
@@ -445,6 +498,26 @@ fn agreement_date_phrases() {
             date(2024, 3, 12),
         ),
         (
+            "THIS FIRST AMENDMENT TO WIDGET SUPPLY AGREEMENT (this \"Amendment\") is made\nand entered into as of the 1st day of March, 2001, by",
+            &keys::DATE_EFFECTIVE,
+            date(2001, 3, 1),
+        ),
+        (
+            "This Amendment No. 1 to Mutual Non-Disclosure Agreement (this \"Amendment\"), dated as of May 3, 2016 (the",
+            &keys::DATE_SIGNED,
+            date(2016, 5, 3),
+        ),
+        (
+            "ADDENDUM TO LICENSE AGREEMENT\nEffective Date:\nMarch 2, 2014",
+            &keys::DATE_EFFECTIVE,
+            date(2014, 3, 2),
+        ),
+        (
+            "This Amendment No. 1 (the \"Amendment\") to the Statement of Work dated May 2, 2020, is made effective as of July 1, 2020",
+            &keys::DATE_EFFECTIVE,
+            date(2020, 7, 1),
+        ),
+        (
             "Name: X\nDate: 7/21/2015",
             &keys::DATE_SIGNED,
             date(2015, 7, 21),
@@ -463,6 +536,13 @@ fn cited_agreements_get_no_role() {
         "both Agreements executed on or about March 13, 1992, and",
         "na osnovu Ugovora zaključenog dana 12.03.2020. godine",
         "Naručilac i Dobavljač konstatuju da su dana 28.01.2025. godine zaključili",
+        // A parties clause between the noun and the date, with abbreviations in it.
+        "under the Widget Supply Agreement entered into by and between Foo Holdings Inc. and Bar Trading S.A. (a subsidiary of Baz Group Ltd.), dated as of May 4, 2011.",
+        "amends the Hosting Agreement between Quux N. A. and Corge Co. dated June 2, 2014",
+        "Amendment No. 2\nto the Gizmo Maintenance Agreement\nref. AB/C-12/9 Issue 3\ndated March 9, 2015",
+        "a Memorandum of Understanding was signed on the 3rd of May 2001 and",
+        "as described in the Grault Statement of Work, dated October 2, 2003, incorporated",
+        "Seller and Buyer have previously entered into the Agreement dated January 5, 2009, and",
     ] {
         let f = run(text);
         assert_eq!(values(&f, &keys::DATE).len(), 1, "{text}");

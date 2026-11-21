@@ -1,4 +1,4 @@
-//! The `signal.scan@3` analyzer: runs every family over each page and collects candidates.
+//! The `signal.scan@4` analyzer: runs every family over each page and collects candidates.
 
 use std::collections::HashMap;
 
@@ -74,7 +74,7 @@ pub struct SignalScan;
 
 impl SignalScan {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("signal.scan", 3);
+    pub const ID: AnalyzerId = AnalyzerId::new("signal.scan", 4);
 }
 
 impl Analyzer for SignalScan {

@@ -177,7 +177,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `docx` (default) | quail-docx | `docx.extract@1` |
 | `pdf` (default) | quail-pdf | `pdf.extract@2` (provides the `raster` artifact) |
 | `text` (default) | quail-text | `text.extract@1` (extractor for `Format::Text`: `.txt` and anything sniffed as text), `text.stats@3`, `text.lang@2` |
-| `signals` (default) | quail-signals | `signal.scan@3` |
+| `signals` (default) | quail-signals | `signal.scan@4` |
 | `refs` (default) | quail-refs | `ref.references@3` |
 | `parties` (default) | quail-parties | `party.candidates@4` |
 | `clauses` (default) | quail-clauses | `clause.terms@1` |

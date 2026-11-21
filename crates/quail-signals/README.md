@@ -4,7 +4,7 @@ Rule-based **candidates** (not verdicts) for formatted business data: identifier
 dates, money and contacts. Namespace `signal.*`. Contract and document numbers, cross-document
 references and titles belong to `quail-refs`; company names, legal forms and parties to `quail-parties`.
 
-One analyzer: **`signal.scan@3`** (`SignalScan`), profile `Fast`, requires the `document` artifact.
+One analyzer: **`signal.scan@4`** (`SignalScan`), profile `Fast`, requires the `document` artifact.
 
 Every fact carries a calibrated `conf` and `Evidence { page, zone, span, bbox }`: the span is a byte
 range of the **original** page text (scanning runs on normalized text and maps back through
@@ -14,7 +14,7 @@ range of the **original** page text (scanning runs on normalized text and maps b
 
 | key | value | what |
 |---|---|---|
-| `signal.iban` | Text | IBAN, compact uppercase; every SWIFT-registry country length, MOD 97-10 |
+| `signal.iban` | Text | IBAN, compact uppercase; every SWIFT-registry country length, MOD 97-10; a spaced IBAN may wrap over one line break (never a blank line) when its check digits validate |
 | `signal.bic` | Text | BIC/SWIFT, 8 or 11 characters, ISO country; only after a `BIC`/`SWIFT` label or next to an IBAN |
 | `signal.vat` | Text | EU/UK VAT number with prefix (`DE…`, `ATU…`, `NL…B01`, `GB…`, `EL…`); check digits for AT BE DE ES FR GB HR IT NL PL SI, format only for the other member states |
 | `signal.rs_pib` | Text | Serbian PIB, 9 digits, ISO 7064 MOD 11,10 |
@@ -69,7 +69,7 @@ One fact per distinct (key, value) per file, with the evidence of its most confi
   3. a date alone on its line in the first 25 lines of the first page (a letter or cover-page date, a
      place before it and `godine` after it allowed) → `date_signed`.
 
-  **Per document**, once every page is read (`signal.scan@3`): the first `date_effective` phrase on
+  **Per document**, once every page is read (`signal.scan@4`): the first `date_effective` phrase on
   the first two pages is the agreement's own (role conf 0.92 instead of 0.78), and so is the first
   signing phrase there (0.85 instead of 0.65). Against the most confident effective date, an
   expiry before it keeps 0.3 of its role conf, and a signing date two years or more before it
@@ -79,8 +79,15 @@ One fact per distinct (key, value) per file, with the evidence of its most confi
   phrase is searched for the nearest agreement noun (`agreement`, `contract`, `plan`, `letter`, `ugovor`,
   `sporazum`, ...; defined terms in quotes skipped) and its determiner. `this` / `ovaj` (and a bare `the
   Agreement`, `This is an Agreement`) mean this document; `the license agreement`, `a ... Agreement`, `both
-  Agreements`, `that certain ...` mean another one. Serbian participles of another document
-  (`Ugovora zaključenog dana`, `potpisanog`) stop the search.
+  Agreements`, `that certain ...` mean another one, and so does any
+  agreement made `previously` / `heretofore` / `originally` (`have previously entered into the Agreement
+  dated ...`). The search reaches 24 words back, over a parties clause between the noun and the date
+  (`the Supply Agreement entered into between X Inc. and Y S.A. (a subsidiary of Z) dated ...`): a
+  period after an abbreviation (`Inc.`, `Ltd.`, `Co.`, `No.`, `ref.`, a single letter, an initialism
+  such as `S.A.`) does not end the sentence. `memorandum` and `statement of work` count as instruments.
+  Serbian participles of another document (`Ugovora zaključenog dana`, `potpisanog`) stop the search.
+  A role label with a colon (`DATED: ...`, `Effective Date: ...`) is a field of this document's head and
+  is never taken for a cited one.
 - **Money**: with both `.` and `,` the later one is decimal; one separator followed by 1–2 digits is
   decimal, by exactly 3 digits groups thousands; spaces group thousands in threes; `million`/`milion`
   etc. multiply. ISO codes only when written in capitals (`TRY`, `ALL` are words), currency words

@@ -1,4 +1,4 @@
-//! Throughput (MB/s) of `signal.scan@3` on generated text.
+//! Throughput (MB/s) of `signal.scan@4` on generated text.
 //!
 //! `cargo bench -p quail-signals --bench scan`. Inputs are built in code: Serbian (Latin and
 //! Cyrillic) and English contract/invoice-like text dense in identifiers, dates and amounts,
