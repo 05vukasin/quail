@@ -31,13 +31,17 @@ stderr tail, and a line in `crashes/summary.tsv`.
 ## Target
 
 The engine as `quail-cli` wires it, in the `Deep` profile: `hash.identity`, `docx.extract`,
-`text.stats`, `text.lang`, `signal.scan`, `ref.references`, `party.candidates`, plus a fuzz-only
-plain-text extractor (`fuzz.text@1`: pages at form feeds, a block per line) so the text
-analyzers see the tricky-Unicode inputs. With the `pdf` feature the PDF extractor is added and,
-when a step provides a `Raster`, the first two pages are rendered at 36 dpi.
+`pdf.extract` (with its `raster`), `text.stats`, `text.lang`, `signal.scan`, `ref.references`,
+`party.candidates`, every `sketch.*` analyzer including `sketch.page_phash` (renders through the
+raster), plus a fuzz-only plain-text extractor (`fuzz.text@1`: pages at form feeds, a block per
+line) so the text analyzers see the tricky-Unicode inputs. After the engine, when the extractor
+provided a `Raster`, the first two pages are rendered at 36 dpi and their embedded scans decoded
+(`QF-STEP render`): this is the OCR path, which runs outside the engine's panic containment.
 
-`pdf` needs `quail_pdf::PdfExtractor` (branch `pdf/extractor`); on master `--features pdf` does
-not compile yet (TODO(quail-pdf #7)).
+Why not `quail-worker`'s `IsolatedRunner`: it returns records, but a fuzz finding needs the
+panic location, the step that was running when the process died, the peak RSS and the render
+step, so the worker here speaks its own one-line protocol. The limits are the same idea
+(`RLIMIT_AS`, `RLIMIT_CPU`, a watchdog).
 
 ## Inputs and mutators
 
@@ -70,7 +74,7 @@ corpus (a cheap stand-in for coverage). Everything is deterministic for a given 
 ## Use
 
 ```sh
-CARGO_BUILD_JOBS=2 cargo build --profile fuzz -p quail-fuzz [--features pdf]
+CARGO_BUILD_JOBS=2 cargo build --profile fuzz -p quail-fuzz
 B=target/fuzz/quail-fuzz
 $B fuzz --out ../lab/tmp/quail-fuzz --jobs 2 --time 3600 --seed 1    # or --iterations N
 $B run ../lab/tmp/quail-fuzz/crashes/*-min.*                       # re-classify

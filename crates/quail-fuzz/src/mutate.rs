@@ -972,7 +972,7 @@ fn hostile_pdf(rng: &mut Rng, b: u32) -> Hostile {
         )
     };
     let c = b + 1;
-    match rng.below(17) {
+    match rng.below(20) {
         0 => {
             // chain of forms, each drawing the next twice: 2^n draws
             let n = u32::try_from(rng.range(8, 40)).unwrap_or(20);
@@ -1280,6 +1280,75 @@ fn hostile_pdf(rng: &mut Rng, b: u32) -> Hostile {
             }
             objs.push(page(b, &format!("{c} 0 R"), ""));
             (objs, vec![b], "pdf-redefined")
+        }
+        17 => {
+            // soft mask over a transparency group with a huge BBox and matrix
+            let objs = vec![
+                page(b, &format!("{c} 0 R"), &format!("/ExtGState << /GS0 {} 0 R >>", c + 1)),
+                (c, stream(b"/GS0 gs 0 0 1 rg 0 0 612 792 re f", b"", true)),
+                (c + 1, format!("<< /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G {} 0 R >> >>", c + 2).into_bytes()),
+                (c + 2, stream(b"1 g 0 0 612 792 re f", b"/Type /XObject /Subtype /Form /BBox [-1e9 -1e9 1e9 1e9] /Group << /S /Transparency /CS /DeviceGray >> /Matrix [1000 0 0 1000 0 0]", true)),
+            ];
+            (objs, vec![b], "pdf-smask-huge")
+        }
+        18 => {
+            // nested transparency groups / tiling patterns, each level drawing the next
+            let n = u32::try_from(rng.range(4, 60)).unwrap_or(8);
+            let tiling = rng.chance(1, 2);
+            let mut objs = if tiling {
+                vec![page(
+                    b,
+                    &format!("{c} 0 R"),
+                    &format!("/Pattern << /P0 {} 0 R >>", c + 1),
+                )]
+            } else {
+                vec![page(
+                    b,
+                    &format!("{c} 0 R"),
+                    &format!("/XObject << /G {} 0 R >>", c + 1),
+                )]
+            };
+            objs.push((
+                c,
+                stream(
+                    if tiling {
+                        b"/Pattern cs /P0 scn 0 0 612 792 re f"
+                    } else {
+                        b"/G Do"
+                    },
+                    b"",
+                    true,
+                ),
+            ));
+            for k in 0..n {
+                let me = c + 1 + k;
+                let last = k + 1 == n;
+                let o = if tiling {
+                    let body: &[u8] = if last {
+                        b"0 0 1 rg 0 0 5 5 re f"
+                    } else {
+                        b"/Pattern cs /P0 scn 0 0 10 10 re f"
+                    };
+                    stream(body, format!("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 0.1 /YStep 0.1 /Resources << /Pattern << /P0 {} 0 R >> >>", me + 1).as_bytes(), true)
+                } else {
+                    let body: &[u8] = if last {
+                        b"0 0 1 rg 0 0 612 792 re f"
+                    } else {
+                        b"0.5 g /GS0 gs /G Do /G Do"
+                    };
+                    stream(body, format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Group << /S /Transparency /K true /I true >> /Resources << /XObject << /G {} 0 R >> /ExtGState << /GS0 << /CA 0.5 /BM /Multiply >> >> >>", me + 1).as_bytes(), true)
+                };
+                objs.push((me, o));
+            }
+            (
+                objs,
+                vec![b],
+                if tiling {
+                    "pdf-tiling-nested"
+                } else {
+                    "pdf-groups-nested"
+                },
+            )
         }
         _ => {
             // an object that is a reference to itself, used as the contents and a resource

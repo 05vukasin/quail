@@ -39,9 +39,10 @@ pub fn short_path(p: &str) -> &str {
 /// one line per panic to stderr, so even a panic that turns into an abort leaves its location.
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
-        let loc = info
-            .location()
-            .map_or_else(|| "?".to_owned(), |l| format!("{}:{}", short_path(l.file()), l.line()));
+        let loc = info.location().map_or_else(
+            || "?".to_owned(),
+            |l| format!("{}:{}", short_path(l.file()), l.line()),
+        );
         let msg = info
             .payload()
             .downcast_ref::<&str>()
@@ -76,6 +77,9 @@ impl<E: Extractor> Extractor for TracedExtractor<E> {
     }
     fn formats(&self) -> &'static [Format] {
         self.0.formats()
+    }
+    fn provides(&self) -> &'static [&'static str] {
+        self.0.provides()
     }
     fn extract(&self, blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> {
         announce(&self.0.id().to_string());
@@ -350,10 +354,16 @@ impl Target {
             .analyzer(Box::new(Traced(quail_text::TextLang::new())))
             .analyzer(Box::new(Traced(quail_signals::SignalScan)))
             .analyzer(Box::new(Traced(quail_refs::RefAnalyzer::new())))
-            .analyzer(Box::new(Traced(quail_parties::PartyCandidates)));
-        // TODO(quail-pdf #7): compiles once `pdf/extractor` is merged.
-        #[cfg(feature = "pdf")]
-        let b = b.extractor(Box::new(TracedExtractor(quail_pdf::PdfExtractor::new())));
+            .analyzer(Box::new(Traced(quail_parties::PartyCandidates)))
+            .extractor(Box::new(TracedExtractor(quail_pdf::PdfExtractor::new())))
+            .analyzer(Box::new(Traced(quail_sketch::MinHashAnalyzer)))
+            .analyzer(Box::new(Traced(quail_sketch::SimHashText)))
+            .analyzer(Box::new(Traced(quail_sketch::SimHashTemplate)))
+            .analyzer(Box::new(Traced(quail_sketch::LayoutAnalyzer)))
+            .analyzer(Box::new(Traced(quail_sketch::InvoiceLayout)))
+            .analyzer(Box::new(Traced(quail_sketch::TextKey)))
+            .analyzer(Box::new(Traced(quail_sketch::SadaMinHash)))
+            .analyzer(Box::new(Traced(quail_sketch::PagePHash)));
         // quail's own panic hook would hide panic locations; ours is installed afterwards.
         let engine = match b.build() {
             Ok(e) => e,
@@ -483,7 +493,10 @@ mod tests {
             short_path("/home/u/.cargo/registry/src/index.crates.io-abc/hayro-0.9.0/src/a.rs"),
             "hayro-0.9.0/src/a.rs"
         );
-        assert_eq!(short_path("/w/q/crates/quail-pdf/src/b.rs"), "crates/quail-pdf/src/b.rs");
+        assert_eq!(
+            short_path("/w/q/crates/quail-pdf/src/b.rs"),
+            "crates/quail-pdf/src/b.rs"
+        );
         assert_eq!(short_path("vendor/x/src/c.rs"), "vendor/x/src/c.rs");
     }
 

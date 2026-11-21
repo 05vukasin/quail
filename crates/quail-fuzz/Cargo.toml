@@ -12,12 +12,6 @@ publish = false
 name = "quail-fuzz"
 path = "src/main.rs"
 
-[features]
-default = []
-# PDF extractor. TODO(quail-pdf #7): needs `quail_pdf::PdfExtractor`, which exists only once the
-# `pdf/extractor` branch is merged; on master `--features pdf` does not compile.
-pdf = ["dep:quail-pdf"]
-
 [dependencies]
 quail-core.workspace = true
 quail-engine = { path = "../quail-engine" }
@@ -27,7 +21,8 @@ quail-text = { path = "../quail-text" }
 quail-signals = { path = "../quail-signals" }
 quail-refs = { path = "../quail-refs" }
 quail-parties = { path = "../quail-parties" }
-quail-pdf = { path = "../quail-pdf", optional = true }
+quail-pdf = { path = "../quail-pdf" }
+quail-sketch = { path = "../quail-sketch" }
 # Reads the zip packages the DOCX mutators take apart (they write zips themselves, so they can
 # lie in headers). Same version and backend as quail-docx.
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
