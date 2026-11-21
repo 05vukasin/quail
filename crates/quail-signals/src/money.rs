@@ -4,6 +4,10 @@
 //!
 //! # Reading the number
 //!
+//! Numbers, currency words, symbols, codes and multiplier words are read by
+//! `quail_text::money` (`parse_amount`, i.e. `NumberFormat::MONEY`), shared with
+//! `quail-items`. The rules, in short:
+//!
 //! - With both `.` and `,`, the later one is the decimal separator (`1.200,50`, `1,200.50`).
 //! - With one kind only: one separator followed by one or two digits is decimal (`1200,5`,
 //!   `99.90`); followed by exactly three digits, or repeated, it groups thousands
@@ -18,6 +22,7 @@
 //! (`Ukupno: 12.345,00`), at lower confidence.
 
 use quail_core::{Money, Span, Value};
+use quail_text::money;
 use quail_text::token::TokenKind;
 
 use crate::conf;
@@ -25,56 +30,6 @@ use crate::keys;
 use crate::page::PageText;
 use crate::phrase::{Reach, find_after, find_before};
 use crate::scan::Cand;
-
-/// Currency words and symbols (folded keys) that may be written in any case.
-const WORDS: &[(&str, [u8; 3])] = &[
-    ("rsd", *b"RSD"),
-    ("din", *b"RSD"),
-    ("dinar", *b"RSD"),
-    ("dinara", *b"RSD"),
-    ("dinari", *b"RSD"),
-    ("eur", *b"EUR"),
-    ("euro", *b"EUR"),
-    ("euros", *b"EUR"),
-    ("evra", *b"EUR"),
-    ("eura", *b"EUR"),
-    ("evro", *b"EUR"),
-    ("usd", *b"USD"),
-    ("dollar", *b"USD"),
-    ("dollars", *b"USD"),
-    ("dolara", *b"USD"),
-    ("gbp", *b"GBP"),
-    ("chf", *b"CHF"),
-    ("kn", *b"HRK"),
-    ("kuna", *b"HRK"),
-    ("€", *b"EUR"),
-    ("$", *b"USD"),
-    ("£", *b"GBP"),
-    ("¥", *b"JPY"),
-    ("₹", *b"INR"),
-];
-
-/// ISO 4217 codes recognised only when written in capitals (`TRY`, `ALL` are words too).
-const CODES: &[&str] = &[
-    "AUD", "BAM", "BGN", "CAD", "CNY", "CZK", "DKK", "HKD", "HRK", "HUF", "INR", "JPY", "MKD",
-    "NOK", "NZD", "PLN", "RON", "RUB", "SEK", "SGD", "TRY", "UAH", "ZAR",
-];
-
-const MULTIPLIERS: &[(&str, u32)] = &[
-    ("thousand", 3),
-    ("hiljada", 3),
-    ("hiljade", 3),
-    ("hiljadu", 3),
-    ("million", 6),
-    ("millions", 6),
-    ("milion", 6),
-    ("miliona", 6),
-    ("mln", 6),
-    ("billion", 9),
-    ("milijarda", 9),
-    ("milijardi", 9),
-    ("milijarde", 9),
-];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Vat {
@@ -135,83 +90,23 @@ const ADJACENT: Reach = Reach { words: 0, lines: 1 };
 const SAME_LINE: Reach = Reach { words: 3, lines: 0 };
 const BEFORE_LINE: Reach = Reach { words: 4, lines: 1 };
 
-/// Currency of token `i`, if it is one.
+/// Currency of token `i`, if it is one: a word in any case, a symbol, or an ISO code in
+/// capitals (`quail_text::money`).
 fn currency(p: &PageText, i: usize) -> Option<[u8; 3]> {
     let key = p.key(i);
-    if let Some((_, c)) = WORDS.iter().find(|(k, _)| *k == key) {
-        return Some(*c);
-    }
-    let t = p.text(i);
-    CODES.iter().find(|c| **c == t).map(|c| {
-        let b = c.as_bytes();
-        [b[0], b[1], b[2]]
-    })
+    let mut chars = key.chars();
+    let symbol = match (chars.next(), chars.next()) {
+        (Some(c), None) => money::currency_symbol(c),
+        _ => None,
+    };
+    money::currency_word(key)
+        .or(symbol)
+        .or_else(|| money::currency_code(p.text(i)))
 }
 
-/// Parses `1.200,50`, `1,200.50`, `1 200,50`, `1200` into units and scale.
-pub(crate) fn parse_amount(s: &str) -> Option<(i64, u8)> {
-    let b = s.as_bytes();
-    if b.is_empty() || !b[0].is_ascii_digit() || !b[b.len() - 1].is_ascii_digit() {
-        return None;
-    }
-    if !b
-        .iter()
-        .all(|c| c.is_ascii_digit() || matches!(c, b'.' | b',' | b' '))
-    {
-        return None;
-    }
-    let last_dot = s.rfind('.');
-    let last_comma = s.rfind(',');
-    let (dec, group) = match (last_dot, last_comma) {
-        (Some(d), Some(c)) => {
-            if d > c {
-                (Some(d), Some(b','))
-            } else {
-                (Some(c), Some(b'.'))
-            }
-        }
-        (Some(x), None) | (None, Some(x)) => {
-            let sep = b[x];
-            let count = b.iter().filter(|&&c| c == sep).count();
-            let after = b.len() - x - 1;
-            if count == 1 && (1..=2).contains(&after) {
-                (Some(x), None)
-            } else {
-                (None, Some(sep))
-            }
-        }
-        (None, None) => (None, None),
-    };
-    let (int, frac) = match dec {
-        Some(x) => (&s[..x], &s[x + 1..]),
-        None => (s, ""),
-    };
-    if frac.len() > 2 || !frac.bytes().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    // Integer part: groups by the group separator or spaces, well-formed.
-    let groups: Vec<&str> = int
-        .split(|c: char| c == ' ' || group.is_some_and(|g| c == char::from(g)))
-        .collect();
-    if groups
-        .iter()
-        .any(|g| g.is_empty() || !g.bytes().all(|c| c.is_ascii_digit()))
-    {
-        return None;
-    }
-    if groups.len() > 1 && (groups[0].len() > 3 || groups[1..].iter().any(|g| g.len() != 3)) {
-        return None;
-    }
-    let digits: String = groups.concat();
-    if digits.len() > 15 {
-        return None;
-    }
-    let mut units: i64 = digits.parse().ok()?;
-    let scale = u8::try_from(frac.len()).ok()?;
-    for c in frac.bytes() {
-        units = units.checked_mul(10)?.checked_add(i64::from(c - b'0'))?;
-    }
-    Some((units, scale))
+/// Units and scale of an amount as written (`quail_text::money::parse_amount`).
+fn parse_amount(s: &str) -> Option<(i64, u8)> {
+    money::parse_amount(s).map(|d| (d.units, d.scale))
 }
 
 fn pure(t: &str, n: std::ops::RangeInclusive<usize>) -> bool {
@@ -300,9 +195,9 @@ fn multiplied(p: &PageText, e: usize, units: i64, scale: u8) -> Option<(i64, u8,
     let k = e + 1;
     if k < p.len()
         && p.tight(k)
-        && let Some((_, pow)) = MULTIPLIERS.iter().find(|(w, _)| *w == p.key(k))
+        && let Some(pow) = money::multiplier(p.key(k))
     {
-        let u = units.checked_mul(10i64.checked_pow(*pow)?)?;
+        let u = units.checked_mul(10i64.checked_pow(pow)?)?;
         return Some((u, scale, k));
     }
     Some((units, scale, e))
@@ -445,20 +340,14 @@ mod tests {
 
     #[test]
     fn number_formats() {
+        // The rules live in `quail_text::money`; these pin what signals relies on.
         assert_eq!(parse_amount("1.200,50"), Some((120_050, 2)));
         assert_eq!(parse_amount("1,200.50"), Some((120_050, 2)));
-        assert_eq!(parse_amount("1 200,50"), Some((120_050, 2)));
         assert_eq!(parse_amount("1 200 000"), Some((1_200_000, 0)));
         assert_eq!(parse_amount("1.200"), Some((1200, 0)));
-        assert_eq!(parse_amount("1,200"), Some((1200, 0)));
-        assert_eq!(parse_amount("1,200,000"), Some((1_200_000, 0)));
         assert_eq!(parse_amount("99.9"), Some((999, 1)));
-        assert_eq!(parse_amount("1200,5"), Some((12005, 1)));
         assert_eq!(parse_amount("1.20.000"), None);
-        assert_eq!(parse_amount("1.200.50"), None, "three-digit groups only");
         assert_eq!(parse_amount("12345.678"), None);
         assert_eq!(parse_amount("9999999999999999"), None);
-        assert_eq!(parse_amount(""), None);
-        assert_eq!(parse_amount("1,"), None);
     }
 }
