@@ -172,3 +172,52 @@ fn extractor_priority() {
         .unwrap();
     assert_eq!(engine.extractor_for(Format::Text).unwrap().name, "mock.b");
 }
+
+/// An artifact an extractor declares in `provides` satisfies analyzers that require it.
+#[test]
+fn extractor_provided_artifact_satisfies_requirements() {
+    use quail_core::{
+        Analyzer, AnalyzerId, Blob, Ctx, Document, Emitter, Extractor, Format, Limits, Result,
+    };
+    struct WithRaster;
+    impl Extractor for WithRaster {
+        fn id(&self) -> AnalyzerId {
+            AnalyzerId::new("raster.extract", 1)
+        }
+        fn formats(&self) -> &'static [Format] {
+            &[Format::Pdf]
+        }
+        fn provides(&self) -> &'static [&'static str] {
+            &["raster"]
+        }
+        fn extract(&self, _: &Blob, _: &Limits, _: &mut Emitter) -> Result<Document> {
+            Ok(Document::default())
+        }
+    }
+    struct NeedsRaster;
+    impl Analyzer for NeedsRaster {
+        fn id(&self) -> AnalyzerId {
+            AnalyzerId::new("needs.raster", 1)
+        }
+        fn requires(&self) -> &'static [&'static str] {
+            &["raster"]
+        }
+        fn run(&self, _: &Ctx<'_>, _: &mut Emitter) -> Result<()> {
+            Ok(())
+        }
+    }
+    let err = quail_engine::EngineBuilder::new()
+        .analyzer(Box::new(NeedsRaster))
+        .build()
+        .err()
+        .expect("no provider yet");
+    assert!(
+        matches!(err, quail_engine::BuildError::Unsatisfied { .. }),
+        "{err:?}"
+    );
+    quail_engine::EngineBuilder::new()
+        .extractor(Box::new(WithRaster))
+        .analyzer(Box::new(NeedsRaster))
+        .build()
+        .expect("raster provided by the extractor");
+}

@@ -141,6 +141,14 @@ impl EngineBuilder {
     /// Validates the configuration and fixes the analyzer order.
     pub fn build(self) -> Result<Engine, BuildError> {
         let extractors = pick_extractors(self.extractors)?;
+        let mut extracted: Vec<&'static str> = Vec::new();
+        for (_, e) in &extractors {
+            for &p in e.provides() {
+                if !extracted.contains(&p) {
+                    extracted.push(p);
+                }
+            }
+        }
 
         let mut seen = HashSet::new();
         for a in &self.analyzers {
@@ -152,7 +160,7 @@ impl EngineBuilder {
             .analyzers
             .into_iter()
             .partition(|a| a.profile() <= self.profile);
-        let plan = order(active, &inactive, self.profile)?;
+        let plan = order(active, &inactive, &extracted, self.profile)?;
 
         if self.quiet_panics {
             install_quiet_panic_hook();
@@ -218,6 +226,7 @@ fn pick_extractors(all: Vec<(Box<dyn Extractor>, i32)>) -> Result<ExtractorTable
 fn order(
     active: Vec<Box<dyn Analyzer>>,
     inactive: &[Box<dyn Analyzer>],
+    extracted: &[&'static str],
     profile: Profile,
 ) -> Result<Vec<Box<dyn Analyzer>>, BuildError> {
     let n = active.len();
@@ -233,7 +242,7 @@ fn order(
         for &r in a.requires() {
             match providers.get(r) {
                 Some(ps) => deps[i].extend(ps.iter().copied()),
-                None if BUILTIN_ARTIFACTS.contains(&r) => {}
+                None if BUILTIN_ARTIFACTS.contains(&r) || extracted.contains(&r) => {}
                 None => {
                     return Err(BuildError::Unsatisfied {
                         analyzer: a.id(),
