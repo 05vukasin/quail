@@ -185,6 +185,9 @@ fn features() -> Vec<&'static str> {
     if cfg!(feature = "parties") {
         v.push("parties");
     }
+    if cfg!(feature = "clauses") {
+        v.push("clauses");
+    }
     if cfg!(feature = "sketch") {
         v.push("sketch");
     }

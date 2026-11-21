@@ -63,12 +63,12 @@ pub enum ModelsAction {
 /// `--profile` values.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum ProfileArg {
-    /// Rules and statistics only.
+    /// Rules and statistics only: leaves out the Standard-only analyzers.
     Fast,
-    /// Plus static embeddings and small linear models (default).
+    /// Every analyzer of this build, including the Standard-only sketches (default).
     #[default]
     Standard,
-    /// Plus neural models.
+    /// Standard plus OCR/LLM steps when built with those features (none in the default build).
     Deep,
 }
 
