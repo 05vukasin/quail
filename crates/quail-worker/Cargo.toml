@@ -15,7 +15,8 @@ path = "src/bin/demo.rs"
 quail-core.workspace = true
 quail-engine = { path = "../quail-engine" }
 serde.workspace = true
-serde_json.workspace = true
+# float_roundtrip: records parsed back from a worker must equal in-process ones bit for bit.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 crossbeam-channel = "0.5.15"
 
 [target.'cfg(unix)'.dependencies]
