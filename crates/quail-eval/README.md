@@ -80,13 +80,19 @@ Committed in this crate and compiled in (override with `--tasks`). Per task:
 - `normalize`: `none`, `text`, `company`, `date`, `identifier`, `bank_account`, `number`,
   `bool`, `language`. `company`, `date` and `identifier` fold Serbian Cyrillic to Latin
   (`quail-text`): `company` also drops `д.о.о.`/`доо`/`а.д.`/`d.0.0.`/`preduzetnik` at the end and
-  `JP`/`JKP` at the start; `date` reads Serbian month names (nominative and genitive, `1. јула
+  `JP`/`JKP` at the start and reads `&` as `and` (Kleister-NDA writes `Leggett and Platt`); `date` reads Serbian month names (nominative and genitive, `1. јула
   2026. године`); `identifier` keeps letters and digits and maps Cyrillic look-alikes to Latin
   (`ОС 90` = `OC 90`); `bank_account` reads `BBB-N-KK` as 18 digits (`840-26650-09` =
   `840-0000000026650-09`).
 - `multi` (set semantics), `min_conf`.
 - `field`: for record values, the field that is the prediction (`surface` of `party.company`,
   `raw` of `ref.doc_number`; lists of records are flattened).
+- `alt_fields`: for record values, more fields whose values also answer the task (`defined_term`
+  of `party.company`: CUAD labels a party's alias as well as its name). A record stays one
+  prediction: it claims at most one gold label with `field` and one more with each alternative
+  field; every claimed label is a TP and the record is one FP only when it claims none, so
+  precision is claimed labels over claimed labels plus unmatched predictions. Repeats dropped by
+  `multi` hand their alternative values to the record kept.
 - `only` / `except`: for record values, keep / drop records by a field's value
   (`only = { kind = ["registry"] }`).
 - `aliases`: predicted value → the gold vocabulary's value (`{ amendment = "annex" }`).

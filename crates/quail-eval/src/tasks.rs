@@ -45,6 +45,14 @@ pub struct TaskSpec {
     /// the field give no prediction; non-record values are used as they are.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    /// For record values: more fields whose values also answer the task (`defined_term` of
+    /// `party.company`, when the gold labels a party's alias as well as its name). The record
+    /// stays one prediction: it claims at most one gold label with `field` and one more with
+    /// each alternative field, every claimed label is a TP, and it is one FP only when it
+    /// claims none. Precision is then claimed labels over claimed labels plus unmatched
+    /// predictions. Needs `field`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alt_fields: Vec<String>,
     /// For record values: keep only records whose field has one of the listed values
     /// (`only = { kind = ["registry"] }`). Records without the field are dropped.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -110,6 +118,12 @@ impl TaskMap {
                     format!("task {name}: absent_if_equals names the task itself"),
                 ));
             }
+            if !spec.alt_fields.is_empty() && spec.field.is_none() {
+                return Err(Error::parse(
+                    origin,
+                    format!("task {name}: alt_fields need a field"),
+                ));
+            }
             if (!spec.only.is_empty() || !spec.except.is_empty()) && spec.field.is_none() {
                 return Err(Error::parse(
                     origin,
@@ -165,6 +179,14 @@ mod tests {
         assert!(m.get("party").unwrap().multi);
         assert_eq!(m.get("party").unwrap().normalize, Normalizer::Company);
         assert_eq!(m.get("party").unwrap().field.as_deref(), Some("surface"));
+        assert_eq!(m.get("party").unwrap().alt_fields, ["defined_term"]);
+        assert!(
+            TaskMap::from_toml(
+                "[task.a]\nkeys = [\"x.y\"]\nalt_fields = [\"t\"]\n",
+                Path::new("t")
+            )
+            .is_err()
+        );
         assert!(m.get("party").unwrap().pending.is_none());
         assert!(m.get("term").unwrap().pending.is_some());
         assert!(m.get("items").unwrap().rows);

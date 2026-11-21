@@ -6,6 +6,7 @@
 # multi:     true = set of values (every value scored), false = only the most confident one
 # min_conf:  predictions below it count as abstentions
 # field:     for record values, the field that is the prediction
+# alt_fields: for record values, more fields that may each claim one more gold label
 # only / except: for record values, keep / drop records by field value ({ kind = [...] })
 # aliases:   predicted value -> the gold vocabulary's value
 # absent_if_equals: the gold leaves this task out when it equals the named task's value; a
@@ -36,6 +37,10 @@ description = "Contracting parties / companies named as parties"
 # 2 points of this on Kleister/CUAD with a much worse ECE.
 keys = ["party.company", "docx.clm_first_party", "docx.clm_second_party"]
 field = "surface"
+# CUAD labels a party's alias too ("Licensor", the "Company"): the mention's defined term may
+# claim a second gold label (CUAD dev party F1 52.8 -> 71.7; Kleister-NDA has no aliases, no
+# change).
+alt_fields = ["defined_term"]
 normalize = "company"
 multi = true
 # Mentions whose only role is `mentioned` score below 0.3 (quail-parties #30): P +22 / R -3.5
