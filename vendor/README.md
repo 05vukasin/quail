@@ -63,6 +63,9 @@ The crate using them (`quail-pdf`) cannot do that from outside.
   the pixel cap, and dropping rows sets the limit flag.
 - **`xref.rs`:** the budget is threaded through xref-stream parsing and through object-stream
   decoding in the repair path.
+- **`filter/lzw_flate.rs` (predictors):** row lengths are computed in checked `usize` (the `u8`
+  product wrapped). `/Colors 0` or `/Columns 0` is refused (it divided by zero), and a row
+  longer than the data decodes nothing instead of sizing a gigabyte zero row.
 - **`page.rs`:**
   - `MAX_PAGES` (131 072). Page trees stop there. Inline kid dictionaries are not
     deduplicated, so a small file could otherwise create millions of `Page` structs.
@@ -75,6 +78,12 @@ The crate using them (`quail-pdf`) cannot do that from outside.
 - **`x_object/decode/mod.rs`:** image and mask sample buffers are sized from `/Width` ×
   `/Height`. Images above the file's pixel cap are refused (and flagged) before anything is
   allocated, whatever filter they use or how small their data is.
+- **`font/type3.rs`, `font/mod.rs`, `context.rs`:** Type3 glyph procedures nested deeper than
+  4 are not drawn. A glyph showing text in its own font recursed until the stack overflowed (a
+  process abort). The Type3 depth is tracked apart from form nesting.
+- **`device.rs`, `interpret/mod.rs`, `font/type3.rs`, `pattern.rs`:** `Device::on_operator`, a
+  default no-op hook called before every content-stream operator (forwarded by wrapper
+  devices), so a device can check a deadline between operators.
 - **`x_object/image.rs`, `interpret/mod.rs`, `x_object/decode/image.rs`:** an image carries the
   file's budget. Inline images (and soft masks) get it from the interpreter context, since
   their streams have none, so they obey `max_render_pixels` too.
@@ -93,8 +102,14 @@ The crate using them (`quail-pdf`) cannot do that from outside.
 
 ### hayro 0.9.0 (renderer)
 
-- **`limits.rs` (new):** `RenderLimits` (deadline, byte budget, callback cap) and the
-  `RenderAbort` payload.
+- **`limits.rs` (new):** `RenderLimits` (deadline, byte budget, callback cap, rasterization
+  work budget) and the `RenderAbort` payload.
+  - vello rasterizes the recording after hayro is done and cannot be interrupted. So its work
+    is charged while recording: every fill by its device-space area, every transparency group
+    by the canvas area. The deadline is checked every 1024 operators and once more before
+    rasterization starts.
+  - Recording memory is charged too: 1 KiB per glyph fill, 512 bytes per path fill, 64 KiB per
+    gradient (a lookup table each), and the sampled texture of a non-native shading.
 - **`lib.rs`:**
   - `render_limited` takes a `RenderLimits` (`render` and `render_into` are unchanged).
   - Every device callback ticks the limits.
@@ -105,7 +120,9 @@ The crate using them (`quail-pdf`) cannot do that from outside.
 - **`mask.rs`:** soft-mask canvases are charged (12 bytes per pixel) before allocating.
 - **`image.rs`:** every image draw is charged at 8 bytes per declared pixel *before* decoding,
   so repeated draws of a big image, or many distinct images, run into the budget instead of
-  memory.
+  memory. The charge saturates (it wrapped for `/Width`, `/Height` near `u32::MAX`).
+- **`paint.rs`:** gradient and sampled-shading charges.
+- **`glyph_cache.rs`:** glyph positions are summed in `f64` (the `i32` sum overflowed).
 
 ## Updating
 
