@@ -1,123 +1,23 @@
 //! Numbers, amounts, percentages and dates inside one cell or line.
 //!
-//! The scanner is a single pass over the characters, no regular expressions. Separator rules
-//! follow `quail-signals` (later of `.`/`,` is decimal; a single separator followed by one or
-//! two digits is decimal, by three digits it groups thousands), with two differences that
-//! line items need: quantities and unit prices may have three or four decimals (`0,0450` per
-//! kWh, `1,500` kg), resolved by the document's decimal separator ([`Dec`]); and a leading
-//! minus sign is kept (credits, discounts).
+//! The scanner is a single pass over the characters, no regular expressions. Numbers and
+//! currencies are read by `quail_text::money` (shared with `quail-signals`) with
+//! `NumberFormat::QUANTITY`: quantities and unit prices may have three or four decimals
+//! (`0,0450` per kWh, `1,500` kg), resolved by the document's decimal separator ([`Dec`]);
+//! a leading minus sign is kept, and a money-like amount in parentheses (`(1,200.00)`) is
+//! negative (credits, discounts).
 
-use quail_core::{Date, Money};
-
-/// The document's decimal separator, learned from its unambiguous amounts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum Dec {
-    /// Not known.
-    #[default]
-    Unknown,
-    /// `1.200,50`.
-    Comma,
-    /// `1,200.50`.
-    Dot,
-}
+use quail_core::Date;
+use quail_text::money::{self, NumberFormat};
 
 /// An exact decimal `units × 10^-scale`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Num {
-    pub units: i64,
-    pub scale: u8,
-}
-
-impl Num {
-    #[allow(clippy::cast_precision_loss)]
-    pub fn to_f64(self) -> f64 {
-        self.units as f64 / 10f64.powi(i32::from(self.scale))
-    }
-
-    pub fn money(self, currency: Option<[u8; 3]>) -> Money {
-        Money {
-            units: self.units,
-            scale: self.scale,
-            currency,
-        }
-    }
-}
+pub(crate) use quail_text::money::Decimal as Num;
+/// The document's decimal separator, learned from its unambiguous amounts.
+pub(crate) use quail_text::money::DecimalHint as Dec;
 
 /// Parses a number as written: digits with `.`, `,`, `'` or space groups, optional sign.
 pub(crate) fn parse_number(s: &str, dec: Dec) -> Option<Num> {
-    let s = s.trim();
-    let (neg, body) = match s.strip_prefix(['-', '−']) {
-        Some(rest) => (true, rest.trim_start()),
-        None => (false, s.strip_prefix('+').unwrap_or(s)),
-    };
-    let b = body.as_bytes();
-    let (first, last) = (b.first()?, b.last()?);
-    if !first.is_ascii_digit() || !last.is_ascii_digit() {
-        return None;
-    }
-    if !b
-        .iter()
-        .all(|c| c.is_ascii_digit() || matches!(c, b'.' | b',' | b' ' | b'\''))
-    {
-        return None;
-    }
-    let last_dot = body.rfind('.');
-    let last_comma = body.rfind(',');
-    let decimal = match (last_dot, last_comma) {
-        (Some(d), Some(c)) => Some(d.max(c)),
-        (Some(x), None) | (None, Some(x)) => {
-            let sep = b[x];
-            let count = b.iter().filter(|&&c| c == sep).count();
-            let after = b.len() - x - 1;
-            let hinted = matches!((sep, dec), (b',', Dec::Comma) | (b'.', Dec::Dot));
-            let other_hinted = matches!((sep, dec), (b',', Dec::Dot) | (b'.', Dec::Comma));
-            if count > 1 {
-                None
-            } else if (1..=2).contains(&after) {
-                Some(x)
-            } else if after == 3 {
-                // `1.200` / `1,200`: thousands unless the document writes decimals this way.
-                if hinted { Some(x) } else { None }
-            } else if after == 4 && !other_hinted {
-                Some(x)
-            } else {
-                return None;
-            }
-        }
-        (None, None) => None,
-    };
-    let (int, frac) = match decimal {
-        Some(x) => (&body[..x], &body[x + 1..]),
-        None => (body, ""),
-    };
-    if frac.len() > 4 || !frac.bytes().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let groups: Vec<&str> = int.split([' ', '.', ',', '\'']).collect();
-    if groups
-        .iter()
-        .any(|g| g.is_empty() || !g.bytes().all(|c| c.is_ascii_digit()))
-    {
-        return None;
-    }
-    if groups.len() > 1 && (groups[0].len() > 3 || groups.iter().skip(1).any(|g| g.len() != 3)) {
-        return None;
-    }
-    let digits: usize = groups.iter().map(|g| g.len()).sum::<usize>() + frac.len();
-    if digits > 15 {
-        return None;
-    }
-    let mut units: i64 = 0;
-    for c in groups.iter().flat_map(|g| g.bytes()).chain(frac.bytes()) {
-        units = units.checked_mul(10)?.checked_add(i64::from(c - b'0'))?;
-    }
-    if neg {
-        units = -units;
-    }
-    Some(Num {
-        units,
-        scale: u8::try_from(frac.len()).ok()?,
-    })
+    money::parse_number(s, &NumberFormat::QUANTITY.with_decimal(dec))
 }
 
 /// What a numeric run turned out to be.
@@ -170,80 +70,26 @@ pub(crate) enum DateOrder {
     Mdy,
 }
 
-/// Currency words and symbols, folded.
-const CURRENCY_WORDS: &[(&str, [u8; 3])] = &[
-    ("rsd", *b"RSD"),
-    ("din", *b"RSD"),
-    ("dinar", *b"RSD"),
-    ("dinara", *b"RSD"),
-    ("dinari", *b"RSD"),
-    ("eur", *b"EUR"),
-    ("euro", *b"EUR"),
-    ("euros", *b"EUR"),
-    ("evra", *b"EUR"),
-    ("eura", *b"EUR"),
-    ("evro", *b"EUR"),
-    ("usd", *b"USD"),
-    ("us$", *b"USD"),
-    ("dollar", *b"USD"),
-    ("dollars", *b"USD"),
-    ("dolara", *b"USD"),
-    ("gbp", *b"GBP"),
-    ("chf", *b"CHF"),
-    ("km", *b"BAM"),
-    ("bam", *b"BAM"),
-    ("kn", *b"HRK"),
-    ("hrk", *b"HRK"),
-    ("cad", *b"CAD"),
-    ("aud", *b"AUD"),
-    ("sek", *b"SEK"),
-    ("nok", *b"NOK"),
-    ("dkk", *b"DKK"),
-    ("pln", *b"PLN"),
-    ("czk", *b"CZK"),
-    ("huf", *b"HUF"),
-    ("ron", *b"RON"),
-    ("bgn", *b"BGN"),
-    ("mkd", *b"MKD"),
-    ("jpy", *b"JPY"),
-    ("cny", *b"CNY"),
-    ("inr", *b"INR"),
-];
-
-const CURRENCY_SYMBOLS: &[(char, [u8; 3])] = &[
-    ('€', *b"EUR"),
-    ('$', *b"USD"),
-    ('£', *b"GBP"),
-    ('¥', *b"JPY"),
-    ('₹', *b"INR"),
-];
-
-/// Currency of a folded word (`km` only where the caller allows it: it is also kilometres).
+/// Currency of a folded word: a currency word or an ISO code in any case (`km` only where
+/// the caller allows it: it is also kilometres).
 pub(crate) fn currency_word(key: &str, allow_km: bool) -> Option<[u8; 3]> {
-    if key == "km" && !allow_km {
-        return None;
-    }
     let key = key.trim_end_matches('.');
-    CURRENCY_WORDS
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, c)| *c)
+    if key == "km" {
+        return allow_km.then_some(*b"BAM");
+    }
+    money::currency_word(key).or_else(|| money::currency_code_any_case(key))
 }
 
 fn currency_symbol(c: char) -> Option<[u8; 3]> {
-    CURRENCY_SYMBOLS
-        .iter()
-        .find(|(s, _)| *s == c)
-        .map(|(_, cur)| *cur)
+    money::currency_symbol(c)
 }
 
 fn is_sep(c: char) -> bool {
     matches!(c, '.' | ',' | '\'')
 }
 
-/// Space-like characters that may group thousands.
 fn is_group_space(c: char) -> bool {
-    matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '\u{2009}')
+    money::is_group_space(c)
 }
 
 /// The word (letters only, folded to ASCII lowercase when simple) right after byte `i`,
@@ -469,6 +315,15 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
                 }
                 _ => false,
             };
+            // `(1,200.00)`, `($500.00)`, `(5.000,00 RSD)`: an accounting negative (a credit).
+            let mut kind = kind;
+            if let NumKind::Number(v) = &mut kind
+                && v.units > 0
+                && (formatted || currency.is_some())
+                && parenthesized(text, start_b, end_b)
+            {
+                v.units = -v.units;
+            }
             out.push(NumTok {
                 start: if neg { start_b - 1 } else { start_b },
                 end: end_b,
@@ -481,6 +336,27 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
         i = end_idx.max(i + 1);
     }
     out
+}
+
+/// The number at `start..end` is wrapped in parentheses, with at most a currency symbol or
+/// word and spaces inside them, and the parentheses stand alone: at the start of the text or
+/// after a column gap (two spaces or a tab). Prose writes `five million dollars
+/// ($5,000,000)`, which is no credit.
+fn parenthesized(text: &str, start: usize, end: usize) -> bool {
+    let inside = |s: &str| {
+        s.chars().count() <= 6
+            && s.chars()
+                .all(|c| is_group_space(c) || c.is_alphabetic() || currency_symbol(c).is_some())
+    };
+    let (Some(before), Some(after)) = (text.get(..start), text.get(end..)) else {
+        return false;
+    };
+    let (Some(open), Some(close)) = (before.rfind('('), after.find(')')) else {
+        return false;
+    };
+    let head = &before[..open];
+    let alone = head.trim().is_empty() || head.ends_with("  ") || head.ends_with('\t');
+    alone && inside(&before[open + 1..]) && inside(&after[..close])
 }
 
 /// `85/h`, `85/sat`: a slash that introduces a unit, not a code.
@@ -610,6 +486,26 @@ mod tests {
                 d: 12
             })
         );
+    }
+
+    #[test]
+    fn credits_in_parentheses_and_no_break_spaces() {
+        let t = scan(
+            "SalesIQ credit  ($1,200.00)  fee (5) five dollars ($5.00) total 1\u{a0}200,00 RSD",
+            Dec::Unknown,
+            DateOrder::Dmy,
+        );
+        let v: Vec<_> = t
+            .iter()
+            .filter_map(|t| t.number().map(|n| n.units))
+            .collect();
+        // `(5)` is not money-like: it stays positive.
+        // `($5.00)` after words is prose, not a credit.
+        assert_eq!(v, [-120_000, 5, 500, 120_000]);
+        assert_eq!(currency_word("km.", false), None);
+        assert_eq!(currency_word("km", true), Some(*b"BAM"));
+        assert_eq!(currency_word("din.", false), Some(*b"RSD"));
+        assert_eq!(currency_word("try", false), None);
     }
 
     #[test]

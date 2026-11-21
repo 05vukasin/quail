@@ -1,4 +1,4 @@
-//! Throughput of `item.lines@1` on generated documents, and of CPV categorization.
+//! Throughput of `item.lines@2` on generated documents, and of CPV categorization.
 //!
 //! `cargo bench -p quail-items --bench items`. Inputs are built in code: a DOCX-style offer
 //! (one table of 40 priced rows per page) and a PDF-style invoice page (header blocks on one

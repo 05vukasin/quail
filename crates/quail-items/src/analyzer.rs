@@ -1,4 +1,4 @@
-//! The `item.lines@1` analyzer.
+//! The `item.lines@2` analyzer.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,7 +46,7 @@ impl Default for ItemLines {
 
 impl ItemLines {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 2);
 
     /// With the embedded CPV 2008 index (built here, about 100 ms; build once and clone).
     pub fn new() -> Self {

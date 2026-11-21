@@ -477,9 +477,18 @@ pub(crate) const SENTENCE_WORDS: &[&str] = &[
 pub(crate) fn not_an_item(desc: &str, from_header: bool) -> bool {
     let w = header::words(desc);
     let legal = w.iter().any(|x| LEGAL_FORMS.contains(&x.as_str()));
-    let phone = desc
-        .char_indices()
-        .any(|(i, c)| c == '+' && desc[i + 1..].starts_with(|d: char| d.is_ascii_digit()));
+    let phone = desc.char_indices().any(|(i, c)| {
+        c == '+'
+            && desc[i + 1..]
+                .trim_start_matches(|s: char| s.is_whitespace())
+                .starts_with(|d: char| d.is_ascii_digit())
+    }) || desc.trim_end().ends_with('+')
+        || w.first().is_some_and(|x| {
+            matches!(
+                x.as_str(),
+                "phone" | "tel" | "telephone" | "fax" | "mobile" | "telefon" | "faks" | "mob"
+            )
+        }) && w.len() <= 3;
     let currency_only = w.len() == 1 && num::currency_word(&w[0], false).is_some();
     let fragment = desc.trim_start().starts_with('(') && !desc.contains(')');
     // `8,690.71 GBP at VAT (20.0%)`: a description that opens with an amount is a summary.
