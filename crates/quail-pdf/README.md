@@ -17,7 +17,7 @@ inside the decoders. See [`vendor/README.md`](../../vendor/README.md).
 - `Document`: one `Page` (`PageKind::Physical`) per page up to `limits.max_pages`. Each page has:
   - `size` in points, after rotation.
   - `text` in reading order: blocks are ordered by a recursive XY-cut, so two columns read one column at a time.
-  - `blocks`: paragraph groups of lines, each with a `Span` into the text and a `BBox` (points, top-left origin).
+  - `blocks`: paragraph groups of lines, each with a `Span` into the text and a `BBox` (points, top-left origin), and `lines`: the measured visual lines of the paragraph (`LineBox`: span within the block, box from the glyphs), in reading order.
   - `zone`: `Header` or `Footer` by geometry (top or bottom 6 % band) or by repetition (the same text, digits ignored, in the top or bottom 15 % band on enough pages). Everything else is `Body`.
   - `text_source` (`Native` or `None`) and `needs_ocr`. A page needs OCR when it has no text but has images or heavy vector drawing, when it is mostly an image with little text, or when its text is garbage.
   - `images` (core `PageImage`: page box and pixel size, first 64 per page) and `image_coverage`, so `Page::is_scan()` works.
