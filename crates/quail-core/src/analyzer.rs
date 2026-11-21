@@ -219,6 +219,13 @@ pub trait Analyzer: Send + Sync {
         &[]
     }
 
+    /// A finalizer runs after every non-finalizer step (e.g. a summary built from all facts),
+    /// whatever the registration order. Finalizers are ordered among themselves by their
+    /// requirements and registration order.
+    fn finalizer(&self) -> bool {
+        false
+    }
+
     /// Lowest profile it runs in. A `Deep` analyzer is skipped under `Standard`.
     fn profile(&self) -> Profile {
         Profile::Fast

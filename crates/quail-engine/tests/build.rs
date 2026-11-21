@@ -312,3 +312,38 @@ fn after_is_soft_ordering_and_ctx_prefers_revised_document() {
     engine.process(item());
     assert_eq!(*seen.lock().unwrap(), ["revised", "native"]);
 }
+
+/// A finalizer runs after every other analyzer even when registered first.
+#[test]
+fn finalizer_runs_after_everything() {
+    use std::sync::{Arc, Mutex};
+
+    use quail_core::{Analyzer, AnalyzerId, Blob, Ctx, Emitter, Result, SourceItem};
+
+    struct Step(&'static str, bool, Arc<Mutex<Vec<&'static str>>>);
+    impl Analyzer for Step {
+        fn id(&self) -> AnalyzerId {
+            AnalyzerId::new(self.0, 1)
+        }
+        fn finalizer(&self) -> bool {
+            self.1
+        }
+        fn run(&self, _: &Ctx<'_>, _: &mut Emitter) -> Result<()> {
+            self.2.lock().unwrap().push(self.0);
+            Ok(())
+        }
+    }
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let engine = quail_engine::EngineBuilder::new()
+        .analyzer(Box::new(Step("t.summary", true, Arc::clone(&log))))
+        .analyzer(Box::new(Step("t.a", false, Arc::clone(&log))))
+        .analyzer(Box::new(Step("t.b", false, Arc::clone(&log))))
+        .build()
+        .unwrap();
+    engine.process(SourceItem {
+        locator: "x.bin".into(),
+        blob: Blob::from(vec![0u8, 1, 2]),
+        modified: None,
+    });
+    assert_eq!(*log.lock().unwrap(), ["t.a", "t.b", "t.summary"]);
+}

@@ -331,6 +331,10 @@ impl SummaryLlm {
 }
 
 impl Analyzer for SummaryLlm {
+    fn finalizer(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> AnalyzerId {
         Self::ID
     }

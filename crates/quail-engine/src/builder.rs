@@ -256,6 +256,9 @@ fn order(
                 }
             }
         }
+        if a.finalizer() {
+            deps[i].extend((0..n).filter(|&j| j != i && !active[j].finalizer()));
+        }
         for &r in a.after() {
             if let Some(ps) = providers.get(r) {
                 deps[i].extend(ps.iter().copied().filter(|&p| p != i));
