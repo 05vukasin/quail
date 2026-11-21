@@ -22,7 +22,7 @@
 //!
 //! # Analyzers
 //!
-//! - [`TextStats`] (`text.stats@2`, Fast): characters, words, pages with text, script
+//! - [`TextStats`] (`text.stats@3`, Fast): characters, words, pages with text, script
 //!   ratios, garbage ratio.
 //! - [`TextLang`] (`text.lang@2`, Fast): document language with top-3 candidates.
 //!

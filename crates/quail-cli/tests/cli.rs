@@ -570,7 +570,7 @@ fn keys_and_version() {
     }
     expected.extend(["docx.extract@1", "hash.identity@1"]);
     if cfg!(feature = "text") {
-        expected.extend(["text.stats@2", "text.lang@2"]);
+        expected.extend(["text.stats@3", "text.lang@2"]);
     }
     if cfg!(feature = "signals") {
         expected.push("signal.scan@3");

@@ -1,4 +1,4 @@
-//! `text.stats@2` and `text.lang@2`.
+//! `text.stats@3` and `text.lang@2`.
 
 use quail_core::{
     Analyzer, AnalyzerId, Artifact, Ctx, Emitter, Evidence, Page, Profile, Result, Value,
@@ -44,7 +44,7 @@ pub struct TextStats;
 
 impl TextStats {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("text.stats", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("text.stats", 3);
 }
 
 impl Analyzer for TextStats {

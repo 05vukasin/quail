@@ -16,14 +16,26 @@
 //!   letters, digits and common punctuation (`.,;:!?-()[]"'/%&@#*+=§€$•·°…<>|_~^` and the
 //!   typographic quotes and dashes);
 //! - **implausible word**: a letter run (4+ letters) that mixes Latin and Cyrillic or Greek,
-//!   switches from lower to upper case twice or more (`aBcDe`), or (5+ letters, not all
+//!   switches from lower to upper case twice or more (`aBcDe`; camel case like
+//!   `eFashionSolutions` is not), or (5+ letters, not all
 //!   caps) has no vowel at all (`r` counts as a vowel, as in Serbian `prst`); all of its
 //!   letters count;
 //! - **unnatural vowel share** (whole text, 100+ letters of a script): natural text in
 //!   every supported language has 25–65 % vowels among its Latin (or Cyrillic) letters;
 //!   a font whose glyphs map to the wrong letters does not. Then all letters of that
-//!   script count. This catches substitution ciphers and shifted glyph ids that look like
-//!   letters.
+//!   script count. Chunks with a digit (codes like `PWM-5700-00431-SH`) are left out.
+//!   This catches substitution ciphers and shifted glyph ids that look like letters.
+//! - **look-alike words** (whole text): Cyrillic read by a Latin-only OCR engine comes out
+//!   as Latin look-alikes (`ОКВИРНИ СПОРАЗУМ` as `OKBMPHM CnOPA3YM`, `на основу` as
+//!   `Ha ocHOBy`). A word is suspect when it has a lower-to-upper case change between two
+//!   letters that is not camel case (`ocHOBy`, `jaBHHM`; `BodyTite`, `iPhone` are not), a
+//!   lone digit `3 4 6 0` before a lowercase letter (`3aKoHa`, `6poj`, `Ha6aBKe`; not
+//!   `1234ze`, `4th`), three or more capitals followed by `r n y u b m` (`OKBMPHOr`), or is
+//!   one of the look-alike function words `y Ha 3a 3A ce cy Cy ca` (у, на, за, се, су, са).
+//!   When at least [`LOOKALIKE_MIN_WORDS`] words and [`LOOKALIKE_SHARE`] of all words of the
+//!   text (any script, two letters or more) are suspect, the layer is Cyrillic shown as
+//!   Latin and all its Latin letters count. Clean pages stay far below the share: business
+//!   Latin text has a stray brand or code, not one word in five.
 //!
 //! [`garbage_ratio`] is the share of such characters, in `[0, 1]`. A clean text layer scores
 //! near 0; [`NEEDS_OCR_RATIO`] is the threshold above which a page's text should be
@@ -32,6 +44,14 @@
 
 /// Garbage ratio above which a page's text layer should be treated as unusable (OCR it).
 pub const NEEDS_OCR_RATIO: f32 = 0.10;
+
+/// Look-alike words a text needs before it is judged Cyrillic shown as Latin.
+pub const LOOKALIKE_MIN_WORDS: usize = 4;
+
+/// Share of a text's words that must be look-alike suspects (see the module docs). On the
+/// calibration corpora clean pages reach 0.10 (one suspect among ten words) and pages with
+/// at least four suspects 0.08; Cyrillic scans with a Latin OCR layer land at 0.3–0.6.
+pub const LOOKALIKE_SHARE: f64 = 0.2;
 
 /// Fewer non-whitespace characters than this on a page are too little to judge
 /// ([`TextVerdict::TooShort`]).
@@ -58,6 +78,9 @@ pub struct GarbageReport {
     pub implausible: usize,
     /// Letters of a script whose vowel share is unnatural (whole text judged at once).
     pub unnatural: usize,
+    /// Latin letters of a text judged Cyrillic shown as Latin look-alikes (whole text
+    /// judged at once, see the module docs).
+    pub lookalike: usize,
     /// Texts (pages) behind this report: 1 for a single report, summed by [`Self::merge`].
     pub texts: usize,
     /// Of those, texts judged [`TextVerdict::Garbage`] on their own.
@@ -91,10 +114,33 @@ impl GarbageReport {
             + self.implausible
     }
 
-    /// Characters counted as garbage. The whole-text vowel check can overlap the
-    /// per-character classes, so it enters as a max, not a sum.
+    /// Characters counted as garbage. The whole-text checks (vowel share, look-alike
+    /// words) can overlap the per-character classes, so they enter as a max, not a sum.
     pub fn garbage(&self) -> usize {
-        self.classified().max(self.unnatural).min(self.chars)
+        self.classified()
+            .max(self.unnatural)
+            .max(self.lookalike)
+            .min(self.chars)
+    }
+
+    /// Share of the non-whitespace characters that are unreadable glyphs: replacement,
+    /// private-use and control characters, `(cid:N)` placeholders and mojibake. The word
+    /// and whole-text classes (implausible words, vowel share, look-alike words) are left
+    /// out: such a layer reads wrong but keeps its digits and layout (`6p. 404-1-110/25`),
+    /// so an extractor may keep it until OCR replaces it. A layer this ratio rejects has
+    /// nothing worth keeping.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)] // a ratio
+    pub fn broken_ratio(&self) -> f32 {
+        if self.chars == 0 {
+            return 0.0;
+        }
+        let glyphs = self.replacement + self.private_use + self.control + self.cid + self.mojibake;
+        (glyphs.min(self.chars) as f64 / self.chars as f64) as f32
+    }
+
+    /// Whether the text was judged Cyrillic shown as Latin look-alikes.
+    pub fn is_lookalike(&self) -> bool {
+        self.lookalike > 0
     }
 
     /// Garbage share of the non-whitespace characters, `0` for an empty text.
@@ -123,6 +169,7 @@ impl GarbageReport {
         self.isolated_symbol += o.isolated_symbol;
         self.implausible += o.implausible;
         self.unnatural += o.unnatural;
+        self.lookalike += o.lookalike;
     }
 
     /// Verdict on the text this report covers (for a merged report: on all of it).
@@ -316,7 +363,7 @@ fn implausible_letters(word: &str) -> usize {
         return 0;
     }
     let mixed = u8::from(latin) + u8::from(cyr) + u8::from(greek) > 1;
-    let chaos = case_flips >= 2;
+    let chaos = case_flips >= 2 && !is_pascal_case(word);
     let no_vowel = n >= 5 && !vowel && lower > 0 && upper < n && (latin || cyr);
     if mixed || chaos || no_vowel { n } else { 0 }
 }
@@ -325,10 +372,15 @@ fn implausible_letters(word: &str) -> usize {
 pub fn garbage_report(text: &str) -> GarbageReport {
     let mut r = GarbageReport::default();
     let mut v = VowelCounts::default();
+    let mut words = WordCounts::default();
     for chunk in text.split_whitespace() {
         score_chunk(chunk, &mut r, &mut v);
+        words.add(chunk);
     }
     r.unnatural = v.unnatural_letters();
+    if words.is_lookalike() {
+        r.lookalike = words.latin;
+    }
     r.texts = 1;
     match r.verdict() {
         TextVerdict::Garbage => r.garbage_texts = 1,
@@ -336,6 +388,130 @@ pub fn garbage_report(text: &str) -> GarbageReport {
         TextVerdict::Clean => {}
     }
     r
+}
+
+/// Words and look-alike suspects, for the look-alike check.
+#[derive(Default)]
+struct WordCounts {
+    words: usize,
+    suspects: usize,
+    latin: usize,
+}
+
+impl WordCounts {
+    fn add(&mut self, chunk: &str) {
+        use crate::script::{Script, script_of};
+        self.latin += chunk
+            .chars()
+            .filter(|&c| script_of(c) == Some(Script::Latin))
+            .count();
+        let t = chunk.trim_matches(|c: char| !c.is_alphanumeric());
+        if t.is_empty() {
+            return;
+        }
+        if is_lookalike_function_word(t) {
+            self.words += 1;
+            self.suspects += 1;
+            return;
+        }
+        if t.chars().filter(|c| c.is_alphabetic()).nth(1).is_none() {
+            return;
+        }
+        self.words += 1;
+        if !t.contains("www") && !t.contains('@') && !t.contains("http") && is_lookalike_word(t) {
+            self.suspects += 1;
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)] // a ratio
+    fn is_lookalike(&self) -> bool {
+        self.suspects >= LOOKALIKE_MIN_WORDS
+            && self.suspects as f64 >= LOOKALIKE_SHARE * self.words as f64
+    }
+}
+
+/// Serbian Cyrillic function words as a Latin-only OCR engine reads them: у, на, за, се,
+/// су, са. None of them is a word of Latin-script Serbian or English (`Y` alone is left out:
+/// it is the "yes" of forms and tables).
+fn is_lookalike_function_word(t: &str) -> bool {
+    matches!(t, "y" | "Ha" | "3a" | "3A" | "ce" | "cy" | "Cy" | "ca")
+}
+
+/// Whether `t` (a chunk without surrounding punctuation) looks like Cyrillic read as Latin,
+/// see the module docs.
+fn is_lookalike_word(t: &str) -> bool {
+    use crate::script::{Script, script_of};
+    let mut latin = 0usize;
+    for c in t.chars() {
+        match script_of(c) {
+            Some(Script::Latin) => latin += 1,
+            Some(Script::Cyrillic | Script::Greek) => return false,
+            _ => {}
+        }
+    }
+    if latin < 3 {
+        return false;
+    }
+    let mut prev: Option<char> = None;
+    let mut before_prev: Option<char> = None;
+    let mut caps_run = 0usize;
+    let mut flip = false;
+    for c in t.chars() {
+        if let Some(p) = prev {
+            if p.is_alphabetic() && c.is_alphabetic() && p.is_lowercase() && c.is_uppercase() {
+                flip = true;
+            }
+            // A lone digit (not part of a number) before a lowercase letter: 3aKoHa, 6poj.
+            if matches!(p, '3' | '4' | '6' | '0')
+                && c.is_lowercase()
+                && !before_prev.is_some_and(|b| b.is_ascii_digit())
+            {
+                return true;
+            }
+            if caps_run >= 3 && matches!(c, 'r' | 'n' | 'y' | 'u' | 'b' | 'm') {
+                return true;
+            }
+        }
+        caps_run = if c.is_uppercase() { caps_run + 1 } else { 0 };
+        before_prev = prev;
+        prev = Some(c);
+    }
+    flip && !is_pascal_case(t)
+}
+
+/// `BodyTite`, `InModeRF`, `iPhone`, `DocuSign`: an optional lowercase letter, then one or
+/// more capitalized parts, then at most three capitals. Non-letters are skipped.
+fn is_pascal_case(t: &str) -> bool {
+    let mut letters = t.chars().filter(|c| c.is_alphabetic()).peekable();
+    if letters.peek().is_some_and(|c| c.is_lowercase()) {
+        letters.next();
+    }
+    let mut parts = 0usize;
+    loop {
+        match letters.next() {
+            None => return parts > 0,
+            Some(c) if c.is_uppercase() => {
+                let mut lower = 0usize;
+                while letters.peek().is_some_and(|c| c.is_lowercase()) {
+                    letters.next();
+                    lower += 1;
+                }
+                if lower == 0 {
+                    // A short tail of capitals only (`RF`, `FX`, `TM`), not `CnOPAYM`.
+                    let mut tail = 1usize;
+                    for c in letters {
+                        if !c.is_uppercase() {
+                            return false;
+                        }
+                        tail += 1;
+                    }
+                    return parts > 0 && tail <= 3;
+                }
+                parts += 1;
+            }
+            Some(_) => return false,
+        }
+    }
 }
 
 /// Letters and vowels per script, for the vowel-share check.
@@ -408,11 +584,15 @@ fn score_chunk(chunk: &str, r: &mut GarbageReport, v: &mut VowelCounts) {
     let mut count = 0usize;
     let mut first: Option<char> = None;
     let mut word_start: Option<usize> = None;
+    // Codes (`PWM-5700-00431-SH`) have no natural vowel share: left out of that check.
+    let code = chunk.bytes().any(|b| b.is_ascii_digit());
     while let Some((i, c)) = chars.next() {
         count += 1;
         first.get_or_insert(c);
         r.chars += 1;
-        v.add(c);
+        if !code {
+            v.add(c);
+        }
         // Letter runs, scored when they end.
         if c.is_alphabetic() {
             word_start.get_or_insert(i);
@@ -500,6 +680,153 @@ mod tests {
         zakupca. Zakupac je dužan da plaća zakupninu do petog u mesecu za tekući mesec, a \
         u slučaju kašnjenja plaća zakonsku zateznu kamatu. Ugovor stupa na snagu danom \
         potpisivanja i važi godinu dana.";
+
+    /// Cyrillic as a Latin-only OCR engine reads it: each letter becomes the Latin glyph (or
+    /// digit) that looks most like it, upper case where the shapes only exist in capitals.
+    #[allow(clippy::match_same_arms)] // a table: several letters share a glyph
+    fn as_latin_lookalikes(cyr: &str) -> String {
+        cyr.chars()
+            .map(|c| match c {
+                'а' => "a",
+                'б' => "6",
+                'в' => "B",
+                'г' => "r",
+                'д' => "A",
+                'е' => "e",
+                'з' => "3",
+                'и' => "u",
+                'ј' => "j",
+                'к' => "K",
+                'л' => "n",
+                'м' => "M",
+                'н' => "H",
+                'о' => "o",
+                'п' => "n",
+                'р' => "p",
+                'с' => "c",
+                'т' => "T",
+                'у' => "y",
+                'х' => "x",
+                'ч' => "4",
+                'ш' => "w",
+                'ж' => ">K",
+                'љ' => "jb",
+                'њ' => "H>",
+                'ћ' => "h",
+                'ђ' => "h",
+                'ц' => "u,",
+                'ф' => "<|>",
+                'А' => "A",
+                'В' => "B",
+                'Г' => "F",
+                'Д' => "fl",
+                'Е' => "E",
+                'З' => "3",
+                'И' => "M",
+                'К' => "K",
+                'Л' => "JI",
+                'М' => "M",
+                'Н' => "H",
+                'О' => "O",
+                'П' => "n",
+                'Р' => "P",
+                'С' => "C",
+                'Т' => "T",
+                'У' => "Y",
+                'Ч' => "4",
+                c if c.is_alphabetic() => "?",
+                _ => "",
+            })
+            .zip(cyr.chars())
+            .map(|(s, c)| {
+                if s.is_empty() {
+                    c.to_string()
+                } else {
+                    s.to_string()
+                }
+            })
+            .collect()
+    }
+
+    const CYR_DECISION: &str = "На основу члана 146. став 1. Закона о јавним набавкама и \
+        извештаја о поступку јавне набавке услуга, директор Агенције доноси ОДЛУКУ о додели \
+        уговора за набавку услуга. Уговор се додељује понуђачу са седиштем у Београду, број \
+        91/19. Одлука се објављује на Порталу јавних набавки у року од три дана од дана \
+        доношења. ОКВИРНИ СПОРАЗУМ за јавну набавку добара је закључен за период од 12 месеци.";
+
+    #[test]
+    fn cyrillic_read_as_latin_lookalikes() {
+        let clean = garbage_report(CYR_DECISION);
+        assert_eq!(clean.verdict(), TextVerdict::Clean, "{clean:?}");
+        assert!(!clean.is_lookalike());
+        let garbled = as_latin_lookalikes(CYR_DECISION);
+        let r = garbage_report(&garbled);
+        assert!(r.is_lookalike(), "{garbled}\n{r:?}");
+        assert_eq!(r.verdict(), TextVerdict::Garbage, "{r:?}");
+        assert!(r.ratio() > 0.5, "{r:?}");
+        // The digits survive: an extractor may keep such a layer until OCR replaces it.
+        assert!(r.broken_ratio() < 0.35, "{r:?}");
+        // The look-alike layer of one page turns a merged report garbage only by its weight.
+        let mut doc = garbage_report(CLEAN_SR);
+        doc.merge(&r);
+        assert_eq!(doc.texts, 2);
+        assert_eq!(doc.lookalike, r.lookalike);
+    }
+
+    #[test]
+    fn lookalike_word_rules() {
+        for w in [
+            "ocHOBy",
+            "jaBHHM",
+            "Ha6aBKaMa",
+            "3aKoHa",
+            "6poj",
+            "OKBMPHOr",
+            "CnOPA3YM",
+        ] {
+            assert!(is_lookalike_word(w), "{w}");
+        }
+        for w in [
+            "BodyTite",
+            "InModeRF",
+            "iPhone",
+            "DocuSign",
+            "OriginTM",
+            "McDonald",
+            "HFO-1234ze",
+            "4th",
+            "3rd",
+            "PDVom",
+            "PDFs",
+            "UGOVOR",
+            "Ugovor",
+            "ugovor",
+            "IDs",
+            "Уговор",
+        ] {
+            assert!(!is_lookalike_word(w), "{w}");
+        }
+    }
+
+    #[test]
+    fn clean_latin_with_brands_and_codes_is_not_lookalike() {
+        // Business text with camel-case brands, product codes, ordinals and URLs.
+        let t = "The Supplier shall deliver BodyTite and InModeRF units (codes HFO-1234ze, \
+            A4, B2B) to the 4th floor by the 3rd of May. See www.ExampleShop.com or \
+            info@ExampleShop.com. DocuSign envelope attached; iPhone and PowerPoint files are \
+            excluded. Ugovor o isporuci robe zaključen je u Beogradu, PDV-om uključen.";
+        let r = garbage_report(t);
+        assert!(!r.is_lookalike(), "{r:?}");
+        assert_eq!(r.verdict(), TextVerdict::Clean, "{r:?}");
+        // Camel-case brands are not case chaos; part-number tables have no vowel share.
+        let brand = "Exhibit 2 Powered by eFashionSolutions and InModeRF, page 32 of the exhibit";
+        assert_eq!(garbage_report(brand).verdict(), TextVerdict::Clean);
+        let codes = "PWM-5700-00431-SH PWM-5700-00432-SH IOM-5700-00079 ".repeat(20);
+        assert_eq!(garbage_report(&codes).verdict(), TextVerdict::Clean);
+        // A form full of "Y" checkboxes is not Cyrillic "у".
+        let form = "Y N Y Y N Y Y Y N Y Y Y Y Y N Y Y Y Y Y Y N Y Y Y Y Y Y Y Y";
+        assert!(!garbage_report(form).is_lookalike());
+    }
 
     #[test]
     fn whole_text_vowel_share() {
