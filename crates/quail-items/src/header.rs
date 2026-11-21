@@ -180,6 +180,10 @@ pub(crate) fn role(text: &str) -> Option<HeaderCell> {
     if price && (any(&w, UNIT_QUAL) || prefix(&w, &["jedinic"])) && !prefix(&w, &["ukupn"]) {
         return has(Role::UnitPrice);
     }
+    // `Total Spots`, `# of Spots`: a count, not an amount.
+    if any(&w, &["spots"]) && !price && w.len() <= 3 {
+        return has(Role::Qty);
+    }
     if total {
         return has(Role::Total);
     }
@@ -318,6 +322,8 @@ mod tests {
         assert_eq!(r("Unit Price"), Some(Role::UnitPrice));
         assert_eq!(r("Rate"), Some(Role::UnitPrice));
         assert_eq!(r("Amount"), Some(Role::Total));
+        assert_eq!(r("Total Spots"), Some(Role::Qty));
+        assert_eq!(r("Spot Rate"), Some(Role::UnitPrice));
         assert_eq!(r("VAT"), Some(Role::VatAmount));
         assert_eq!(r("Item No."), Some(Role::Code));
         assert_eq!(r("Start Date"), Some(Role::StartDate));

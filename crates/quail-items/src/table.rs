@@ -4,6 +4,7 @@
 
 use quail_core::{BBox, Span};
 
+use crate::desc;
 use crate::header::{self, HeaderCell, Role};
 use crate::item::{DocHints, Item, Source, TableTotal, span_union, union};
 use crate::num::{self, Num, NumKind, NumTok};
@@ -552,12 +553,37 @@ fn is_label_row(row: &[Option<GCell>]) -> bool {
         .map(|c| c.text.trim())
         .filter(|t| !t.is_empty())
         .collect();
-    cells.len() >= 2
-        && cells.iter().all(|t| {
-            t.chars().count() <= 40
-                && t.chars().any(char::is_alphabetic)
-                && !t.chars().any(|c| c.is_ascii_digit())
-        })
+    cells.len() >= 2 && cells.iter().all(|t| is_label_cell(t))
+}
+
+/// A column label: a short text without numbers, or a period label (`2024`, `Year 2`,
+/// `FY25`, `Y1`).
+pub(crate) fn is_label_cell(t: &str) -> bool {
+    let t = t.trim();
+    t.chars().count() <= 40
+        && ((t.chars().any(char::is_alphabetic) && !t.chars().any(|c| c.is_ascii_digit()))
+            || is_period_label(t))
+}
+
+/// `2024`, `Year 2`, `FY25`, `Y1`, `Yr 3`.
+fn is_period_label(t: &str) -> bool {
+    let w = header::words(t);
+    match w.as_slice() {
+        [y] => {
+            (y.len() == 4 && y.parse::<u32>().is_ok_and(|n| (1990..=2100).contains(&n)))
+                || ["fy", "y", "yr"].iter().any(|p| {
+                    y.strip_prefix(p).is_some_and(|n| {
+                        !n.is_empty() && n.len() <= 4 && n.chars().all(|c| c.is_ascii_digit())
+                    })
+                })
+        }
+        [a, n] => {
+            matches!(a.as_str(), "year" | "yr" | "fy" | "godina")
+                && n.len() <= 4
+                && n.chars().all(|c| c.is_ascii_digit())
+        }
+        _ => false,
+    }
 }
 
 fn header_roles(row: &[Option<GCell>], ncols: usize) -> Vec<Option<HeaderCell>> {
@@ -727,9 +753,13 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
         return None;
     }
     let half = rows.div_ceil(2);
+    // The most text-like column: program names over the station, network or spot code
+    // columns next to them.
     let desc = (0..grid.ncols)
         .filter(|&i| stats[i].text >= half.max(1))
-        .max_by_key(|&i| (stats[i].text, std::cmp::Reverse(i)))?;
+        .map(|i| (i, text_likeness(grid, start, i)))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+        .map(|(i, _)| i)?;
     let mut cols: Vec<Option<HeaderCell>> = vec![None; grid.ncols];
     let mk = |role| {
         Some(HeaderCell {
@@ -842,6 +872,32 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
         from_header: false,
         matrix,
     })
+}
+
+/// How much column `c` reads as the description column: the [`desc::text_score`] of its
+/// cells, times its share of distinct values (a station or a unit repeated in every row is
+/// not what the line is about).
+fn text_likeness(grid: &Grid, start: usize, c: usize) -> f32 {
+    let mut score = 0.0f32;
+    let mut seen: Vec<&str> = Vec::new();
+    let mut n = 0usize;
+    for row in grid.rows.iter().skip(start) {
+        let t = cell_text(row, c);
+        if t.is_empty() {
+            continue;
+        }
+        n += 1;
+        score += desc::text_score(t);
+        if seen.len() < 256 && !seen.contains(&t) {
+            seen.push(t);
+        }
+    }
+    if n == 0 {
+        return 0.0;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let distinct = seen.len() as f32 / n.min(256) as f32;
+    score * (0.25 + distinct)
 }
 
 /// Share of rows where column `b` is at least column `a` (an amount is at least its price).
@@ -970,7 +1026,7 @@ pub(crate) fn parse(
             break;
         }
     }
-    let roles = match roles {
+    let mut roles = match roles {
         Some(r) => r,
         None => match prev {
             Some(p) if p.cols.len() == grid.ncols && p.from_header => p.clone(),
@@ -990,6 +1046,9 @@ pub(crate) fn parse(
             }
         },
     };
+    if roles.from_header {
+        shift_empty_roles(grid, start, &mut roles, hints);
+    }
     if !roles.priced() {
         out.unused_rows = (0..grid.rows.len()).collect();
         return out;
@@ -1055,6 +1114,7 @@ pub(crate) fn parse(
         _ => 0.5,
     };
     let mut section: Option<String> = None;
+    let mut parent: Option<String> = None;
     let mut last_item_row: Option<usize> = None;
 
     for (ri, row) in grid.rows.iter().enumerate().skip(start) {
@@ -1078,11 +1138,19 @@ pub(crate) fn parse(
             }
         }
         if desc_cols.is_empty() {
+            // The first text cell left of the values.
+            let mut best = 0.0f32;
             for c in 0..first_value_col {
                 let t = cell_text(row, c);
-                if letters(t) >= 3 && Some(c) != code_col {
+                let score = desc::text_score(t);
+                // The first text cell, unless it names nothing by itself (a station or
+                // code) and a later one does.
+                if letters(t) >= 3
+                    && Some(c) != code_col
+                    && (desc.is_empty() || (best <= 0.5 && score > best))
+                {
                     t.clone_into(&mut desc);
-                    break;
+                    best = score;
                 }
             }
         }
@@ -1132,6 +1200,7 @@ pub(crate) fn parse(
                     bbox: row_box,
                 });
                 last_item_row = None;
+                parent = None;
                 continue;
             }
         }
@@ -1180,6 +1249,17 @@ pub(crate) fn parse(
                     last_item_row = None;
                 }
             } else {
+                // `1 WTVD Eyewitness News @ 6a | 6:00 AM-7:00 AM` over its spot rows: the
+                // program a weak description below it belongs to.
+                if grid.source == Source::Layout
+                    && desc::text_score(&desc) >= 1.0
+                    && desc.len() <= 120
+                    && !is_label(&desc)
+                {
+                    parent = Some(desc.trim().to_owned());
+                } else if letters(&desc) >= 2 {
+                    parent = None;
+                }
                 out.unused_rows.push(ri);
             }
             continue;
@@ -1225,6 +1305,17 @@ pub(crate) fn parse(
             last_item_row = Some(ri);
             continue;
         }
+        // `WJZY | Tu 08/30/16 6:28 AM PM16165TH | $50.00` under a program row: the station or
+        // code alone names nothing, the program above does.
+        let mut weak_code = None;
+        if desc::weak(&desc)
+            && let Some(p) = parent.as_ref()
+        {
+            if desc::is_code(desc.trim()) {
+                weak_code = Some(desc.trim().to_owned());
+            }
+            desc.clone_from(p);
+        }
         let mut it = Item::new(grid.page, grid.source, desc.trim().to_owned());
         it.section.clone_from(&section);
         it.table_index = Some(table_index);
@@ -1233,7 +1324,8 @@ pub(crate) fn parse(
         it.bbox = row_box;
         it.code = code_col
             .map(|c| cell_text(row, c).to_owned())
-            .filter(|s| !s.is_empty() && s.len() <= 40);
+            .filter(|s| !s.is_empty() && s.len() <= 40)
+            .or(weak_code);
         // Quantity and unit.
         if let Some(q) = qty_col {
             let t = cell_text(row, q);
@@ -1319,6 +1411,86 @@ pub(crate) fn parse(
     }
     out.roles = Some(roles);
     out
+}
+
+/// `Product Code : NA`, `Advertiser:`: a key-value label (a colon after a word, not a clock).
+fn is_label(s: &str) -> bool {
+    s.char_indices().any(|(i, c)| {
+        c == ':'
+            && s[..i]
+                .trim_end()
+                .chars()
+                .last()
+                .is_some_and(|p| p.is_alphabetic() || p == '.' || p == ')')
+    })
+}
+
+/// A header cell over an empty column whose values sit in the unnamed column next to it
+/// (right-aligned amounts under a left-aligned `Rate`, a `Description` printed left of its
+/// header): the role moves to that column.
+fn shift_empty_roles(grid: &Grid, start: usize, roles: &mut Roles, hints: &DocHints) {
+    let data: Vec<&Vec<Option<GCell>>> = grid
+        .rows
+        .iter()
+        .skip(start)
+        .filter(|r| {
+            r.iter()
+                .flatten()
+                .filter(|c| !c.text.trim().is_empty())
+                .count()
+                >= 2
+        })
+        .collect();
+    if data.len() < 2 {
+        return;
+    }
+    let fits = |c: usize, role: Role| {
+        data.iter()
+            .filter(|r| {
+                let t = cell_text(r, c);
+                match role {
+                    Role::UnitPrice | Role::Total => money_in(t, hints).is_some_and(|a| a.money),
+                    Role::Desc => letters(t) >= 2,
+                    _ => !t.is_empty(),
+                }
+            })
+            .count()
+    };
+    for c in 0..roles.cols.len() {
+        let Some(h) = roles.get(c) else { continue };
+        if !matches!(h.role, Role::UnitPrice | Role::Total | Role::Desc) {
+            continue;
+        }
+        let filled = data.iter().filter(|r| !cell_text(r, c).is_empty()).count();
+        if matches!(h.role, Role::UnitPrice | Role::Total) && filled * 2 >= data.len() {
+            // `Net Zone` over a text column without one amount: the header word named no
+            // amount.
+            let texts = data
+                .iter()
+                .filter(|r| {
+                    let t = cell_text(r, c);
+                    letters(t) >= 3 && !money_in(t, hints).is_some_and(|a| a.money)
+                })
+                .count();
+            if texts * 2 >= filled && fits(c, h.role) == 0 {
+                roles.cols[c] = None;
+            }
+            continue;
+        }
+        if filled * 5 > data.len() {
+            continue;
+        }
+        let target = [c + 1, c.wrapping_sub(1)]
+            .into_iter()
+            .filter(|&n| n < roles.cols.len() && roles.get(n).is_none())
+            .map(|n| (n, fits(n, h.role)))
+            .filter(|&(_, k)| k * 2 >= data.len())
+            .max_by_key(|&(n, k)| (k, std::cmp::Reverse(n)));
+        if let Some((n, _)) = target {
+            roles.cols[n] = Some(h);
+            roles.cols[c] = None;
+        }
+    }
 }
 
 /// The net and gross columns of a role: a qualified pair, or the first column alone.
@@ -1508,5 +1680,81 @@ mod tests {
             true
         ));
         assert!(!not_an_item("Licence 2,000 users", true));
+    }
+
+    fn layout(rows: &[&[&str]]) -> Grid {
+        Grid {
+            source: Source::Layout,
+            ..grid(rows)
+        }
+    }
+
+    fn en() -> DocHints {
+        DocHints {
+            dec: num::Dec::Dot,
+            ..DocHints::default()
+        }
+    }
+
+    #[test]
+    fn the_program_column_wins_over_station_and_code_columns() {
+        let g = layout(&[
+            &["ESPN", "08-16-16", "SportsCenter", "EGG0116TVH", "$50.00"],
+            &["ESPN", "08-17-16", "MLB Baseball", "EGG0116TVH", "$50.00"],
+            &["HGTV", "08-17-16", "Fixer Upper", "EGG0216TVH", "$40.00"],
+        ]);
+        let p = parse(&g, 0, None, &en());
+        let d: Vec<&str> = p.items.iter().map(|i| i.description.as_str()).collect();
+        assert_eq!(d, ["SportsCenter", "MLB Baseball", "Fixer Upper"]);
+    }
+
+    #[test]
+    fn a_role_moves_to_the_column_its_values_sit_in() {
+        // `Rate` left-aligned over right-aligned amounts one column further; `Total Spots`
+        // is a count.
+        let g = layout(&[
+            &["Network", "Description", "Total Spots", "Rate", ""],
+            &["AMC", "AMC DT", "6", "", "$20.00"],
+            &["APL", "APL PT", "4", "", "$38.00"],
+        ]);
+        let p = parse(&g, 0, None, &en());
+        assert_eq!(p.items.len(), 2, "{:?}", p.items);
+        assert_eq!(p.items[0].description, "AMC DT");
+        assert_eq!(p.items[0].unit_price.map(|n| n.units), Some(2000));
+        assert_eq!(p.items[0].quantity.map(|n| n.units), Some(6));
+    }
+
+    #[test]
+    fn a_station_alone_takes_the_program_row_above() {
+        let g = layout(&[
+            &[
+                "Line Channel Description",
+                "Time",
+                "Day Date Air Time Ad-ID",
+                "Rate",
+            ],
+            &["1 WJZY M-F 6a-7a News", "6a-630a", "", ""],
+            &["WJZY", "", "Tu 08/30/16 :30 6:28 AM PM16165TH", "$50.00"],
+            &["WJZY", "", "W 08/31/16 :30 6:19 AM PM16165TH", "$50.00"],
+            &["Product Code : NA", "6:00 AM", "", ""],
+            &["KM16103H", "", "Th 09/01/16 :30 6:29 AM", "$60.00"],
+        ]);
+        let p = parse(&g, 0, None, &en());
+        let d: Vec<&str> = p.items.iter().map(|i| i.description.as_str()).collect();
+        // A label row is no program: the code stays the description.
+        assert_eq!(
+            d,
+            ["1 WJZY M-F 6a-7a News", "1 WJZY M-F 6a-7a News", "KM16103H"]
+        );
+    }
+
+    #[test]
+    fn period_labels_are_column_labels() {
+        assert!(is_label_cell("2024"));
+        assert!(is_label_cell("Year 2"));
+        assert!(is_label_cell("FY25"));
+        assert!(is_label_cell("Onshore"));
+        assert!(!is_label_cell("1,200"));
+        assert!(!is_label_cell("Item 12"));
     }
 }
