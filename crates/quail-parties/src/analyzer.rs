@@ -1,4 +1,4 @@
-//! `party.candidates@1`: turns page scans into facts.
+//! `party.candidates@3`: turns page scans into facts.
 
 use std::collections::HashMap;
 
@@ -35,7 +35,7 @@ pub struct PartyCandidates;
 
 impl PartyCandidates {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("party.candidates", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("party.candidates", 3);
 }
 
 impl Analyzer for PartyCandidates {
@@ -145,6 +145,8 @@ pub fn collect_with(
         .iter()
         .any(|p| p.blocks.iter().any(|b| b.zone != Zone::Unknown));
     let domains = document_domains(doc, budget);
+    let company_term = defines_company(doc, budget);
+    let opening = opening_page(doc);
     for (i, page) in doc.pages.iter().enumerate() {
         if out.check_deadline().is_err() {
             out.problem(format!(
@@ -175,9 +177,11 @@ pub fn collect_with(
             first: i == 0,
             near_end: i + 2 >= n,
             has_zones,
+            company_term,
+            opening: i <= opening,
         };
         let s = scan(&w, pos, &domains);
-        absorb(&mut found, &w, &s, page.index);
+        absorb(&mut found, &w, &s, page.index, i <= opening);
     }
     if found.dropped > 0 {
         out.problem(format!(
@@ -186,6 +190,49 @@ pub fn collect_with(
         ));
     }
     found
+}
+
+/// Index (in `doc.pages`) of the page that opens the agreement: the first of the first three
+/// pages with at least [`OPENING_WORDS`] words, so a cover or exhibit page before the parties
+/// clause does not hide it; 0 when none has.
+fn opening_page(doc: &Document) -> usize {
+    doc.pages
+        .iter()
+        .take(3)
+        .position(|p| !p.needs_ocr && p.text.split_whitespace().nth(OPENING_WORDS - 1).is_some())
+        .unwrap_or(0)
+}
+
+/// Words a page needs to open the agreement (see `opening_page`).
+const OPENING_WORDS: usize = 60;
+
+/// Does the document (within the scan budget) define `"Company"` as a term, in straight or
+/// typographic quotes?
+fn defines_company(doc: &Document, budget: usize) -> bool {
+    let mut left = budget;
+    for p in &doc.pages {
+        if left == 0 {
+            break;
+        }
+        let mut end = left.min(p.text.len());
+        while !p.text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let t = &p.text[..end];
+        if [
+            "\"Company\"",
+            "\u{201c}Company\u{201d}",
+            "\"COMPANY\"",
+            "\u{201c}COMPANY\u{201d}",
+        ]
+        .iter()
+        .any(|q| t.contains(q))
+        {
+            return true;
+        }
+        left -= end;
+    }
+    false
 }
 
 /// Domain labels of the whole document (within the scan budget), at most 16.
@@ -219,10 +266,10 @@ fn evidence(w: &PageWords, page: u32, a: usize, b: usize, zone: Zone) -> Evidenc
     }
 }
 
-fn absorb(found: &mut Found, w: &PageWords, s: &PageScan, page: u32) {
+fn absorb(found: &mut Found, w: &PageWords, s: &PageScan, page: u32, opening: bool) {
     let mut resolved: Vec<Option<String>> = Vec::with_capacity(s.mentions.len());
     for m in &s.mentions {
-        let c = candidate(w, m, page);
+        let c = candidate(w, m, page, opening);
         resolved.push(c.as_ref().map(|c| c.surface.clone()));
         if let Some(c) = c {
             found.candidates.push(c);
@@ -265,8 +312,8 @@ pub const BASE_LABEL: f32 = 0.55;
 
 /// Factor on the confidence of a mention whose only role is `mentioned` (an affiliate,
 /// adviser or third party named in the body), by where it is. Measured precision of such
-/// mentions on the Kleister-NDA / CUAD dev splits: page 1 with a defined term about 50 %,
-/// page 1 without one about 25 %, later pages about 10 % (any other role: about 60–85 %).
+/// mentions on the Kleister-NDA / CUAD dev splits: the opening page with a defined term about
+/// 50 %, without one about 15 %, later pages about 10 % (any other role: about 60–85 %).
 pub fn mentioned_only(page: u32, defined_term: bool) -> f32 {
     match (page, defined_term) {
         (0, true) => MENTIONED_FIRST_PAGE_TERM,
@@ -278,9 +325,18 @@ pub fn mentioned_only(page: u32, defined_term: bool) -> f32 {
 /// [`mentioned_only`] on page 1 with a defined term (`X Corp. (the "Company")`).
 pub const MENTIONED_FIRST_PAGE_TERM: f32 = 0.7;
 /// [`mentioned_only`] on page 1 without a defined term.
-pub const MENTIONED_FIRST_PAGE: f32 = 0.45;
+pub const MENTIONED_FIRST_PAGE: f32 = 0.3;
 /// [`mentioned_only`] on later pages.
 pub const MENTIONED_LATER: f32 = 0.25;
+
+/// Highest confidence of the EDGAR filer named on a `Source:` line: it is one of the parties
+/// about half the time on CUAD dev.
+pub const FILER_CAP: f32 = 0.5;
+/// Factor on a parties-clause mention on a later page without a defined term (CUAD dev: about
+/// 40 % right at 0.70).
+pub const LATER_CLAUSE: f32 = 0.3;
+/// Factor on a company after `with a copy to` (counsel in a notices clause).
+pub const COPY_TO: f32 = 0.4;
 
 /// Confidence of a mention: see the crate documentation's table.
 pub fn mention_conf(m: &Mention) -> f32 {
@@ -363,7 +419,7 @@ fn jurisdiction(m: &Mention, surface: &str, tokens: &[String]) -> Option<(String
     }
 }
 
-fn candidate(w: &PageWords, m: &Mention, page: u32) -> Option<Candidate> {
+fn candidate(w: &PageWords, m: &Mention, page: u32, opening: bool) -> Option<Candidate> {
     let surface = w.slice(m.a, m.b).trim().replace('\n', " ");
     let key = core_key(w.slice(m.a, m.name_end));
     if key.is_empty() {
@@ -371,8 +427,18 @@ fn candidate(w: &PageWords, m: &Mention, page: u32) -> Option<Candidate> {
     }
     let q = quality::verdict(&surface).ok()?;
     let mut conf = mention_conf(m);
-    if m.roles.iter().all(|&r| r == Role::Mentioned) {
-        conf *= mentioned_only(page, m.term.is_some());
+    let only = |r: Role| m.roles.iter().all(|&x| x == r);
+    if only(Role::Mentioned) {
+        conf *= mentioned_only(u32::from(!opening), m.term.is_some());
+    }
+    if m.ctx.filer {
+        conf = conf.min(FILER_CAP);
+    }
+    if only(Role::Party) && !opening && m.term.is_none() {
+        conf *= LATER_CLAUSE;
+    }
+    if m.ctx.copy_to {
+        conf *= COPY_TO;
     }
     let tokens = key_tokens(&surface);
     let roles = m

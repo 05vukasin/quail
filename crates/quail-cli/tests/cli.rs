@@ -579,7 +579,7 @@ fn keys_and_version() {
         expected.push("ref.references@2");
     }
     if cfg!(feature = "parties") {
-        expected.push("party.candidates@2");
+        expected.push("party.candidates@3");
     }
     if cfg!(feature = "sketch") {
         expected.extend([

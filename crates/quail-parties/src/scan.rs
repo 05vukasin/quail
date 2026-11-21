@@ -50,6 +50,10 @@ pub struct Context {
     pub bank: bool,
     /// A formless name that an e-mail or web domain of the document spells.
     pub domain: bool,
+    /// The EDGAR filer named on a `Source: X, 10-K, ...` line (a page header or footer).
+    pub filer: bool,
+    /// After `with a copy to` in a notices clause (usually counsel).
+    pub copy_to: bool,
 }
 
 /// One company mention on a page.
@@ -128,6 +132,7 @@ pub struct PageScan {
 
 /// Where the page sits in the document.
 #[derive(Clone, Copy, Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent observations
 pub struct PagePos {
     /// First page.
     pub first: bool,
@@ -135,6 +140,11 @@ pub struct PagePos {
     pub near_end: bool,
     /// The extractor gave zones.
     pub has_zones: bool,
+    /// The document defines `"Company"` as a term, so `X and Company` names two parties.
+    pub company_term: bool,
+    /// The page opens the agreement (the first one, or the first full page after a short cover
+    /// or exhibit page): a parties clause may stand here.
+    pub opening: bool,
 }
 
 /// Scans one page. `domains` are the second-level labels of the document's e-mail and web
@@ -431,12 +441,19 @@ impl<'a> Scanner<'a> {
         if form.bare == "company" && i > 0 && self.w.is_punct(i - 1, ',') {
             return None;
         }
-        let a = self.walk_left(i, floor)?;
-        // ... and it needs a real word before it ("C. Company" is an initial).
+        let a = self.walk_left(i, floor, form)?;
+        // ... and it needs a real word before it ("C. Company" is an initial; "3M Company"
+        // has one).
         if form.bare == "company"
             && !(a..i).any(|k| {
-                self.w.is_word(k)
-                    && self.w.text(k).chars().filter(|c| c.is_alphabetic()).count() >= 3
+                self.w.is_word(k) && {
+                    let t = self.w.text(k);
+                    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+                    letters >= 3
+                        || letters >= 1
+                            && t.chars().count() >= 2
+                            && t.chars().any(|c| c.is_ascii_digit())
+                }
             })
         {
             return None;
@@ -444,6 +461,31 @@ impl<'a> Scanner<'a> {
         // A weak form after a number is a clause reference, not a name ("Article 20 AS").
         if form.weak && (a..i).any(|k| self.number(k)) {
             return None;
+        }
+        // "Verizon and Company" where the document defines "Company": two parties.
+        if form.bare == "company" && self.pos.company_term && i > 0 && self.key(i - 1) == "and" {
+            return None;
+        }
+        // "Licensee's Company" is a possessive, "Brian J. Cirbo Company" a signatory over the
+        // defined term.
+        let possessive = i >= 2 && self.w.is_punct(i - 2, '\'') && self.key(i - 1) == "s"
+            || i >= 1 && {
+                let t = self.w.text(i - 1);
+                t.ends_with("'s") || t.ends_with("\u{2019}s")
+            };
+        if form.weak && (possessive || self.initialled_person(a, i)) {
+            return None;
+        }
+        // Column or list letters: "V W X Y Z AA AB", "AC AD", "AE AF AG".
+        if form.weak {
+            let words: Vec<usize> = (a..i).filter(|&k| self.w.is_word(k)).collect();
+            let letters = |k: &usize| {
+                let t = self.w.text(*k);
+                t.chars().count() <= 2 && t.chars().all(char::is_uppercase)
+            };
+            if words.len() >= 2 && words.iter().all(letters) {
+                return None;
+            }
         }
         // A weak form in a heading or a phrase is a common noun: "Return of Company",
         // "HOLDING CO.", "Parent Company".
@@ -472,7 +514,7 @@ impl<'a> Scanner<'a> {
         end: usize,
         floor: usize,
     ) -> Option<Mention> {
-        let a = self.walk_left(i, floor)?;
+        let a = self.walk_left(i, floor, form)?;
         // A sole trader is a person: two or three alphabetic words before the form.
         let person: Vec<usize> = (a..i).filter(|&k| self.w.is_word(k)).collect();
         let alphabetic = |k: &usize| self.w.text(*k).chars().all(char::is_alphabetic);
@@ -530,11 +572,22 @@ impl<'a> Scanner<'a> {
         (b, seat)
     }
 
-    /// First token of the name ending right before the form at `i`, or `None`.
-    fn walk_left(&self, i: usize, floor: usize) -> Option<usize> {
+    /// First token of the name ending right before `form` at `i`, or `None`.
+    fn walk_left(&self, i: usize, floor: usize, form: &Form) -> Option<usize> {
         let mut j = i;
+        // The form takes a registration number as the name's first word.
+        let numbered = NUMBERED_FORMS.contains(&form.bare);
+        // A strong form that starts its line takes the name at the end of the line above
+        // ("Sibannac," / "Inc.", "Purinix Pharmaceuticals" / "LLC").
+        let wrapped_form = !form.weak
+            && i > floor + 1
+            && self.w.breaks_before(i)
+            && (self.namey(i - 1) || self.w.is_punct(i - 1, ',') && self.namey(i - 2));
         // "Acme, Inc.": one comma between the name and its form.
-        if j > floor + 1 && self.w.is_punct(j - 1, ',') && self.same_line(j - 2, j) {
+        if j > floor + 1
+            && self.w.is_punct(j - 1, ',')
+            && (self.same_line(j - 2, j) || wrapped_form)
+        {
             j -= 1;
         }
         let mut words = 0;
@@ -549,36 +602,77 @@ impl<'a> Scanner<'a> {
         while j > floor {
             let k = j - 1;
             if !self.same_line(k, anchor) {
-                if anchor != i || words == 0 || !self.wraps_into(k) {
+                let joins = if words == 0 {
+                    wrapped_form
+                } else {
+                    self.wraps_into(k) || self.joins_lines(k)
+                };
+                if anchor != i || !joins {
                     break;
                 }
                 anchor = k;
+            } else if self.w.toks.get(k + 1).is_some_and(|t| t.column_gap) {
+                // Two columns of a signature block: "Snap Technologies      United Airlines, Inc."
+                break;
             }
             if self.w.is_word(k) {
-                // Inside a hyphenated compound a stop word is part of the name ("Build-A-Bear").
-                let hyphened =
-                    self.w.is_punct(k + 1, '-') && self.attached(k + 1) && self.attached(k + 2);
+                // Inside a hyphenated compound a stop word is part of the name ("Build-A-Bear",
+                // "AT&T").
+                let hyphened = (self.w.is_punct(k + 1, '-') || self.w.is_punct(k + 1, '&'))
+                    && self.attached(k + 1)
+                    && self.attached(k + 2);
                 if self.is_stop(k) && !hyphened && !self.connector(k)
-                    || self.form_word(k)
                     || has(EXTRA_STOP, self.bare(k))
                 {
+                    // "At Home Corporation", "ON Semiconductor": a capitalised preposition
+                    // mid-sentence opens the name.
+                    if words > 0 && self.opens_name(k) {
+                        j = k;
+                    }
+                    break;
+                }
+                if self.form_word(k) {
                     break;
                 }
                 if !(self.namey(k) || self.connector(k)) {
+                    // "2205925 Ontario Limited": a registration number opens the name.
+                    if words > 0 && numbered && self.number_opens_name(k) {
+                        j = k;
+                    }
                     break;
                 }
                 let lower = self.w.text(k).chars().any(char::is_lowercase);
-                if caps_run && lower && !self.connector(k) {
+                // "ChipMOS", "LiquidTOOL": a brand mixing cases reads as capitals.
+                let mixed = lower && self.mixed_caps(k);
+                if caps_run && lower && !mixed && !self.connector(k) {
                     break;
                 }
-                if lower {
-                    caps_run = false;
-                } else if self.all_caps(k) {
-                    caps_run = true;
+                // A connector says nothing about the case style ("Yu Zhou and GENEXOSOME").
+                if !self.connector(k) {
+                    if lower && !mixed {
+                        caps_run = false;
+                    } else if self.all_caps(k) || mixed {
+                        caps_run = true;
+                    }
                 }
                 words += 1;
                 if words > MAX_WALK_WORDS {
                     break;
+                }
+                // "Autoliv ASP and Autoliv AB": the same first word on both sides of `and`
+                // starts two names.
+                if self.connector(k) && self.key(k) == "and" && self.repeats_across_and(k, j) {
+                    break;
+                }
+            } else if self.w.is_punct(k, ')') {
+                // "GALEN (CHEMICALS) LIMITED", "Dialog Semiconductor (UK) Ltd.".
+                match self.paren_in_name(k, floor) {
+                    Some(open) => {
+                        words += 1;
+                        j = open;
+                        continue;
+                    }
+                    None => break,
                 }
             } else if self.w.is_punct(k, ',') {
                 // One comma inside a name: "Brenwick, Dalton and Company".
@@ -596,6 +690,117 @@ impl<'a> Scanner<'a> {
             j = k;
         }
         self.trim(j, i).map(|(a, _)| a)
+    }
+
+    /// Crossing from the line of token `k + 1` up to `k` keeps one name: `Leggett &` /
+    /// `Platt, Incorporated`, `NORTH AMERICAN GALVANIZING` / `& COATING, INC.`.
+    fn joins_lines(&self, k: usize) -> bool {
+        let amp = |t: usize| self.w.is_punct(t, '&') || self.key(t) == "and";
+        if amp(k) {
+            return k > 0 && self.same_line(k - 1, k) && self.namey(k - 1);
+        }
+        if !self.w.is_word(k) || !self.namey(k) || self.is_stop(k) {
+            return false;
+        }
+        if amp(k + 1) {
+            return true;
+        }
+        // "between Aspect Medical" / "Systems, Inc.": the name's start follows an opener.
+        let mut a = k;
+        while a > 0
+            && self.same_line(a - 1, k)
+            && self.w.is_word(a - 1)
+            && self.namey(a - 1)
+            && !self.is_stop(a - 1)
+            && k - a < 4
+        {
+            a -= 1;
+        }
+        a > 0
+            && self.same_line(a - 1, k)
+            && has(
+                &["between", "and", "among", "by", "with"],
+                self.w.text(a - 1),
+            )
+    }
+
+    /// A capitalised preposition that opens a name mid-sentence: `by At Home Corporation`,
+    /// `and ON Semiconductor Corporation`.
+    fn opens_name(&self, k: usize) -> bool {
+        self.w.is_word(k)
+            && has(NAME_OPENING_WORDS, self.key(k))
+            && self.w.text(k).starts_with(char::is_uppercase)
+            && k > 0
+            && self.w.is_word(k - 1)
+            && self.w.text(k - 1).starts_with(char::is_lowercase)
+    }
+
+    /// A registration number that opens a name: six to ten digits before a capitalised word
+    /// on the same line (`2205925 Ontario Limited`).
+    fn number_opens_name(&self, k: usize) -> bool {
+        let t = self.w.text(k);
+        self.w.is_word(k)
+            && (6..=10).contains(&t.len())
+            && t.bytes().all(|b| b.is_ascii_digit())
+            && self.w.is_word(k + 1)
+            && self.same_line(k, k + 1)
+            && self.w.text(k + 1).starts_with(char::is_uppercase)
+            && self.w.text(k + 1).chars().all(char::is_alphabetic)
+    }
+
+    /// Mixed case with a run of capitals: `ChipMOS`, `LiquidTOOL` (not `McDonald`).
+    fn mixed_caps(&self, k: usize) -> bool {
+        let mut run = 0;
+        let mut best = 0;
+        for c in self.w.text(k).chars() {
+            if c.is_uppercase() {
+                run += 1;
+                best = best.max(run);
+            } else {
+                run = 0;
+            }
+        }
+        best >= 2
+    }
+
+    /// The `(` of a parenthesised name part closing at `k`: one to three name words inside,
+    /// a name word right before it, all on one line (`GALEN (CHEMICALS) LIMITED`,
+    /// `Bunker One (USA) Inc.`, `SHBV (HONG KONG) LTD`).
+    fn paren_in_name(&self, k: usize, floor: usize) -> Option<usize> {
+        let mut open = k;
+        while open > floor && k - open <= 4 {
+            open -= 1;
+            if self.w.is_punct(open, '(') {
+                break;
+            }
+            if !self.w.is_word(open) || !self.namey(open) || self.is_stop(open) {
+                return None;
+            }
+        }
+        if !self.w.is_punct(open, '(') || open + 1 >= k || open <= floor {
+            return None;
+        }
+        let before = open - 1;
+        (self.same_line(before, k)
+            && self.w.is_word(before)
+            && self.namey(before)
+            && !self.is_stop(before))
+        .then_some(open)
+    }
+
+    /// `k` is `and`, `j` the first word after it: the name's first word before `and` is that
+    /// word again (`Autoliv ASP and Autoliv AB`, `Adaptimmune and Adaptimmune Limited`).
+    fn repeats_across_and(&self, k: usize, j: usize) -> bool {
+        let mut a = k;
+        while a > 0
+            && self.same_line(a - 1, k)
+            && self.w.is_word(a - 1)
+            && self.namey(a - 1)
+            && !self.is_stop(a - 1)
+        {
+            a -= 1;
+        }
+        a < k && self.key(a) == self.key(j)
     }
 
     /// One past the last token of the name starting at `start`, or `None`.
@@ -660,7 +865,7 @@ impl<'a> Scanner<'a> {
         while a < b
             && (!self.w.is_word(a) && !self.w.is_punct(a, '"')
                 || lower_connector(a)
-                || self.number(a))
+                || self.number(a) && !self.number_opens_name(a))
         {
             a += 1;
         }
@@ -979,7 +1184,7 @@ impl<'a> Scanner<'a> {
         } else {
             pb
         };
-        let opener = self.pos.first
+        let opener = self.pos.opening
             && self.any_word_in(pa.saturating_sub(CLAUSE_BEFORE_WORDS), pa, CLAUSE_OPENERS);
         let details = self.any_word_in(pb, pb + CLAUSE_AFTER_WORDS, CLAUSE_DETAILS)
             || (pb..(pb + CLAUSE_AFTER_WORDS).min(self.words.len()))
@@ -992,8 +1197,12 @@ impl<'a> Scanner<'a> {
         let line = self.w.toks[m.a].line;
         let zone = self.w.toks[m.a].zone;
         m.ctx.title = zone == Zone::Title;
-        m.ctx.signature =
-            zone == Zone::Signature || self.signs_for(m.a) || sig_line.is_some_and(|s| line >= s);
+        m.ctx.signature = zone == Zone::Signature
+            || self.signs_for(m.a)
+            || sig_line.is_some_and(|s| line >= s)
+            || self.over_by_line(m.b);
+        m.ctx.copy_to = (pa.saturating_sub(6)..pa)
+            .any(|p| self.seq_at(p, &["copy", "to"]) || self.seq_at(p, &["copies", "to"]));
         let inferable = !self.pos.has_zones || zone == Zone::Unknown;
         m.ctx.header =
             zone == Zone::Header || inferable && self.pos.first && line < LETTERHEAD_LINES;
@@ -1003,10 +1212,15 @@ impl<'a> Scanner<'a> {
                 && line + FOOTER_LINES >= self.w.lines
                 && self.w.lines > 2 * FOOTER_LINES;
         m.ctx.bank = self.is_bank(m, pa);
+        m.ctx.filer = self.is_filer_line(m.a);
         let customer = m.roles.iter().any(|r| r.is_customer_side());
         if m.ctx.bank {
             m.ctx.header = false;
             m.ctx.footer = false;
+            m.ctx.signature = false;
+        }
+        // The filer line repeats on every page, below the signatures too: it signs nothing.
+        if m.ctx.filer {
             m.ctx.signature = false;
         }
         if m.ctx.signature {
@@ -1030,6 +1244,61 @@ impl<'a> Scanner<'a> {
                 m.zone = Zone::Footer;
             }
         }
+    }
+
+    /// Tokens `a..b` are a person's name with a middle initial: `Brian J. Cirbo`.
+    fn initialled_person(&self, a: usize, b: usize) -> bool {
+        let words: Vec<usize> = (a..b).filter(|&k| self.w.is_word(k)).collect();
+        let titled = |k: usize| {
+            let t = self.w.text(k);
+            let mut c = t.chars();
+            c.next().is_some_and(char::is_uppercase)
+                && c.clone().count() >= 1
+                && c.all(char::is_lowercase)
+        };
+        words.len() == 3
+            && titled(words[0])
+            && titled(words[2])
+            && self.w.text(words[1]).chars().count() == 1
+            && self.w.is_punct(words[1] + 1, '.')
+    }
+
+    /// The mention ending at `b` ends its line and the next line opens with `By:` (a
+    /// signature block: `ACME CORP.` / `By: /s/ ...`).
+    fn over_by_line(&self, b: usize) -> bool {
+        if b == 0 || b > self.w.len() {
+            return false;
+        }
+        let line = self.w.toks[b - 1].line;
+        let mut t = b;
+        while t < self.w.len() && self.w.toks[t].line == line {
+            if self.w.is_word(t) {
+                return false;
+            }
+            t += 1;
+        }
+        t < self.w.len()
+            && self.w.toks[t].line == line + 1
+            && self.key(t) == "by"
+            && (self.w.is_punct(t + 1, ':') || self.w.is_punct(t + 1, '/'))
+    }
+
+    /// `Source: X, 10-K, ...`: the mention sits on a line that opens with `Source:`, or on
+    /// the line after a bare `Source:`.
+    fn is_filer_line(&self, a: usize) -> bool {
+        let Some(line) = self.w.toks.get(a).map(|t| t.line) else {
+            return false;
+        };
+        let mut s = a;
+        while s > 0 && self.w.toks[s - 1].line == line {
+            s -= 1;
+        }
+        let opens = |t: usize| self.key(t) == "source" && self.w.is_punct(t + 1, ':');
+        if opens(s) {
+            return true;
+        }
+        // "Source:" alone on the line above.
+        s >= 2 && self.w.breaks_before(s - 2) && opens(s - 2) && self.w.toks[s - 2].line + 1 == line
     }
 
     /// A bank: a bank word in the name, or a bank label before it on its line.
@@ -1117,7 +1386,15 @@ impl<'a> Scanner<'a> {
         let before = |n: usize, seq: &[&str]| {
             p >= n && self.seq_at(p - n, seq) && self.same_line(self.words[p - n], a)
         };
+        // "For and on behalf of" / "Belgacom S.A." on the next line.
+        let line_above = |n: usize, seq: &[&str]| {
+            p >= n
+                && self.seq_at(p - n, seq)
+                && self.w.breaks_before(a)
+                && self.w.toks[self.words[p - 1]].line + 1 == self.w.toks[a].line
+        };
         before(2, &["behalf", "of"])
+            || line_above(2, &["behalf", "of"])
             || before(4, &["za", "i", "u", "ime"])
             || before(5, &["u", "ime", "i", "za", "racun"])
             || (before(1, &["za"]) || before(1, &["for"]))
@@ -1510,12 +1787,32 @@ const EXTRA_STOP: &[&str] = &[
     "manager",
     "title",
     "contact",
+    "witness",
+    "witnesseth",
+    "persons",
     "stockholder",
     "stockholders",
     "shareholder",
     "shareholders",
     "disclosing",
     "receiving",
+];
+
+/// Forms that take a registration number as the first word of a name (`2205925 Ontario
+/// Limited`), by bare key.
+const NUMBERED_FORMS: &[&str] = &[
+    "limited",
+    "ltd",
+    "inc",
+    "incorporated",
+    "corp",
+    "corporation",
+];
+
+/// Prepositions that may open a name when capitalised mid-sentence (`At Home Corporation`,
+/// `ON Semiconductor`).
+const NAME_OPENING_WORDS: &[&str] = &[
+    "at", "on", "in", "by", "for", "to", "with", "up", "into", "over",
 ];
 
 /// Words that make no company of a weak legal form on their own ("HOLDING CO.").
