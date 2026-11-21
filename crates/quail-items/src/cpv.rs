@@ -84,7 +84,10 @@ impl Space {
         #[allow(clippy::cast_precision_loss)]
         let n = docs.len().max(1) as f32;
         #[allow(clippy::cast_precision_loss)]
-        let idf: Vec<f32> = df.iter().map(|&d| (n / d.max(1) as f32).ln() + 1.0).collect();
+        let idf: Vec<f32> = df
+            .iter()
+            .map(|&d| (n / d.max(1) as f32).ln() + 1.0)
+            .collect();
         s.postings = vec![Vec::new(); idf.len()];
         for (doc, terms) in doc_terms.iter().enumerate() {
             let w: Vec<f32> = terms
@@ -100,8 +103,9 @@ impl Space {
         s
     }
 
-    /// Adds `weight × cosine` of the query to `acc` per document.
-    fn score(&self, terms: &[String], weight: f32, acc: &mut HashMap<u32, f32>) {
+    /// Adds `weight × cosine` of the query to `acc` per document (`touched` lists the
+    /// documents that got a non-zero score).
+    fn score(&self, terms: &[String], weight: f32, acc: &mut [f32], touched: &mut Vec<u32>) {
         let mut tf: HashMap<u32, f32> = HashMap::new();
         for t in terms {
             if let Some(&id) = self.ids.get(t) {
@@ -121,8 +125,14 @@ impl Space {
             .sqrt()
             .max(1e-6);
         for (id, x) in qw {
+            let w = weight * x / norm;
             for &(doc, y) in &self.postings[id as usize] {
-                *acc.entry(doc).or_default() += weight * x / norm * y;
+                if let Some(a) = acc.get_mut(doc as usize) {
+                    if *a == 0.0 {
+                        touched.push(doc);
+                    }
+                    *a += w * y;
+                }
             }
         }
     }
@@ -238,11 +248,18 @@ impl CpvIndex {
         if w.is_empty() {
             return Vec::new();
         }
-        let mut acc: HashMap<u32, f32> = HashMap::new();
-        self.words.score(&word_terms(&w), 0.5, &mut acc);
-        self.grams.score(&gram_terms(&w), 0.5, &mut acc);
-        let mut best: HashMap<u32, f32> = HashMap::new();
-        for (doc, s) in acc {
+        let mut acc = vec![0f32; self.doc_entry.len()];
+        let mut touched = Vec::new();
+        self.words
+            .score(&word_terms(&w), 0.5, &mut acc, &mut touched);
+        self.grams
+            .score(&gram_terms(&w), 0.5, &mut acc, &mut touched);
+        let mut best: HashMap<u32, f32> = HashMap::with_capacity(touched.len());
+        for doc in touched {
+            let s = acc[doc as usize];
+            if s < MIN_SCORE {
+                continue;
+            }
             if let Some(&e) = self.doc_entry.get(doc as usize) {
                 let b = best.entry(e).or_default();
                 *b = b.max(s);

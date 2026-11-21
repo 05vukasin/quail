@@ -121,7 +121,9 @@ pub(crate) fn hints(doc: &Document) -> DocHints {
         let (d, c) = (raw.rfind('.'), raw.rfind(','));
         let dec = match (d, c) {
             (Some(d), Some(c)) => Some(if d > c { '.' } else { ',' }),
-            (Some(x), None) | (None, Some(x)) if raw.len() - x == 3 && raw.matches(['.', ',']).count() == 1 => {
+            (Some(x), None) | (None, Some(x))
+                if raw.len() - x == 3 && raw.matches(['.', ',']).count() == 1 =>
+            {
                 raw.as_bytes().get(x).map(|b| char::from(*b))
             }
             _ => None,
@@ -163,17 +165,44 @@ pub(crate) fn hints(doc: &Document) -> DocHints {
     // VAT wording outside total rows (`Ukupno sa PDV-om` says nothing about line prices).
     let prose: String = folded
         .lines()
-        .filter(|l| table::total_kind(l.split(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']).next().unwrap_or("")).is_none())
+        .filter(|l| {
+            table::total_kind(
+                l.split(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+                    .next()
+                    .unwrap_or(""),
+            )
+            .is_none()
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let in_prose = |needles: &[&str]| needles.iter().any(|n| prose.contains(n));
     let net = in_prose(&[
-        "bez pdv", "+ pdv", "plus pdv", "excl. vat", "excl vat", "excluding vat", "exclusive of vat",
-        "plus vat", "+ vat", "net of vat", "pdv nije uracunat", "vat not included",
+        "bez pdv",
+        "+ pdv",
+        "plus pdv",
+        "excl. vat",
+        "excl vat",
+        "excluding vat",
+        "exclusive of vat",
+        "plus vat",
+        "+ vat",
+        "net of vat",
+        "pdv nije uracunat",
+        "vat not included",
     ]);
     let gross = in_prose(&[
-        "sa pdv", "s pdv", "ukljucujuci pdv", "uracunat pdv", "uracunatim pdv", "incl. vat", "incl vat",
-        "including vat", "inclusive of vat", "vat included", "pdv uracunat", "sa uracunatim",
+        "sa pdv",
+        "s pdv",
+        "ukljucujuci pdv",
+        "uracunat pdv",
+        "uracunatim pdv",
+        "incl. vat",
+        "incl vat",
+        "including vat",
+        "inclusive of vat",
+        "vat included",
+        "pdv uracunat",
+        "sa uracunatim",
     ]);
     // `Sve cene su u dinarima`, `prices in EUR`: a currency named without an amount.
     let currency = currency.or_else(|| {
@@ -195,9 +224,27 @@ pub(crate) fn hints(doc: &Document) -> DocHints {
         _ => None,
     };
     let commercial = has(&[
-        "cenovnik", "cjenovnik", "price list", "pricelist", "tarif", "rate card", "fee schedule",
-        "ponuda", "predracun", "profaktura", "faktura", "racun br", "invoice", "quotation", "quote",
-        "specifikacija", "schedule of rates", "pricing", "price schedule", "cene usluga", "cena usluga",
+        "cenovnik",
+        "cjenovnik",
+        "price list",
+        "pricelist",
+        "tarif",
+        "rate card",
+        "fee schedule",
+        "ponuda",
+        "predracun",
+        "profaktura",
+        "faktura",
+        "racun br",
+        "invoice",
+        "quotation",
+        "quote",
+        "specifikacija",
+        "schedule of rates",
+        "pricing",
+        "price schedule",
+        "cene usluga",
+        "cena usluga",
     ]);
     DocHints {
         dec,
@@ -231,8 +278,16 @@ fn cell_grids(page: &Page) -> Vec<Grid> {
     tables
         .into_iter()
         .map(|(_, cells)| {
-            let nrows = cells.iter().map(|c| usize::from(c.0) + 1).max().unwrap_or(0);
-            let ncols = cells.iter().map(|c| usize::from(c.1) + 1).max().unwrap_or(0);
+            let nrows = cells
+                .iter()
+                .map(|c| usize::from(c.0) + 1)
+                .max()
+                .unwrap_or(0);
+            let ncols = cells
+                .iter()
+                .map(|c| usize::from(c.1) + 1)
+                .max()
+                .unwrap_or(0);
             let mut rows: Vec<Vec<Option<GCell>>> = vec![vec![None; ncols]; nrows];
             for (r, c, cell) in cells {
                 let slot = &mut rows[usize::from(r)][usize::from(c)];
@@ -249,7 +304,13 @@ fn cell_grids(page: &Page) -> Vec<Grid> {
             // A cell's paragraphs are joined by newlines; table logic wants one line.
             for c in rows.iter_mut().flatten().flatten() {
                 if c.text.contains('\n') {
-                    c.text = c.text.split('\n').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+                    c.text = c
+                        .text
+                        .split('\n')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
                 }
             }
             rows.retain(|r| r.iter().any(Option::is_some));
@@ -291,7 +352,10 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
     let mut full = false;
     for page in &doc.pages {
         if out.check_deadline().is_err() {
-            out.problem(format!("item.lines: deadline reached at page {}", page.index));
+            out.problem(format!(
+                "item.lines: deadline reached at page {}",
+                page.index
+            ));
             break;
         }
         if page.text.is_empty() {
@@ -310,7 +374,9 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
             text_lines.extend(rest.iter().map(geom::Row::joined));
         } else {
             for b in &page.blocks {
-                if matches!(b.kind, BlockKind::TableCell { .. }) || matches!(b.zone, Zone::Header | Zone::Footer) {
+                if matches!(b.kind, BlockKind::TableCell { .. })
+                    || matches!(b.zone, Zone::Header | Zone::Footer)
+                {
                     continue;
                 }
                 let text = b.span.slice(&page.text);
@@ -328,7 +394,10 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
         }
         for g in &grids {
             if out.check_deadline().is_err() {
-                out.problem(format!("item.lines: deadline reached in a table on page {}", page.index));
+                out.problem(format!(
+                    "item.lines: deadline reached in a table on page {}",
+                    page.index
+                ));
                 break;
             }
             let parsed = table::parse(g, table_index, prev.as_ref(), &h);
@@ -360,7 +429,9 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
         }
     }
     if full {
-        out.problem(format!("item.lines: more than {MAX_ITEMS} items, rest skipped"));
+        out.problem(format!(
+            "item.lines: more than {MAX_ITEMS} items, rest skipped"
+        ));
     }
     found
 }
@@ -370,7 +441,10 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
 pub fn desc_key(description: &str) -> String {
     let f = fold(description, &FoldOptions::KEY);
     let mut out = String::with_capacity(f.len());
-    for w in f.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+    for w in f
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
         if !out.is_empty() {
             out.push(' ');
         }
@@ -462,7 +536,10 @@ pub(crate) fn emit(found: &Found, cpv: Option<&CpvIndex>, out: &mut Emitter) {
                                 if !e.sr.is_empty() {
                                     r.push(("label_sr", Value::text(&*e.sr)));
                                 }
-                                r.push(("score", Value::Float(f64::from((c.score * 1000.0).round() / 1000.0))));
+                                r.push((
+                                    "score",
+                                    Value::Float(f64::from((c.score * 1000.0).round() / 1000.0)),
+                                ));
                                 Some(Value::record(r))
                             })
                             .collect(),
@@ -478,7 +555,11 @@ pub(crate) fn emit(found: &Found, cpv: Option<&CpvIndex>, out: &mut Emitter) {
         if let Some(r) = it.row_index {
             f.push(("row_index", int(r)));
         }
-        let zone = if it.source == Source::Text { Zone::Body } else { Zone::Table };
+        let zone = if it.source == Source::Text {
+            Zone::Body
+        } else {
+            Zone::Table
+        };
         out.push(
             keys::LINE,
             Value::record(f),

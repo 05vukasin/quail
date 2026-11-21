@@ -20,20 +20,123 @@ use crate::unit;
 
 /// Words that, right before an amount, make the line a sentence, not an item.
 const SENTENCE_TAIL: &[&str] = &[
-    "iznosi", "iznos", "iznosu", "od", "do", "is", "of", "be", "are", "was", "amount", "amounts",
-    "total", "ukupno", "visini", "vrednosti", "vrednost", "cena", "price", "sum", "uplatu", "approximately",
-    "exceed", "exceeding", "than", "up", "to", "na", "za", "sa", "with", "pursuant", "within", "clan", "article",
-    "section", "tacka", "stav", "broj", "no", "br", "page", "strana", "year", "godine", "godina", "dana", "days",
-    "from", "de", "au", "by", "at", "about", "around", "under", "over", "than", "least", "most", "maximum",
-    "minimum", "max", "min", "capital", "kapital", "fund", "budget", "budzet", "limit", "cap", "worth",
+    "iznosi",
+    "iznos",
+    "iznosu",
+    "od",
+    "do",
+    "is",
+    "of",
+    "be",
+    "are",
+    "was",
+    "amount",
+    "amounts",
+    "total",
+    "ukupno",
+    "visini",
+    "vrednosti",
+    "vrednost",
+    "cena",
+    "price",
+    "sum",
+    "uplatu",
+    "approximately",
+    "exceed",
+    "exceeding",
+    "than",
+    "up",
+    "to",
+    "na",
+    "za",
+    "sa",
+    "with",
+    "pursuant",
+    "within",
+    "clan",
+    "article",
+    "section",
+    "tacka",
+    "stav",
+    "broj",
+    "no",
+    "br",
+    "page",
+    "strana",
+    "year",
+    "godine",
+    "godina",
+    "dana",
+    "days",
+    "from",
+    "de",
+    "au",
+    "by",
+    "at",
+    "about",
+    "around",
+    "under",
+    "over",
+    "than",
+    "least",
+    "most",
+    "maximum",
+    "minimum",
+    "max",
+    "min",
+    "capital",
+    "kapital",
+    "fund",
+    "budget",
+    "budzet",
+    "limit",
+    "cap",
+    "worth",
 ];
 
 /// Words that make a description a sentence (a verb or a relative pronoun).
 const SENTENCE_WORDS: &[&str] = &[
-    "will", "shall", "must", "may", "is", "are", "be", "been", "was", "were", "has", "have", "had",
-    "which", "that", "who", "whom", "whose", "if", "when", "where", "pay", "paid", "agrees", "agree",
-    "se", "je", "su", "ce", "biti", "bice", "koji", "koja", "koje", "ako", "kada", "placa", "placanje",
-    "iznosi", "obavezuje", "dostavlja",
+    "will",
+    "shall",
+    "must",
+    "may",
+    "is",
+    "are",
+    "be",
+    "been",
+    "was",
+    "were",
+    "has",
+    "have",
+    "had",
+    "which",
+    "that",
+    "who",
+    "whom",
+    "whose",
+    "if",
+    "when",
+    "where",
+    "pay",
+    "paid",
+    "agrees",
+    "agree",
+    "se",
+    "je",
+    "su",
+    "ce",
+    "biti",
+    "bice",
+    "koji",
+    "koja",
+    "koje",
+    "ako",
+    "kada",
+    "placa",
+    "placanje",
+    "iznosi",
+    "obavezuje",
+    "dostavlja",
 ];
 
 /// Words allowed after the last amount.
@@ -45,9 +148,33 @@ fn tail_ok(rest: &str) -> bool {
             || unit::normalize(x).is_some()
             || matches!(
                 x.as_str(),
-                "bez" | "sa" | "s" | "pdv" | "pdva" | "pdvom" | "vat" | "excl" | "incl" | "plus" | "po"
-                    | "per" | "neto" | "bruto" | "net" | "gross" | "tax" | "taxes" | "mesecno" | "godisnje"
-                    | "monthly" | "%" | "$" | "€" | "a" | "e" | "om"
+                "bez"
+                    | "sa"
+                    | "s"
+                    | "pdv"
+                    | "pdva"
+                    | "pdvom"
+                    | "vat"
+                    | "excl"
+                    | "incl"
+                    | "plus"
+                    | "po"
+                    | "per"
+                    | "neto"
+                    | "bruto"
+                    | "net"
+                    | "gross"
+                    | "tax"
+                    | "taxes"
+                    | "mesecno"
+                    | "godisnje"
+                    | "monthly"
+                    | "%"
+                    | "$"
+                    | "€"
+                    | "a"
+                    | "e"
+                    | "om"
             );
         if !allowed {
             extra += 1;
@@ -59,7 +186,26 @@ fn tail_ok(rest: &str) -> bool {
 fn clean_desc(s: &str) -> &str {
     s.trim_matches(|c: char| {
         c.is_whitespace()
-            || matches!(c, '.' | '…' | '-' | '–' | '—' | ':' | '|' | '_' | '=' | '*' | '•' | '·' | ',' | ';' | '$' | '€' | '£' | '(')
+            || matches!(
+                c,
+                '.' | '…'
+                    | '-'
+                    | '–'
+                    | '—'
+                    | ':'
+                    | '|'
+                    | '_'
+                    | '='
+                    | '*'
+                    | '•'
+                    | '·'
+                    | ','
+                    | ';'
+                    | '$'
+                    | '€'
+                    | '£'
+                    | '('
+            )
     })
 }
 
@@ -115,7 +261,10 @@ pub(crate) fn parse(
         let owned = desc.clone();
         let mut w: Vec<&str> = owned.split_whitespace().collect();
         // A currency word right before the price (`RSD 1.200,00`) is not description.
-        if w.len() >= 2 && w.last().is_some_and(|x| num::currency_word(&unit::key(x), false).is_some()) {
+        if w.len() >= 2
+            && w.last()
+                .is_some_and(|x| num::currency_word(&unit::key(x), false).is_some())
+        {
             w.pop();
             desc = clean_desc(&w.join(" ")).to_owned();
         }
@@ -145,7 +294,9 @@ pub(crate) fn parse(
     let desc_words = header::words(&desc);
     let last_word = desc_words.last().cloned().unwrap_or_default();
     if SENTENCE_TAIL.contains(&last_word.as_str())
-        || desc_words.iter().any(|w| SENTENCE_WORDS.contains(&w.as_str()))
+        || desc_words
+            .iter()
+            .any(|w| SENTENCE_WORDS.contains(&w.as_str()))
         || desc.starts_with(|c: char| c.is_lowercase())
     {
         return None;
@@ -169,9 +320,15 @@ pub(crate) fn parse(
     it.currency = after.iter().find_map(|v| v.currency).or(hints.currency);
     it.vat_included = hints.vat;
     let explicit_vat = header::words(&t[last.end..]);
-    if explicit_vat.iter().any(|w| w == "bez" || w == "excl" || w == "plus" || w == "neto" || w == "net") {
+    if explicit_vat
+        .iter()
+        .any(|w| w == "bez" || w == "excl" || w == "plus" || w == "neto" || w == "net")
+    {
         it.vat_included = Some(false);
-    } else if explicit_vat.iter().any(|w| w == "sa" || w == "incl" || w == "bruto" || w == "gross") {
+    } else if explicit_vat
+        .iter()
+        .any(|w| w == "sa" || w == "incl" || w == "bruto" || w == "gross")
+    {
         it.vat_included = Some(true);
     }
     it.vat_rate = toks.iter().find_map(|x| match x.kind {
@@ -184,7 +341,9 @@ pub(crate) fn parse(
         [p] => {
             // A rate card line: one price.
             let unit = unit_after(t, money.end).or_else(|| unit_in_desc(&it.description));
-            let separated = head.trim_end().ends_with(['–', '-', ':', '.', '…', '|', '—']);
+            let separated = head
+                .trim_end()
+                .ends_with(['–', '-', ':', '.', '…', '|', '—']);
             if !(money.currency.is_some() || unit.is_some() || (separated && hints.commercial)) {
                 return None;
             }
@@ -202,7 +361,9 @@ pub(crate) fn parse(
                 // With a quantity, a single amount is the line total.
                 it.total = it.unit_price.take();
             }
-            it.conf = 0.4 + if it.unit.is_some() { 0.1 } else { 0.0 } + if money.currency.is_some() { 0.05 } else { 0.0 };
+            it.conf = 0.4
+                + if it.unit.is_some() { 0.1 } else { 0.0 }
+                + if money.currency.is_some() { 0.05 } else { 0.0 };
         }
         [a, b] => {
             if let Some((q, u)) = &qty {
@@ -219,7 +380,11 @@ pub(crate) fn parse(
                 } else {
                     return None;
                 }
-            } else if a.units != 0 && [1.2, 1.1, 1.18, 1.19, 1.25, 1.21].iter().any(|r| close(a.to_f64() * r, b.to_f64())) {
+            } else if a.units != 0
+                && [1.2, 1.1, 1.18, 1.19, 1.25, 1.21]
+                    .iter()
+                    .any(|r| close(a.to_f64() * r, b.to_f64()))
+            {
                 it.unit_price = Some(*a);
                 it.unit_price_gross = Some(*b);
                 it.vat_included = Some(false);
@@ -240,7 +405,10 @@ pub(crate) fn parse(
                 it.unit_price = Some(p);
                 it.total = Some(tot);
                 it.conf = if mul { 0.7 } else { 0.6 };
-                if let Some((u, raw)) = qty.and_then(|q| q.1).or_else(|| unit_after(t, after[n - 3].end)) {
+                if let Some((u, raw)) = qty
+                    .and_then(|q| q.1)
+                    .or_else(|| unit_after(t, after[n - 3].end))
+                {
                     it.unit = Some(u);
                     it.unit_raw = Some(raw);
                 }

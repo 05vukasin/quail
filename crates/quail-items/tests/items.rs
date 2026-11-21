@@ -3,7 +3,7 @@
 //! emits them).
 
 use quail_core::{
-    Analyzer, Artifacts, BBox, Block, BlockKind, Blob, Ctx, Document, Emitter, Fact, Format,
+    Analyzer, Artifacts, BBox, Blob, Block, BlockKind, Ctx, Document, Emitter, Fact, Format,
     Limits, Page, PageKind, Profile, Span, TextSource, Value, Zone,
 };
 use quail_items::{ItemLines, keys};
@@ -147,10 +147,31 @@ fn docx_serbian_offer_table() {
     p.table(
         0,
         &[
-            &["Р.бр.", "Опис услуге", "Јед. мере", "Количина", "Јединична цена", "Укупно"],
-            &["1.", "Čišćenje poslovnog prostora", "m2", "250", "120,00", "30.000,00"],
+            &[
+                "Р.бр.",
+                "Опис услуге",
+                "Јед. мере",
+                "Количина",
+                "Јединична цена",
+                "Укупно",
+            ],
+            &[
+                "1.",
+                "Čišćenje poslovnog prostora",
+                "m2",
+                "250",
+                "120,00",
+                "30.000,00",
+            ],
             &["2.", "Pranje prozora", "m2", "80", "90,00", "7.200,00"],
-            &["3.", "Održavanje zelenih površina", "mesec", "12", "15.000,00", "180.000,00"],
+            &[
+                "3.",
+                "Održavanje zelenih površina",
+                "mesec",
+                "12",
+                "15.000,00",
+                "180.000,00",
+            ],
             &["", "Ukupno bez PDV-a", "", "", "", "217.200,00"],
             &["", "PDV 20%", "", "", "", "43.440,00"],
             &["", "Ukupno sa PDV-om", "", "", "", "260.640,00"],
@@ -185,10 +206,17 @@ fn docx_serbian_offer_table() {
     assert!(!cands.is_empty() && cands.len() <= 3);
     let first = cands[0].field("code").and_then(Value::as_text).unwrap();
     assert!(first.starts_with("909"), "{cands:?}");
-    let totals: Vec<_> = facts.iter().filter(|f| f.key == keys::TABLE_TOTAL).collect();
+    let totals: Vec<_> = facts
+        .iter()
+        .filter(|f| f.key == keys::TABLE_TOTAL)
+        .collect();
     let kinds: Vec<_> = totals.iter().map(|t| text(t, "kind").unwrap()).collect();
     assert_eq!(kinds, ["net", "vat", "gross"]);
-    assert!(facts.iter().any(|f| f.key == keys::COUNT && f.value == Value::Int(3)));
+    assert!(
+        facts
+            .iter()
+            .any(|f| f.key == keys::COUNT && f.value == Value::Int(3))
+    );
 }
 
 #[test]
@@ -199,8 +227,22 @@ fn docx_english_invoice_and_fast_profile() {
         0,
         &[
             &["Item", "Description", "Qty", "Unit", "Unit Price", "Amount"],
-            &["SVC-01", "Software development services", "40", "hours", "$95.00", "$3,800.00"],
-            &["SVC-02", "Project management", "10", "hours", "$110.00", "$1,100.00"],
+            &[
+                "SVC-01",
+                "Software development services",
+                "40",
+                "hours",
+                "$95.00",
+                "$3,800.00",
+            ],
+            &[
+                "SVC-02",
+                "Project management",
+                "10",
+                "hours",
+                "$110.00",
+                "$1,100.00",
+            ],
             &["", "", "", "", "Subtotal", "$4,900.00"],
             &["", "", "", "", "Sales Tax", "$0.00"],
             &["", "", "", "", "Total", "$4,900.00"],
@@ -218,7 +260,10 @@ fn docx_english_invoice_and_fast_profile() {
     assert_eq!(text(l[0], "currency"), Some("USD"));
     assert!(l[0].value.field("category_candidates").is_none());
     assert!(l[0].conf > 0.9);
-    let totals: Vec<_> = facts.iter().filter(|f| f.key == keys::TABLE_TOTAL).collect();
+    let totals: Vec<_> = facts
+        .iter()
+        .filter(|f| f.key == keys::TABLE_TOTAL)
+        .collect();
     assert_eq!(totals.len(), 3);
     let std = run(doc, Profile::Standard);
     let Some(Value::List(c)) = lines(&std)[0].value.field("category_candidates") else {
@@ -242,7 +287,12 @@ fn pdf_layout_table_from_column_blocks() {
     ] {
         p.block(t, x0, x1, 100.0);
     }
-    p.block("Network audit\nFirewall configuration\nOn-site support", 50.0, 210.0, 120.0);
+    p.block(
+        "Network audit\nFirewall configuration\nOn-site support",
+        50.0,
+        210.0,
+        120.0,
+    );
     p.block("1\n2\n16", 308.0, 320.0, 120.0);
     p.block("1,500.00\n750.00\n90.00", 370.0, 420.0, 120.0);
     p.block("1,500.00\n1,500.00\n1,440.00", 470.0, 520.0, 120.0);
@@ -340,7 +390,13 @@ fn hostile_layouts_do_not_panic() {
             y1: f32::NAN,
         }),
     );
-    p.table(0, &[&["", "1"], &["9", "", "", "", "", "", "", "", "", "", "", "x"]]);
+    p.table(
+        0,
+        &[
+            &["", "1"],
+            &["9", "", "", "", "", "", "", "", "", "", "", "x"],
+        ],
+    );
     let _ = run(
         Document {
             pages: vec![p.physical(0)],

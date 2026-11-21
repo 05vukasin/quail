@@ -41,7 +41,6 @@ impl Num {
             currency,
         }
     }
-
 }
 
 /// Parses a number as written: digits with `.`, `,`, `'` or space groups, optional sign.
@@ -101,9 +100,7 @@ pub(crate) fn parse_number(s: &str, dec: Dec) -> Option<Num> {
     {
         return None;
     }
-    if groups.len() > 1
-        && (groups[0].len() > 3 || groups.iter().skip(1).any(|g| g.len() != 3))
-    {
+    if groups.len() > 1 && (groups[0].len() > 3 || groups.iter().skip(1).any(|g| g.len() != 3)) {
         return None;
     }
     let digits: usize = groups.iter().map(|g| g.len()).sum::<usize>() + frac.len();
@@ -326,12 +323,12 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
             {
                 j += 1;
             } else if is_group_space(cj) {
-                let run = chars
-                    .get(j + 1..)
-                    .map_or(0, |r| r.iter().take_while(|(_, d)| d.is_ascii_digit()).count());
+                let run = chars.get(j + 1..).map_or(0, |r| {
+                    r.iter().take_while(|(_, d)| d.is_ascii_digit()).count()
+                });
                 let after = chars.get(j + 1 + run).map(|(_, d)| *d);
-                let group_ok = run == 3
-                    && after.is_none_or(|d| !d.is_ascii_digit() && d != '/' && d != '-');
+                let group_ok =
+                    run == 3 && after.is_none_or(|d| !d.is_ascii_digit() && d != '/' && d != '-');
                 // The run before the space is a group too (1-3 digits since the last
                 // separator or space).
                 let before = chars[i..j]
@@ -412,24 +409,48 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
             // `No. 11129984`, `#4521`, `br. 12`, `ID: 773882`: an identifier.
             let after_label = text.get(..start_b).is_some_and(|h| {
                 let h = h.trim_end_matches(|c: char| c == ' ' || c == ':' || c == '\u{a0}');
+                // Only the last few characters matter (the text before can be long).
+                let tail_start = h.char_indices().rev().nth(12).map_or(0, |(k, _)| k);
+                let h = &h[tail_start..];
                 let lower = h.to_lowercase();
                 h.ends_with('#')
                     || [
-                    "no.", "no", "nr.", "nr", "br.", "br", "broj", "id", "number", "num", "sec.", "sec",
-                    "section", "clause", "article", "art.", "cl.", "page", "p.", "pp.", "str.", "clan",
-                    "član", "tacka", "tačka", "stav", "annex", "schedule", "exhibit", "appendix", "version",
-                    "v", "rev", "box", "suite", "floor", "room",
-                ]
-                        .iter()
-                        .any(|l| lower.ends_with(l) && lower[..lower.len() - l.len()].chars().next_back().is_none_or(|c| !c.is_alphanumeric()))
+                        "no.", "no", "nr.", "nr", "br.", "br", "broj", "id", "number", "num",
+                        "sec.", "sec", "section", "clause", "article", "art.", "cl.", "page", "p.",
+                        "pp.", "str.", "clan", "član", "tacka", "tačka", "stav", "annex",
+                        "schedule", "exhibit", "appendix", "version", "v", "rev", "box", "suite",
+                        "floor", "room",
+                    ]
+                    .iter()
+                    .any(|l| {
+                        lower.ends_with(l)
+                            && lower[..lower.len() - l.len()]
+                                .chars()
+                                .next_back()
+                                .is_none_or(|c| !c.is_alphanumeric())
+                    })
             });
-            let glued = (glued_prev && before_sym.is_none()) || glued_by_letter || (after_label && currency.is_none());
+            // `7, 8, 10,11,12, 13,14 i 15`: a list of numbers, not an amount.
+            let listed = {
+                let before = text.get(..start_b).unwrap_or("").trim_end_matches(' ');
+                let after = text.get(end_b..).unwrap_or("");
+                (before.ends_with(',')
+                    && before[..before.len() - 1].ends_with(|c: char| c.is_ascii_digit()))
+                    || (after.starts_with(',')
+                        && after[1..]
+                            .trim_start_matches(' ')
+                            .starts_with(|c: char| c.is_ascii_digit())
+                        && !after[1..].starts_with(|c: char| c.is_ascii_digit()))
+            };
+            let glued = (glued_prev && before_sym.is_none())
+                || glued_by_letter
+                || (after_label && currency.is_none())
+                || (listed && currency.is_none());
             // Money is written with two decimals or with thousand groups (`12,00`, `1.200`),
             // not `10.1` (a clause) or `0.3`.
             let formatted = match kind {
                 NumKind::Number(v) => {
-                    v.scale == 2
-                        || (v.scale == 0 && raw.contains([',', '.', ' ', '\u{a0}', '\'']))
+                    v.scale == 2 || (v.scale == 0 && raw.contains([',', '.', ' ', '\u{a0}', '\'']))
                 }
                 _ => false,
             };
@@ -465,7 +486,11 @@ pub(crate) fn parse_date(raw: &str, order: DateOrder) -> Option<Date> {
     let raw = raw.trim_end_matches('.');
     let sep = raw.chars().find(|c| matches!(c, '.' | '/' | '-'))?;
     let parts: Vec<&str> = raw.split(sep).collect();
-    if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit())) {
+    if parts.len() != 3
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()))
+    {
         return None;
     }
     let v: Vec<u32> = parts.iter().map(|p| p.parse().unwrap_or(0)).collect();
@@ -475,9 +500,14 @@ pub(crate) fn parse_date(raw: &str, order: DateOrder) -> Option<Date> {
         if parts[0].len() > 2 || parts[1].len() > 2 || !matches!(parts[2].len(), 2 | 4) {
             return None;
         }
-        let y = if parts[2].len() == 2 { 2000 + v[2] } else { v[2] };
+        let y = if parts[2].len() == 2 {
+            2000 + v[2]
+        } else {
+            v[2]
+        };
         let (a, b) = (v[0], v[1]);
-        let mdy = sep == '/' && (order == DateOrder::Mdy && b <= 31 && a <= 12 || a <= 12 && b > 12);
+        let mdy =
+            sep == '/' && (order == DateOrder::Mdy && b <= 31 && a <= 12 || a <= 12 && b > 12);
         if mdy { (y, a, b) } else { (y, b, a) }
     };
     if !(1900..=2100).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
@@ -515,8 +545,15 @@ mod tests {
 
     #[test]
     fn scan_finds_amounts_currency_and_codes() {
-        let t = scan("Usluga A4 kom 2 x 1.200,00 RSD = 2.400,00 din.", Dec::Comma, DateOrder::Dmy);
-        let v: Vec<_> = t.iter().map(|t| (t.number().map(|n| n.units), t.currency, t.glued)).collect();
+        let t = scan(
+            "Usluga A4 kom 2 x 1.200,00 RSD = 2.400,00 din.",
+            Dec::Comma,
+            DateOrder::Dmy,
+        );
+        let v: Vec<_> = t
+            .iter()
+            .map(|t| (t.number().map(|n| n.units), t.currency, t.glued))
+            .collect();
         assert_eq!(
             v,
             [
@@ -530,16 +567,34 @@ mod tests {
 
     #[test]
     fn scan_dates_percent_and_symbols() {
-        let t = scan("$275.00 11/04/16 20% €1,200.50 85 EUR/h", Dec::Dot, DateOrder::Mdy);
+        let t = scan(
+            "$275.00 11/04/16 20% €1,200.50 85 EUR/h",
+            Dec::Dot,
+            DateOrder::Mdy,
+        );
         assert_eq!(t[0].currency, Some(*b"USD"));
-        assert_eq!(t[1].kind, NumKind::Date(Date { y: 2016, m: 11, d: 4 }));
+        assert_eq!(
+            t[1].kind,
+            NumKind::Date(Date {
+                y: 2016,
+                m: 11,
+                d: 4
+            })
+        );
         assert!(matches!(t[2].kind, NumKind::Percent(_)));
         assert_eq!(t[3].currency, Some(*b"EUR"));
         assert_eq!(t[3].number().map(|n| n.units), Some(120_050));
         assert_eq!(t[4].currency, Some(*b"EUR"));
         let d = scan("od 12.09.2023. do 31.12.2023.", Dec::Comma, DateOrder::Dmy);
         assert_eq!(d.len(), 2);
-        assert_eq!(d[0].kind, NumKind::Date(Date { y: 2023, m: 9, d: 12 }));
+        assert_eq!(
+            d[0].kind,
+            NumKind::Date(Date {
+                y: 2023,
+                m: 9,
+                d: 12
+            })
+        );
     }
 
     #[test]

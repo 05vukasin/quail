@@ -145,12 +145,20 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
         // total word anywhere.
         None if w.len() <= 5 => {
             let has = |set: &[&str]| w.iter().any(|x| set.contains(&x.as_str()));
-            if has(&["total", "totals", "subtotal", "ukupno", "svega", "payable", "balance"]) {
+            if has(&[
+                "total", "totals", "subtotal", "ukupno", "svega", "payable", "balance",
+            ]) {
                 "total"
             } else if has(&["taxable", "osnovica"]) {
                 "net"
-            } else if has(&["amount", "iznos"]) && has(&["tax", "vat", "pdv", "due", "excluding", "excl", "net"]) {
-                if has(&["excluding", "excl", "net"]) { "net" } else { "total" }
+            } else if has(&["amount", "iznos"])
+                && has(&["tax", "vat", "pdv", "due", "excluding", "excl", "net"])
+            {
+                if has(&["excluding", "excl", "net"]) {
+                    "net"
+                } else {
+                    "total"
+                }
             } else if has(&["tax", "vat", "pdv"]) && w.len() <= 3 {
                 "vat"
             } else if w.iter().any(|x| x == "commission" || x == "provizija") {
@@ -164,15 +172,25 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
             }
         }
         // `4,420.43 USD at TAX (0.0%) Totals`: a long label ending in a total word.
-        None if matches!(w.last().map(String::as_str), Some("total" | "totals" | "subtotal" | "ukupno")) => "total",
+        None if matches!(
+            w.last().map(String::as_str),
+            Some("total" | "totals" | "subtotal" | "ukupno")
+        ) =>
+        {
+            "total"
+        }
         None => return None,
     };
     // `ukupno sa PDV-om` is gross, `ukupno bez PDV-a` net, `Total incl. VAT` gross.
     if kind == "total" {
-        if w.iter().any(|x| x == "incl" || x == "including" || x == "inclusive") {
+        if w.iter()
+            .any(|x| x == "incl" || x == "including" || x == "inclusive")
+        {
             return Some("gross");
         }
-        if w.iter().any(|x| x == "excl" || x == "excluding" || x == "before") {
+        if w.iter()
+            .any(|x| x == "excl" || x == "excluding" || x == "before")
+        {
             return Some("net");
         }
     }
@@ -230,7 +248,8 @@ pub(crate) fn unit_after(text: &str, at: usize) -> Option<(&'static str, String)
     let mut w = words.next()?;
     let mut key = unit::key(w);
     // Skip a currency word (`85 EUR/h`).
-    if num::currency_word(&key, false).is_some() || key.len() == 1 && "€$£".contains(key.as_str()) {
+    if num::currency_word(&key, false).is_some() || key.len() == 1 && "€$£".contains(key.as_str())
+    {
         w = words.next()?;
         key = unit::key(w);
     }
@@ -257,7 +276,17 @@ pub(crate) fn unit_in_desc(desc: &str) -> Option<(&'static str, String)> {
         }
         if matches!(
             x.as_str(),
-            "mesecno" | "godisnje" | "monthly" | "annually" | "yearly" | "hourly" | "daily" | "weekly" | "nedeljno" | "pausal" | "pausalno"
+            "mesecno"
+                | "godisnje"
+                | "monthly"
+                | "annually"
+                | "yearly"
+                | "hourly"
+                | "daily"
+                | "weekly"
+                | "nedeljno"
+                | "pausal"
+                | "pausalno"
         ) {
             return unit::normalize(x).map(|u| (u, x.clone()));
         }
@@ -301,18 +330,66 @@ fn is_numbering_row(row: &[Option<GCell>]) -> bool {
 }
 
 const MONTHS: &[&str] = &[
-    "jan", "january", "feb", "february", "mar", "march", "apr", "april", "may", "jun", "june", "jul",
-    "july", "aug", "august", "sep", "sept", "september", "oct", "october", "nov", "november", "dec",
-    "december", "januar", "februar", "mart", "maj", "juni", "jul", "avgust", "septembar", "oktobar",
-    "novembar", "decembar", "jun", "januara", "februara", "marta", "aprila", "maja", "juna", "jula",
-    "avgusta", "septembra", "oktobra", "novembra", "decembra",
+    "jan",
+    "january",
+    "feb",
+    "february",
+    "mar",
+    "march",
+    "apr",
+    "april",
+    "may",
+    "jun",
+    "june",
+    "jul",
+    "july",
+    "aug",
+    "august",
+    "sep",
+    "sept",
+    "september",
+    "oct",
+    "october",
+    "nov",
+    "november",
+    "dec",
+    "december",
+    "januar",
+    "februar",
+    "mart",
+    "maj",
+    "juni",
+    "jul",
+    "avgust",
+    "septembar",
+    "oktobar",
+    "novembar",
+    "decembar",
+    "jun",
+    "januara",
+    "februara",
+    "marta",
+    "aprila",
+    "maja",
+    "juna",
+    "jula",
+    "avgusta",
+    "septembra",
+    "oktobra",
+    "novembra",
+    "decembra",
 ];
 
 /// Only a date in words (`March 01, 2024`, `15. maj 2024`).
 pub(crate) fn is_date_text(s: &str) -> bool {
     let w = header::words(s);
-    let letters: Vec<&String> = w.iter().filter(|x| x.chars().any(char::is_alphabetic)).collect();
-    !letters.is_empty() && letters.len() <= 2 && letters.iter().all(|x| MONTHS.contains(&x.as_str()))
+    let letters: Vec<&String> = w
+        .iter()
+        .filter(|x| x.chars().any(char::is_alphabetic))
+        .collect();
+    !letters.is_empty()
+        && letters.len() <= 2
+        && letters.iter().all(|x| MONTHS.contains(&x.as_str()))
 }
 
 /// A first row of short labels over the columns, with no numbers.
@@ -335,11 +412,7 @@ fn header_roles(row: &[Option<GCell>], ncols: usize) -> Vec<Option<HeaderCell>> 
     (0..ncols)
         .map(|i| {
             let t = cell_text(row, i);
-            if t.is_empty() {
-                None
-            } else {
-                header::role(t)
-            }
+            if t.is_empty() { None } else { header::role(t) }
         })
         .collect()
 }
@@ -376,7 +449,21 @@ fn is_subheader(row: &[Option<GCell>], hints: &DocHints) -> bool {
         let qualifier = w.iter().any(|x| {
             matches!(
                 x.as_str(),
-                "bez" | "sa" | "pdv" | "vat" | "rsd" | "eur" | "usd" | "din" | "excl" | "incl" | "net" | "gross" | "neto" | "bruto" | "%"
+                "bez"
+                    | "sa"
+                    | "pdv"
+                    | "vat"
+                    | "rsd"
+                    | "eur"
+                    | "usd"
+                    | "din"
+                    | "excl"
+                    | "incl"
+                    | "net"
+                    | "gross"
+                    | "neto"
+                    | "bruto"
+                    | "%"
             )
         });
         if !qualifier && header::role(t).is_none() {
@@ -388,11 +475,7 @@ fn is_subheader(row: &[Option<GCell>], hints: &DocHints) -> bool {
 }
 
 /// Header roles of row `h`, merged with a sub-header row `h + 1`.
-fn merge_subheader(
-    grid: &Grid,
-    h: usize,
-    sub: usize,
-) -> Vec<Option<HeaderCell>> {
+fn merge_subheader(grid: &Grid, h: usize, sub: usize) -> Vec<Option<HeaderCell>> {
     let (top, bottom) = (&grid.rows[h], &grid.rows[sub]);
     let mut out = Vec::with_capacity(grid.ncols);
     for i in 0..grid.ncols {
@@ -403,10 +486,15 @@ fn merge_subheader(
             (true, false) => b.to_owned(),
             (true, true) => String::new(),
         };
-        let mut r = if joined.is_empty() { None } else { header::role(&joined) };
+        let mut r = if joined.is_empty() {
+            None
+        } else {
+            header::role(&joined)
+        };
         if a.is_empty() && !b.is_empty() {
             // A spanning top cell (`Cena`) over `bez PDV` | `sa PDV`: inherit its role.
-            let left_cell: Option<HeaderCell> = out.iter().rev().find_map(|c: &Option<HeaderCell>| *c);
+            let left_cell: Option<HeaderCell> =
+                out.iter().rev().find_map(|c: &Option<HeaderCell>| *c);
             let inherited = left_cell.map(|left: HeaderCell| {
                 let q = header::role(&format!("cena {b}"));
                 HeaderCell {
@@ -509,7 +597,11 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
         }
     }
     let numeric: Vec<usize> = (desc + 1..grid.ncols)
-        .filter(|&i| cols[i].is_none() && stats[i].numeric >= half && stats[i].numeric * 2 >= stats[i].nonempty)
+        .filter(|&i| {
+            cols[i].is_none()
+                && stats[i].numeric >= half
+                && stats[i].numeric * 2 >= stats[i].nonempty
+        })
         .collect();
     match numeric.as_slice() {
         [] => return None,
@@ -521,10 +613,21 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
             } else {
                 match gross_ratio(grid, start, *a, *b, hints) {
                     Some(_) => {
-                        cols[*a] = Some(HeaderCell { role: Role::UnitPrice, vat: Some(false), currency: None });
-                        cols[*b] = Some(HeaderCell { role: Role::UnitPrice, vat: Some(true), currency: None });
+                        cols[*a] = Some(HeaderCell {
+                            role: Role::UnitPrice,
+                            vat: Some(false),
+                            currency: None,
+                        });
+                        cols[*b] = Some(HeaderCell {
+                            role: Role::UnitPrice,
+                            vat: Some(true),
+                            currency: None,
+                        });
                     }
-                    None if is_money(*a) && is_money(*b) && !ascending(grid, start, *a, *b, hints) => {
+                    None if is_money(*a)
+                        && is_money(*b)
+                        && !ascending(grid, start, *a, *b, hints) =>
+                    {
                         cols[*a] = mk(Role::UnitPrice);
                         cols[*b] = mk(Role::UnitPrice);
                         matrix = vec![*a, *b];
@@ -549,9 +652,16 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
                     .copied()
                     .filter(|&i| stats[i].money * 2 >= stats[i].numeric)
                     .collect();
-                let pool = if money.is_empty() { many.to_vec() } else { money };
+                let pool = if money.is_empty() {
+                    many.to_vec()
+                } else {
+                    money
+                };
                 let n = pool.len();
-                if n >= 2 && pool.iter().all(|&i| is_money(i)) && !ascending(grid, start, pool[n - 2], pool[n - 1], hints) {
+                if n >= 2
+                    && pool.iter().all(|&i| is_money(i))
+                    && !ascending(grid, start, pool[n - 2], pool[n - 1], hints)
+                {
                     for &c in &pool {
                         cols[c] = mk(Role::UnitPrice);
                     }
@@ -563,11 +673,9 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
                     cols[pool[0]] = mk(Role::UnitPrice);
                 }
                 let first_price = pool.first().copied().unwrap_or(grid.ncols);
-                if let Some(&q) = many
-                    .iter()
-                    .rev()
-                    .find(|&&i| i < first_price && cols[i].is_none() && stats[i].integer * 2 >= stats[i].numeric)
-                {
+                if let Some(&q) = many.iter().rev().find(|&&i| {
+                    i < first_price && cols[i].is_none() && stats[i].integer * 2 >= stats[i].numeric
+                }) {
                     cols[q] = mk(Role::Qty);
                 }
             }
@@ -624,7 +732,9 @@ fn gross_ratio(grid: &Grid, start: usize, a: usize, b: usize, hints: &DocHints) 
             }
         }
     }
-    (tried > 0 && hits * 3 >= tried * 2).then_some(ratio).flatten()
+    (tried > 0 && hits * 3 >= tried * 2)
+        .then_some(ratio)
+        .flatten()
 }
 
 fn best_triple(
@@ -633,27 +743,36 @@ fn best_triple(
     cols: &[usize],
     hints: &DocHints,
 ) -> Option<(usize, usize, usize)> {
+    // Each cell is read once: the triple search is cubic in the columns.
+    let vals: Vec<Vec<Option<f64>>> = grid
+        .rows
+        .iter()
+        .skip(start)
+        .map(|row| {
+            cols.iter()
+                .map(|&c| num_at(row, c, hints).map(Num::to_f64))
+                .collect()
+        })
+        .collect();
     let mut best = None;
     let mut best_hits = 0usize;
-    for (ia, &a) in cols.iter().enumerate() {
-        for (ib, &b) in cols.iter().enumerate().skip(ia + 1) {
-            for &c in cols.iter().skip(ib + 1) {
+    for ia in 0..cols.len() {
+        for ib in ia + 1..cols.len() {
+            for ic in ib + 1..cols.len() {
                 let mut hits = 0;
                 let mut tried = 0;
-                for row in grid.rows.iter().skip(start) {
-                    let (Some(x), Some(y), Some(z)) =
-                        (num_at(row, a, hints), num_at(row, b, hints), num_at(row, c, hints))
-                    else {
+                for v in &vals {
+                    let (Some(x), Some(y), Some(z)) = (v[ia], v[ib], v[ic]) else {
                         continue;
                     };
                     tried += 1;
-                    if close(x.to_f64() * y.to_f64(), z.to_f64()) {
+                    if close(x * y, z) {
                         hits += 1;
                     }
                 }
                 if tried > 0 && hits * 2 >= tried && hits > best_hits {
                     best_hits = hits;
-                    best = Some((a, b, c));
+                    best = Some((cols[ia], cols[ib], cols[ic]));
                 }
             }
         }
@@ -737,7 +856,9 @@ pub(crate) fn parse(
                     continue;
                 }
                 n += 1;
-                coded += usize::from(t.len() <= 20 && !t.contains(' ') && t.chars().any(|ch| ch.is_ascii_digit()));
+                coded += usize::from(
+                    t.len() <= 20 && !t.contains(' ') && t.chars().any(|ch| ch.is_ascii_digit()),
+                );
             }
             n > 0 && coded * 2 >= n
         };
@@ -862,10 +983,9 @@ pub(crate) fn parse(
             }
         }
         if price.is_none() && total.is_none() {
-            let only_desc = row
-                .iter()
-                .enumerate()
-                .all(|(i, c)| desc_cols.contains(&i) || c.as_ref().is_none_or(|c| c.text.trim().is_empty()));
+            let only_desc = row.iter().enumerate().all(|(i, c)| {
+                desc_cols.contains(&i) || c.as_ref().is_none_or(|c| c.text.trim().is_empty())
+            });
             if letters(&desc) >= 2 && only_desc {
                 if grid.source == Source::Layout
                     && ri.checked_sub(1).is_some_and(|p| last_item_row == Some(p))
@@ -1094,9 +1214,23 @@ mod tests {
     #[test]
     fn serbian_offer_table() {
         let g = grid(&[
-            &["R.br.", "Naziv usluge", "Jedinica mere", "Količina", "Jedinična cena bez PDV-a", "Ukupno bez PDV-a"],
+            &[
+                "R.br.",
+                "Naziv usluge",
+                "Jedinica mere",
+                "Količina",
+                "Jedinična cena bez PDV-a",
+                "Ukupno bez PDV-a",
+            ],
             &["1", "2", "3", "4", "5", "6=4x5"],
-            &["1.", "Servis klima uređaja", "sat", "10", "3.500,00", "35.000,00"],
+            &[
+                "1.",
+                "Servis klima uređaja",
+                "sat",
+                "10",
+                "3.500,00",
+                "35.000,00",
+            ],
             &["2.", "Zamena filtera", "kom", "4", "1.200,00", "4.800,00"],
             &["", "Ukupno bez PDV-a", "", "", "", "39.800,00"],
             &["", "PDV 20%", "", "", "", "7.960,00"],
@@ -1161,7 +1295,10 @@ mod tests {
 
     #[test]
     fn continuation_reuses_previous_header() {
-        let g1 = grid(&[&["Opis", "Kol.", "Cena", "Iznos"], &["A usluga", "1", "10,00", "10,00"]]);
+        let g1 = grid(&[
+            &["Opis", "Kol.", "Cena", "Iznos"],
+            &["A usluga", "1", "10,00", "10,00"],
+        ]);
         let p1 = parse(&g1, 0, None, &hints());
         let g2 = grid(&[&["B usluga", "2", "5,00", "10,00"]]);
         let p2 = parse(&g2, 1, p1.roles.as_ref(), &hints());

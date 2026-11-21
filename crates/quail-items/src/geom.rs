@@ -170,17 +170,18 @@ fn is_header_row(r: &Row) -> bool {
     if r.lines.len() < 2 {
         return false;
     }
-    let roles: Vec<_> = r.lines.iter().filter_map(|l| header::role(&l.text)).collect();
+    let roles: Vec<_> = r
+        .lines
+        .iter()
+        .filter_map(|l| header::role(&l.text))
+        .collect();
     let mut kinds: Vec<u8> = roles.iter().map(|h| h.role as u8).collect();
     kinds.sort_unstable();
     kinds.dedup();
     kinds.len() >= 2
-        && roles.iter().any(|h| {
-            matches!(
-                h.role,
-                header::Role::UnitPrice | header::Role::Total
-            )
-        })
+        && roles
+            .iter()
+            .any(|h| matches!(h.role, header::Role::UnitPrice | header::Role::Total))
 }
 
 fn has_money(r: &Row, hints: &DocHints) -> bool {
@@ -267,7 +268,11 @@ pub(crate) fn tables(page: &Page, hints: &DocHints) -> (Vec<Grid>, Vec<Row>) {
         }
         // Under a header plain numbers make a data row; without one, money must be there.
         let headed = cur.as_ref().is_some_and(|c| c.header.is_some()) && gap_ok;
-        let amount = if headed { has_amount(r, hints) } else { has_money(r, hints) };
+        let amount = if headed {
+            has_amount(r, hints)
+        } else {
+            has_money(r, hints)
+        };
         let data = !prose(r) && amount && (r.lines.len() >= 2 || cur.is_some() && gap_ok);
         if data {
             if let Some(c) = cur.as_mut().filter(|_| gap_ok) {
@@ -327,10 +332,12 @@ pub(crate) fn tables(page: &Page, hints: &DocHints) -> (Vec<Grid>, Vec<Row>) {
 }
 
 fn grid_of(page: &Page, rows: &[Row], reg: &Region) -> Option<Grid> {
-    let width = page
-        .size
-        .map_or(0.0, |s| s.0)
-        .max(rows.iter().flat_map(|r| r.lines.iter()).map(|l| l.bbox.x1).fold(0.0, f32::max));
+    let width = page.size.map_or(0.0, |s| s.0).max(
+        rows.iter()
+            .flat_map(|r| r.lines.iter())
+            .map(|l| l.bbox.x1)
+            .fold(0.0, f32::max),
+    );
     if !(width.is_finite() && width > 0.0) {
         return None;
     }
@@ -347,7 +354,11 @@ fn grid_of(page: &Page, rows: &[Row], reg: &Region) -> Option<Grid> {
         .collect();
     for &i in &multi {
         for l in &rows[i].lines {
-            for c in cover.iter_mut().take(bin(l.bbox.x1) + 1).skip(bin(l.bbox.x0)) {
+            for c in cover
+                .iter_mut()
+                .take(bin(l.bbox.x1) + 1)
+                .skip(bin(l.bbox.x0))
+            {
                 *c += 1;
             }
         }
@@ -356,7 +367,11 @@ fn grid_of(page: &Page, rows: &[Row], reg: &Region) -> Option<Grid> {
     let threshold = (multi.len() as u32).div_ceil(4).max(1);
     if let Some(h) = reg.header {
         for l in &rows[h].lines {
-            for c in cover.iter_mut().take(bin(l.bbox.x1) + 1).skip(bin(l.bbox.x0)) {
+            for c in cover
+                .iter_mut()
+                .take(bin(l.bbox.x1) + 1)
+                .skip(bin(l.bbox.x0))
+            {
                 *c += threshold;
             }
         }
@@ -402,7 +417,9 @@ fn overlap(a: (f32, f32), b: (f32, f32)) -> f32 {
 }
 
 fn put(cells: &mut [Option<GCell>], band: usize, text: &str, span: Span, bbox: BBox) {
-    let Some(slot) = cells.get_mut(band) else { return };
+    let Some(slot) = cells.get_mut(band) else {
+        return;
+    };
     match slot {
         Some(c) => {
             c.text.push(' ');
@@ -434,7 +451,10 @@ fn place(l: &Line, bands: &[(f32, f32)], cells: &mut [Option<GCell>]) {
         .map(|(i, _)| i)
         .collect();
     if hit.len() <= 1 {
-        let band = hit.first().copied().unwrap_or_else(|| nearest(bands, (lx.0 + lx.1) / 2.0));
+        let band = hit
+            .first()
+            .copied()
+            .unwrap_or_else(|| nearest(bands, (lx.0 + lx.1) / 2.0));
         put(cells, band, &l.text, l.span, l.bbox);
         return;
     }
