@@ -291,6 +291,28 @@ impl PageRaster for PdfRaster {
     /// of the page; rendering is the fallback for everything else. Image masks come back as
     /// gray, ink dark.
     fn embedded_scan(&self, page: u32, limits: &Limits) -> Option<Result<Image>> {
+        self.scan(page, None, limits)
+    }
+
+    /// [`PageRaster::embedded_scan`] at a reduced resolution. JPEG 2000 scans are decoded at
+    /// the smallest resolution level whose longer side is still at least `max_side` (time and
+    /// memory fall with the square of the scale); every other filter (DCT, JBIG2, CCITT,
+    /// Flate, ...) decodes at full size, as `embedded_scan` does. Palette JPEG 2000 images
+    /// decode at full size too (hayro cannot reduce them).
+    fn embedded_scan_reduced(
+        &self,
+        page: u32,
+        max_side: u32,
+        limits: &Limits,
+    ) -> Option<Result<Image>> {
+        self.scan(page, Some(max_side.max(1)), limits)
+    }
+}
+
+impl PdfRaster {
+    /// The page's single scan, decoded at full size (`max_side == None`) or reduced towards
+    /// `max_side` px on its longer side.
+    fn scan(&self, page: u32, max_side: Option<u32>, limits: &Limits) -> Option<Result<Image>> {
         if usize::try_from(page)
             .ok()
             .and_then(|i| self.no_scan.get(i))
@@ -318,6 +340,7 @@ impl PageRaster for PdfRaster {
                 let mut dev = ScanDevice {
                     page: Rect::new(0.0, 0.0, f64::from(w), f64::from(h)),
                     images: 0,
+                    max_side,
                     result: None,
                     watchdog: Watchdog::new(Clock::Until(deadline)),
                 };
@@ -338,10 +361,29 @@ impl PageRaster for PdfRaster {
     }
 }
 
+/// The target size hayro's decoders get for a reduced decode of a `w` × `h` image: the image
+/// scaled so that its longer side is `max_side`, rounded up; `None` when it is no larger.
+/// hayro's JPEG 2000 decoder skips `⌊log2(w / tw)⌋` or `⌊log2(h / th)⌋` resolution levels,
+/// whichever is smaller, which keeps the longer side at or above `max_side`.
+fn reduced_target(w: u32, h: u32, max_side: u32) -> Option<(u32, u32)> {
+    let long = w.max(h);
+    if max_side == 0 || long <= max_side {
+        return None;
+    }
+    let scale = |v: u32| {
+        u32::try_from((u64::from(v) * u64::from(max_side)).div_ceil(u64::from(long)))
+            .unwrap_or(v)
+            .max(1)
+    };
+    Some((scale(w), scale(h)))
+}
+
 /// Decodes the first image drawn when it is upright and covers the page; counts the rest.
 struct ScanDevice<'e> {
     page: Rect,
     images: usize,
+    /// Reduced decode: about this many px on the image's longer side.
+    max_side: Option<u32>,
     result: Option<Image>,
     watchdog: Watchdog<'e>,
 }
@@ -388,6 +430,7 @@ impl<'a> Device<'a> for ScanDevice<'_> {
         if !(page_area > 0.0 && placed.area() / page_area >= SCAN_COVERAGE) {
             return;
         }
+        let target = self.max_side.and_then(|m| reduced_target(iw, ih, m));
         // Decoding goes through the file's budget: pixels and bytes are capped by the
         // vendored decoders before anything is allocated.
         let mut out: Option<Image> = None;
@@ -409,7 +452,7 @@ impl<'a> Device<'a> for ScanDevice<'_> {
                         },
                     });
                 },
-                None,
+                target,
             ),
             HImage::Stencil(stencil) => stencil.with_stencil(
                 |mask, _paint| {
@@ -421,7 +464,7 @@ impl<'a> Device<'a> for ScanDevice<'_> {
                         data: mask.data.iter().map(|v| 255 - v).collect(),
                     });
                 },
-                None,
+                target,
             ),
         }
         self.result = out;
@@ -440,6 +483,27 @@ mod tests {
     fn gray_conversion() {
         assert_eq!(to_gray(&[255, 255, 255, 255, 0, 0, 0, 255]), [255, 0]);
         assert!(to_gray(&[1, 2]).is_empty());
+    }
+
+    #[test]
+    fn reduced_targets_keep_the_longer_side() {
+        assert_eq!(reduced_target(100, 50, 128), None);
+        assert_eq!(reduced_target(128, 64, 128), None);
+        assert_eq!(reduced_target(5, 5, 0), None);
+        assert_eq!(reduced_target(2480, 3508, 128), Some((91, 128)));
+        assert_eq!(reduced_target(10_000, 1, 128), Some((128, 1)));
+        // The levels hayro skips keep the longer side at or above the request.
+        for (w, h) in [
+            (2480, 3508),
+            (3508, 2480),
+            (1700, 2200),
+            (999, 333),
+            (10_000, 1),
+        ] {
+            let (tw, th) = reduced_target(w, h, 128).unwrap_or((w, h));
+            let k = (w / tw).ilog2().min((h / th).ilog2());
+            assert!(w.max(h) >> k >= 128, "{w}x{h}");
+        }
     }
 
     #[test]
