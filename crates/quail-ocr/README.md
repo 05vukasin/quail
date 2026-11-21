@@ -3,7 +3,7 @@
 OCR for pages that have no usable text layer. Namespace `ocr.*`.
 
 One analyzer: **`ocr.pages@1`** (`OcrPages`), profile `Deep`. It requires the `document` and `raster`
-artifacts and provides `ocr_text` (`OcrText`). It uses only core types. It reads the pages that have
+artifacts and provides `ocr_text` (`OcrText`) and `revised_document`. It uses only core types. It reads the pages that have
 `needs_ocr` and gets their pixels from the `Raster` artifact (`PageRaster`), so it never depends on
 an extractor crate.
 
@@ -75,6 +75,8 @@ cargo run -p quail-ocr --features fetch --example fetch_models -- [DIR]
 ## Getting OCR text to text analyzers
 
 The core `Document` artifact is write-once. `OcrText::apply_to(&Document)` returns the document with
-the OCR text and blocks filled into the pages that had no native text (`text_source = Ocr`). The
-pull request describes the core change that would let `text.*`, `signal.*`, `ref.*` and `party.*`
-read that document.
+the OCR text and blocks filled into the pages that had no native text (`text_source = Ocr`), and
+the analyzer provides it as the core `RevisedDocument` artifact (`revised_document`) whenever at
+least one page was read. Text analyzers (`text.*`, `signal.*`, `ref.*`, `party.*`, `clause.*`,
+`item.*`, `sketch.*`, `summary.*`) declare `after(&["revised_document"])` and read
+`Ctx::document()`, which prefers it over the extracted document.
