@@ -22,7 +22,7 @@ that is not used while quail is developed. The lists of hashes are committed in
 
 ## Current scores
 
-quail `0.1.0`, default build, profile `standard`, `master` of 2026-11-21. 958 dev documents;
+quail `0.1.0`, default build (no OCR), profile `standard`, `master` at commit `51821a4` (2026-11-21). 958 dev documents;
 953 records `ok`, 4 `partial`, 1 `failed`.
 
 | task | dataset | what is predicted | support | P | R | **F1** | ECE |
@@ -31,16 +31,16 @@ quail `0.1.0`, default build, profile `standard`, `master` of 2026-11-21. 958 de
 | `effective_date` | Kleister-NDA | `signal.date_effective`, `signal.date_signed` | 176 | 87.6 | 88.6 | **88.1** | |
 | `party` | Kleister-NDA | `party.company` | 475 | 69.6 | 73.3 | **71.4** | |
 | `term` | Kleister-NDA | `clause.term`, `clause.survival` | 89 | 70.2 | 74.2 | **72.1** | 0.064 |
-| `doc_title` | CUAD | `ref.title`, then the file's title property | 417 | 94.5 | 92.4 | **93.4** | 0.177 |
-| `agreement_date` | CUAD | `signal.date_signed`, `signal.date_effective` | 292 | 84.7 | 83.6 | **84.1** | 0.006 |
-| `effective_date` | CUAD | `signal.date_effective`, `signal.date_signed` | 187 | 83.6 | 87.2 | **85.3** | |
-| `party` | CUAD | `party.company` (name or defined term) | 2045 | 85.2 | 69.4 | **76.5** | |
+| `doc_title` | CUAD | `ref.title`, then the file's title property | 417 | 94.3 | 92.7 | **93.5** | 0.174 |
+| `agreement_date` | CUAD | `signal.date_signed`, `signal.date_effective` | 292 | 84.8 | 84.2 | **84.5** | 0.007 |
+| `effective_date` | CUAD | `signal.date_effective`, `signal.date_signed` | 187 | 83.8 | 88.2 | **85.9** | |
+| `party` | CUAD | `party.company` (name or defined term) | 2045 | 85.1 | 69.8 | **76.7** | |
 | `expiration_date` | CUAD | `signal.date_expiry` | 2 | 22.2 | 100.0 | 36.4 | 0.664 |
-| `items` | RealKIE FCC | `item.line` rows (description, price, page) | 15461 | 60.6 | 37.4 | **46.2** | 0.118 |
+| `items` | RealKIE FCC | `item.line` rows (description, price, page) | 15461 | 64.7 | 43.0 | **51.7** | 0.095 |
 
 P, R and F1 are percentages; *support* is the number of gold labels. ECE is the calibration
 error of `conf` ([Metrics](#metrics)), pooled over all datasets of the task (blank where the
-task spans two datasets; pooled values: `effective_date` 0.020, `party` 0.062).
+task spans two datasets; pooled values: `effective_date` 0.019, `party` 0.061).
 
 Notes on reading the table:
 
@@ -53,10 +53,11 @@ Notes on reading the table:
   more meaningful number.
 - **`items`**: a predicted line matches a gold row when it is on the same page, its price
   agrees within 0.5 % and its description shares at least 30 % of its words. Matched lines
-  have the right unit price in 96.3 % of cases and the right currency in 100 %. Ignoring the
-  description test, F1 is 52.2. 124 of the 296 dev invoices have no text layer on any page;
-  without OCR their lines cannot be found, and 49.3 % of the documents with gold rows get no
-  prediction.
+  have the right unit price in 94.2 % of cases and the right currency in 100 %. Ignoring the
+  description test, F1 is 54.3. 124 of the 296 dev invoices have no text layer on any page;
+  without OCR their lines cannot be found, and 44.9 % of the documents with gold rows get no
+  prediction. With OCR (`--features ocr --profile deep`) that share fell to 15.7 % in the
+  measurement in [performance.md](performance.md#ocr).
 - **Status**: the 1 `failed` record is a CUAD file that is missing from the dataset download
   (its gold exists; the scan records it as unreadable). The 4 `partial` records are CUAD
   contracts naming more than 32 candidate companies; the 32 strongest are kept.
@@ -247,6 +248,8 @@ The full description is in `crates/quail-eval/README.md`.
   documents, scored the same way; only aggregates from it are published.
 - **Layout and reading order.** Datasets such as OmniDocBench and DocLayNet are fetched by
   `tools/datasets/` but have no adapter yet.
-- **OCR quality.** OCR is not in the default build; FCC `items` recall shows what it costs.
+- **OCR quality.** The scores above are for the default build, without OCR. OCR is measured on
+  the FCC `items` task in [performance.md](performance.md#ocr); OCR text quality itself has no
+  public gold yet.
 - **Near-duplicates.** The `near_duplicate_of` task is defined but pending: sketches are
   per file, and pairing them across files is the consumer's job.

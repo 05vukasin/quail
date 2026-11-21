@@ -137,7 +137,8 @@ one mentioned in passing; a date in a running footer is usually a print date. An
 the zone in their scores, and consumers can too.
 
 PDF pages are physical pages with geometry. DOCX has no fixed pages, so the extractor makes
-one *logical* page per section; such pages have no boxes. `quail inspect --text` prints the
+one *logical* page per section; such pages have no boxes. Plain text files are split into
+logical pages at form feeds (one page without them), also without boxes. `quail inspect --text` prints the
 extracted page text, so a `span` can be checked by eye.
 
 ## 6. Steps: extractors, analyzers, ids and versions
@@ -147,7 +148,7 @@ Everything in a record is produced by a **step**:
 - the engine's own steps: `engine.sniff` (format from the bytes) and, with `--dedup`,
   `engine.dedup`;
 - an **extractor** per format, turning bytes into a `Document`: `pdf.extract`,
-  `docx.extract`;
+  `docx.extract`, `text.extract` (plain text, with encoding detection);
 - **analyzers**, turning what is known so far into more facts: `hash.identity`, `text.stats`,
   `signal.scan`, `party.candidates`, ...
 
@@ -209,8 +210,8 @@ it runs in; steps above the chosen profile are left out of the plan.
 | profile | what runs |
 |---|---|
 | `fast` | rules and statistics: extraction, hashes, text statistics, document language, identifiers, dates and amounts, references, parties, clauses, price lines, most sketches, the card and summary |
-| `standard` (default) | `fast`, plus per-page languages, CPV categories for price lines, a compatibility MinHash and the page pHash of scanned pages |
-| `deep` | `standard`, plus neural models where cheaper layers are unsure: OCR (`ocr.pages`) and the LLM summary (`summary.llm`), when the build includes them |
+| `standard` (default) | `fast`, plus per-page languages, CPV categories for price lines, the MinHash of the compatibility mode with an existing deployment (`sketch.minhash_compat`) and the page pHash of scanned pages |
+| `deep` | `standard`, plus OCR (`ocr.pages`) of the pages that need it, in a `quail` built with `--features ocr`. Programs that build their own engine can also add the LLM summary (`summary.llm`). In the default build, `deep` runs the same steps as `standard` |
 
 `quail version --profile fast` shows the exact plan of each profile for your build.
 
@@ -242,7 +243,8 @@ a zone and a box, and for PDF the measured lines of each block. A page also says
 text came from (`native`, `ocr`, `none`) and whether it **needs OCR**: no text layer but
 images, mostly an image with little text, or a text layer that is garbage.
 
-When OCR is active (profile `deep`, with an OCR backend built in), the flow is:
+When OCR is active (profile `deep`, in a build with the `ocr` feature and its models), the
+flow is:
 
 ```
 pdf.extract ──▶ document (page 3: needs_ocr) + raster

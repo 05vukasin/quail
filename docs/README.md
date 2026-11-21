@@ -1,6 +1,6 @@
 # quail documentation
 
-quail turns millions of business documents (PDF and DOCX) into per-file metadata: facts with a
+quail turns millions of business documents (PDF, DOCX and plain text) into per-file metadata: facts with a
 confidence, the step that produced them and the evidence where they were found. Offline, on a
 plain CPU. Read the first three pages in order; after that, pick what you need.
 

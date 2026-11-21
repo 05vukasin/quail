@@ -90,11 +90,12 @@ The facts come in layers, each built on the ones before:
   "Blue River" in another are the same company, belongs to the system that reads the records.
   quail gives it the keys to do that: normalized names, identifiers, cited numbers, sketches.
 - **It does not change your files.** It reads them and writes records.
-- **It does not need a model or the internet by default.** OCR and an LLM-written summary
-  exist as optional steps with their own native libraries and downloaded models; the default
-  build is pure Rust and runs rules, statistics and small built-in dictionaries.
-- **It does not read every format.** PDF and DOCX are the formats it extracts; other files get
-  their format, MIME type and hashes.
+- **It does not need a model or the internet by default.** OCR (`--features ocr`, profile
+  `deep`) and an LLM-written summary exist as optional steps with their own native libraries
+  and downloaded models; the default build is pure Rust and runs rules, statistics and small
+  built-in dictionaries.
+- **It does not read every format.** PDF, DOCX and plain text (with its encoding detected) are
+  the formats it extracts; other files get their format, MIME type and hashes.
 
 ## Where to go next
 

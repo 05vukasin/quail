@@ -23,11 +23,11 @@ quail version
 quail 0.1.0
 schema       1
 profile      standard
-fingerprint  19412f49a6522b47
-features     docx, pdf, text, signals, refs, parties, sketch, items, summary
+fingerprint  7799f963965d3df0
+features     docx, pdf, text, signals, refs, parties, clauses, sketch, items, summary
 steps
   engine            engine.sniff@1
-  extractor pdf     pdf.extract@1
+  extractor pdf     pdf.extract@2
   extractor docx    docx.extract@1
   analyzer          hash.identity@1
   ...
@@ -47,7 +47,9 @@ quail: 3 files (3 ok, 0 partial, 0 failed), 0.0 MB in 824.54ms: 3.6 files/s, 0.1
 ```
 
 Every file gets a record, whatever it is: a broken PDF or an unreadable file gets a `failed`
-record that says why. Each line of `records.jsonl` looks like this (shortened):
+record that says why. PDF, DOCX and plain-text files are read in full; a `.txt` file gets its
+encoding detected (`text.encoding`, with a confidence) and then the same analyzers as a PDF.
+Other files get their format, MIME type and hashes. Each line of `records.jsonl` looks like this (shortened):
 
 ```json
 {"schema":1,"locator":"contracts/amendment-2.pdf","size":37135,"format":"pdf","pages":1,
@@ -79,7 +81,7 @@ $ quail inspect contracts/amendment-2.pdf
 file     contracts/amendment-2.pdf
 format   pdf (application/pdf)   size 37.1 kB   pages 1
 status   ok
-steps    engine.sniff@1 (8 µs), pdf.extract@1 (2.1 ms), hash.identity@1 (62 µs), ...
+steps    engine.sniff@1 (10 µs), pdf.extract@2 (9.3 ms), hash.identity@1 (111 µs), ...
 
 [party] 5 fact(s)
   party.candidates  2 record(s)  src party.candidates@3
@@ -138,9 +140,9 @@ locator, and the step `engine.dedup@1`. `--dedup` cannot be combined with `--iso
 
 | profile | use it for |
 |---|---|
-| `fast` | a first pass over a large store: everything rule-based, no CPV categories for price lines, no page pHash |
-| `standard` | the default |
-| `deep` | adds neural steps (OCR, LLM summary) when the build has them; with the default build it runs the same steps as `standard` |
+| `fast` | a first pass over a large store: everything rule-based, without CPV categories for price lines, the compatibility MinHash and the page pHash |
+| `standard` | the default: every analyzer of the default build |
+| `deep` | `standard` plus OCR of the pages that need it, in a build with the `ocr` feature (section 7). In the default build it runs the same steps as `standard` |
 
 ```sh
 quail scan /data --profile fast -o records.jsonl
@@ -151,37 +153,50 @@ Each step's lowest profile is in [keys.md](keys.md#steps).
 
 ## 7. OCR
 
-Scanned pages have no text layer. The PDF extractor marks them (`needs_ocr` on the page,
-`pdf.pages_needing_ocr` in the record), so you can find them without OCR.
+Scanned pages have no text layer, and some text layers are garbage (for example Cyrillic
+stored as Latin look-alike letters). The PDF extractor marks such pages (`needs_ocr` on the
+page, `pdf.pages_needing_ocr` and `pdf.is_scanned` in the record), so you can find them
+without OCR.
 
-OCR itself lives in the crate `quail-ocr` (analyzer `ocr.pages@1`, profile `deep`). Its
-backend is PP-OCRv6 on ONNX Runtime, a native library, so it is behind the non-default cargo
-feature `paddle`, and the models (about 45 MiB, Apache-2.0) are downloaded separately, with
-every SHA-256 checked:
+OCR (`ocr.pages@1`, PP-OCRv6 on ONNX Runtime, with a second recognizer for Serbian Cyrillic)
+is in the `quail` binary behind the non-default cargo feature `ocr`. ONNX Runtime is a native
+library: the `ort` build script downloads prebuilt binaries (Linux x64/arm64, macOS arm64,
+Windows). The models (7 files, about 45 MiB, Apache-2.0) are downloaded separately and every
+SHA-256 is checked:
 
 ```sh
-cargo run -p quail-ocr --features fetch --example fetch_models -- ~/.cache/quail/ocr-models
-export QUAIL_OCR_MODELS=~/.cache/quail/ocr-models
+cargo build --release -p quail-cli --features ocr
+quail models fetch                 # into $QUAIL_OCR_MODELS, else the user cache dir (quail/ocr-models)
+quail models list                  # each file: size, ok / missing / bad sha-256, license
+quail scan contracts --profile deep -j 2 --timeout 15m -o records.jsonl
 ```
 
-Without `DIR`, the models go to `$QUAIL_OCR_MODELS`, or else to the user cache directory under
-`quail/ocr-models`.
+The sample amendment printed to a 200 DPI gray image and wrapped in a PDF has no text layer; with
+OCR the same facts come back (excerpt):
 
-The `quail` binary does not include OCR yet. A program that builds its own engine adds the
-step itself; text analyzers then read the OCR'd pages automatically
-([concepts.md](concepts.md#11-documents-ocr-and-the-revised-document)):
-
-```rust
-// Cargo.toml: quail-ocr = { path = "crates/quail-ocr", features = ["paddle"] }
-let engine = builder                                   // an EngineBuilder with the usual steps
-    .profile(quail_core::Profile::Deep)
-    .analyzer(quail_ocr::OcrPages::with_default_backend(threads))
-    .build()?;
+```console
+$ quail inspect scans/scanned-amendment.pdf --profile deep --timeout 15m
+status   ok
+steps    engine.sniff@1 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 µs), sketch.page_phash@3 (50.6 ms), ocr.pages@1 (5.87 s), ...
+  ocr.page       {page=0 script="latin" mean_conf=0.9931 chars=974 lines=22 dpi=200 source="embedded_scan" rotation=0}  conf 0.99  src ocr.pages@1  at p1
+  pdf.is_scanned           true  src pdf.extract@2
+  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@3  at p1 body [775..802] box(72,333,258,343)
 ```
 
-Without the `paddle` feature, or without the models, the step reports the problem
-`ocr backend not compiled` (or the missing model) on files that have a page needing OCR, and
-nothing on other files. Measured speed and memory: [performance.md](performance.md#ocr).
+- OCR runs only under `--profile deep`, and only on pages that need it. The text analyzers run
+  after it and read the OCR'd pages
+  ([concepts.md](concepts.md#11-documents-ocr-and-the-revised-document)); each OCR'd page also
+  gets an `ocr.page` fact with its mean confidence.
+- **Memory**: about 0.6 to 0.8 GB per OCR worker (ONNX Runtime sessions and page images at
+  200 to 300 DPI). On a 4 GB machine keep `-j` at 3 or below in deep mode.
+- **Time**: 5 to 15 s per page per worker on a laptop CPU. The default `--timeout` of 2 minutes
+  covers about 10 scanned pages; raise it for long scans. A file that hits the timeout keeps
+  the pages already read and is `partial`.
+- Without the feature or without the models, `--profile deep` prints one warning
+  (`quail: warning: no OCR: ...`), and every file with a page needing OCR gets a problem and is
+  `partial`.
+
+Measured speed, memory and quality: [performance.md](performance.md#ocr).
 
 ## 8. LLM summary (opt-in)
 
@@ -204,8 +219,8 @@ cargo run -p quail-summary --features fetch --example fetch_models -- small
 
 Every generated summary is fact-checked: each date, number, identifier and name in it must
 appear in the card or in the text the model saw; otherwise the extractive summary is kept
-(`method = extractive_fallback`). Like OCR, the step is not in the `quail` binary yet; a program
-registers `quail_summary::SummaryLlm` on its own engine. Measured speed:
+(`method = extractive_fallback`). Unlike OCR, this step is not in the `quail` binary yet; a
+program registers `quail_summary::SummaryLlm` on its own engine. Measured speed:
 [performance.md](performance.md#llm-summary).
 
 ## Next

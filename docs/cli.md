@@ -9,6 +9,7 @@ quail scan     PATH... | --manifest FILE     files to JSONL records, one per fil
 quail inspect  FILE                          one file, pretty-printed
 quail keys     [PREFIX]                      every fact key and step of this build
 quail version                                step versions and the pipeline fingerprint
+quail models   fetch | list                  OCR model files (only in a build with --features ocr)
 ```
 
 Sizes take `K`, `M`, `G` or `T` (powers of 1024, with or without `B`/`iB`; a bare number is
@@ -68,7 +69,7 @@ quail scan /data --dedup -o records.jsonl
 
 | option | default | effect |
 |---|---|---|
-| `--profile fast\|standard\|deep` | `standard` | how much work per file ([concepts.md](concepts.md#9-profiles)) |
+| `--profile fast\|standard\|deep` | `standard` | how much work per file ([concepts.md](concepts.md#9-profiles)); `deep` adds OCR in a build with `--features ocr` |
 | `-j, --threads N` | CPUs - 1 | worker threads (or worker processes with `--isolate`) |
 | `--max-in-flight N` | 2 x threads | files between the source and the sink |
 | `--max-in-flight-bytes SIZE` | `1G` | bytes of files in flight; a single larger file runs alone |
@@ -171,6 +172,23 @@ added or removed, which is when stored records may be stale
 ([concepts.md](concepts.md#6-steps-extractors-analyzers-ids-and-versions)). Limits are not
 part of it. Steps that the profile leaves out are listed as `inactive at this profile`.
 
+## quail models
+
+Only in a build with `--features ocr`. Manages the OCR model files (7 files, about 45 MiB,
+Apache-2.0, each listed with URL, size and SHA-256 in `quail_ocr::models::MANIFEST`).
+
+```sh
+quail models fetch               # download missing or corrupt files, checking each SHA-256
+quail models list                # each file: size, ok / missing / bad sha-256, license
+quail models fetch --dir DIR     # another directory
+```
+
+Without `--dir` the directory is `$QUAIL_OCR_MODELS`, else the user cache directory
+(`quail/ocr-models`). Under `--profile deep`, `scan` and `inspect` print one warning when OCR
+cannot run (no `ocr` feature, no model directory, missing models); each file with a page that
+needs OCR then gets a problem and is `partial`. See [quickstart.md](quickstart.md#7-ocr) for
+memory and timeout advice.
+
 ## Build features
 
 `quail` is built from `crates/quail-cli`. Each analyzer crate is a cargo feature, all on by
@@ -179,8 +197,9 @@ default: `docx`, `pdf`, `text`, `signals`, `refs`, `parties`, `clauses`, `sketch
 
 | feature | effect |
 |---|---|
+| `ocr` | OCR of pages that need it (`ocr.pages@1`, only under `--profile deep`) and the `quail models` command. Links ONNX Runtime (prebuilt binaries downloaded by the `ort` build script) and an HTTPS client for the model download |
 | `zstd` | `scan --zstd`; links the C zstd library |
 
-`quail version` lists the features of the binary at hand. OCR (`quail-ocr`) and the LLM summary
-(`quail-summary`'s `llm` feature) are not wired into the `quail` binary yet; see
-[quickstart.md](quickstart.md#7-ocr).
+`quail version` lists the features of the binary at hand. The LLM summary (`quail-summary`'s
+`llm` feature) is not wired into the `quail` binary; see
+[quickstart.md](quickstart.md#8-llm-summary-opt-in).

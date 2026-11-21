@@ -18,14 +18,14 @@
 
 ---
 
-quail reads business documents (PDF and DOCX), one file at a time, and writes one JSON record
+quail reads business documents (PDF, DOCX and plain text), one file at a time, and writes one JSON record
 per file: the facts it found, each with a **confidence**, the **step** that produced it and the
 **evidence** (page, zone, text span, box on the page) where it was found. A person or an AI
 agent can check every fact against the page.
 
 - **Offline and CPU-only.** No external API, no GPU. The default build is pure Rust and needs
   no models.
-- **Built for millions of files.** 55 to 155 PDF files per second on 4 threads of a laptop CPU,
+- **Built for millions of files.** 54 to 156 PDF files per second on 4 threads of a laptop CPU,
   under 300 MB of memory, content dedup, and process isolation so a hostile file costs one
   record, not the run.
 - **Candidates, not verdicts.** Every party, date and identifier found is reported with its
@@ -38,7 +38,7 @@ agent can check every fact against the page.
 | layer | facts | namespace |
 |---|---|---|
 | Identity | BLAKE3, XXH3-128, content-defined chunk hashes | `hash.*` |
-| Structure | format and MIME type; PDF and DOCX properties (producer, author, dates, signatures, forms, JavaScript, macros, tracked changes, comments, hidden text); page text in reading order with blocks, zones and boxes; pages that need OCR | `engine.*` `pdf.*` `docx.*` |
+| Structure | format and MIME type; text encoding of plain-text files; PDF and DOCX properties (producer, author, dates, signatures, forms, JavaScript, macros, tracked changes, comments, hidden text); page text in reading order with blocks, zones and boxes; pages that need OCR | `engine.*` `pdf.*` `docx.*` |
 | Text | characters, words, scripts, garbage ratio; document and page language | `text.*` |
 | Signals | IBAN, BIC, VAT, LEI, DUNS, EIN and national tax and registry numbers with check digits; dates with roles (signed, effective, expiry, invoice, due); amounts with currency and role; e-mail and web domains | `signal.*` |
 | References | own document number, title, instrument kind (contract, amendment, invoice, order, ...), cited documents with relation and date | `ref.*` |
@@ -48,8 +48,9 @@ agent can check every fact against the page.
 | Similarity | MinHash with LSH bands, SimHash of text and of template, layout hashes, page pHash of scans | `sketch.*` |
 | Summary | a file card of 100 to 300 tokens for LLM agents and a 1 to 3 sentence English summary, without a model | `summary.*` |
 
-Optional, behind cargo features with native libraries and downloaded models: OCR of scanned
-pages (`ocr.*`) and a fact-checked summary from a small local LLM. Every key:
+Optional: OCR of scanned pages and garbled text layers (`ocr.*`; `quail` built with
+`--features ocr`, run with `--profile deep`, models from `quail models fetch`), and, for
+programs that build their own engine, a fact-checked summary from a small local LLM. Every key:
 [docs/keys.md](docs/keys.md).
 
 ## Build
@@ -60,6 +61,9 @@ cd quail
 cargo build --release -p quail-cli        # Rust 1.97+, pure Rust, no system libraries
 export PATH="$PWD/target/release:$PATH"
 ```
+
+With OCR: `cargo build --release -p quail-cli --features ocr`, then `quail models fetch` (about
+45 MiB) and `quail scan --profile deep` ([quickstart](docs/quickstart.md#7-ocr)).
 
 ## Use
 
@@ -111,15 +115,15 @@ Scored with `quail-eval` against hand-labelled public datasets, on their dev spl
 | effective date | Kleister-NDA | 87.6 | 88.6 | **88.1** |
 | term | Kleister-NDA | 70.2 | 74.2 | **72.1** |
 | parties | Kleister-NDA | 69.6 | 73.3 | **71.4** |
-| document title | CUAD | 94.5 | 92.4 | **93.4** |
-| agreement date | CUAD | 84.7 | 83.6 | **84.1** |
-| effective date | CUAD | 83.6 | 87.2 | **85.3** |
-| parties | CUAD | 85.2 | 69.4 | **76.5** |
-| price lines | RealKIE FCC invoices | 60.6 | 37.4 | **46.2** |
+| document title | CUAD | 94.3 | 92.7 | **93.5** |
+| agreement date | CUAD | 84.8 | 84.2 | **84.5** |
+| effective date | CUAD | 83.8 | 88.2 | **85.9** |
+| parties | CUAD | 85.1 | 69.8 | **76.7** |
+| price lines | RealKIE FCC invoices | 64.7 | 43.0 | **51.7** |
 
-958 dev documents, `master` of 2026-11-21. Confidence is calibrated: the expected calibration
-error is below 0.07 for every task above except document title (0.18) and price lines (0.12).
-Many FCC invoices are scans, which the default build (no OCR) cannot read. Details, the other
+958 dev documents, default build (no OCR), `master` of 2026-11-21. Confidence is calibrated: the expected calibration
+error is below 0.07 for every task above except document title (0.17) and price lines (0.10).
+Many FCC invoices are scans, which the default build (without OCR) cannot read. Details, the other
 metrics and how to reproduce: [docs/evaluation.md](docs/evaluation.md).
 
 ## How fast?
@@ -129,13 +133,13 @@ work:
 
 | corpus | files | files/s | MB/s | peak RSS |
 |---|---:|---:|---:|---:|
-| CUAD contracts (PDF) | 510 | 54.6 | 10.8 | 197 MB |
-| Kleister-NDA (PDF) | 726 | 153.7 | 10.0 | 104 MB |
-| RealKIE FCC invoices (PDF, many scans) | 370 | 104.1 | 28.6 | 235 MB |
-| a private corpus of ~400 business documents (PDF, DOCX, scans) | 417 | 129.6 | 67.0 | 261 MB |
+| CUAD contracts (PDF) | 510 | 53.6 | 10.6 | 163 MB |
+| Kleister-NDA (PDF) | 726 | 156.2 | 10.2 | 105 MB |
+| RealKIE FCC invoices (PDF, many scans) | 370 | 115.6 | 31.8 | 225 MB |
+| a private corpus of ~400 business documents (PDF, DOCX, scans) | 417 | 128.6 | 66.5 | 248 MB |
 
-`--profile fast` adds 42 to 61 % files/s; `--isolate` costs 0 to 16 % files/s and about twice
-the memory (each worker loads its own models). One thread does 17.6 files/s on CUAD. Setup,
+`--profile fast` adds 35 to 52 % files/s; `--isolate` costs 0 to 15 % files/s and about twice
+the memory (each worker loads its own models). One thread does 17.3 files/s on CUAD. OCR (`--features ocr --profile deep`) is far slower: about 5 to 15 s per scanned page. Setup,
 per-step shares and what was optimized: [docs/performance.md](docs/performance.md).
 
 ## Documentation

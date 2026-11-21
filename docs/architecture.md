@@ -17,7 +17,7 @@ exact keys, ids and limits.
 | `quail-hash` | BLAKE3, XXH3-128 and FastCDC chunk hashes of the raw bytes | `hash.*` |
 | `quail-pdf` | PDF extractor on the vendored, hardened hayro crates; provides the page `raster` | `pdf.*` |
 | `quail-docx` | streaming DOCX (OOXML) extractor | `docx.*` |
-| `quail-text` | text utilities (normalization, scripts, money parsing) and the text analyzers | `text.*` |
+| `quail-text` | text utilities (normalization, scripts, money parsing, encoding detection), the plain-text extractor and the text analyzers | `text.*` |
 | `quail-signals` | identifiers with check digits, dates with roles, amounts, contact domains | `signal.*` |
 | `quail-refs` | own document numbers, cited documents, titles, instrument kind | `ref.*` |
 | `quail-parties` | company mentions, roles, defined terms, ranked party candidates | `party.*` |
@@ -25,7 +25,7 @@ exact keys, ids and limits.
 | `quail-items` | price lines (description, quantity, unit, prices) with CPV categories | `item.*` |
 | `quail-sketch` | similarity sketches: MinHash + LSH bands, SimHashes, layout, page pHash | `sketch.*` |
 | `quail-summary` | the file card and extractive summary (finalizers); optional local LLM summary | `summary.*` |
-| `quail-ocr` | OCR of pages without a usable text layer (optional native backend) | `ocr.*` |
+| `quail-ocr` | OCR of pages without a usable text layer (native backend; in `quail` with `--features ocr`, profile `deep`) | `ocr.*` |
 | `quail-io` | sources (filesystem walk, manifest) and sinks (JSONL, optional zstd) | - |
 | `quail-worker` | process isolation: supervisor, worker children, rlimits, watchdog | - |
 | `quail-cli` | the `quail` binary; the only place that names every concrete step | - |
@@ -71,7 +71,7 @@ quail-cli ──▶ quail-worker ──▶ quail-engine ──▶ quail-core
 
 ```
 bytes ──▶ sniff ──▶ extractor for the format ──▶ analyzers in plan order ──▶ finalizers ──▶ record
-          engine.    pdf.extract / docx.extract    hash, text, signal, ref,      summary.card,
+          engine.    pdf / docx / text.extract     hash, text, signal, ref,      summary.card,
           sniff@1    (Document, Raster)            party, clause, sketch, item   summary.extractive
 ```
 
@@ -196,7 +196,7 @@ The policy for vendored crates is in [development.md](development.md#vendored-cr
   feature: Rust intrinsics, no assembly, so no C toolchain is needed) picks SSE4.1, AVX2 or
   NEON at run time; `memchr` does the same for the PDF byte scans.
 - **Pure-Rust default build.** `cargo build` needs only a Rust toolchain. Native libraries are
-  opt-in features (`zstd`, OCR's `paddle`, the summary's `llm`).
+  opt-in features (`zstd` and `ocr` of `quail-cli`, the summary's `llm`).
 - **`unsafe` is denied** workspace-wide. The one exception is the optional `mmap` feature of
   `quail-io`, isolated in one file.
 - **Panics unwind** (`panic = "unwind"` in the release profile), so `catch_unwind` can

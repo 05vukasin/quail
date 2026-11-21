@@ -63,7 +63,9 @@ def render(quail):
       + ", ".join(f"`{f}`" for f in features) + "), with the documentation from the crate that")
     w("declares it. Value types and the fields of record values are named in each entry; the")
     w("value encoding is described in [concepts.md](concepts.md#3-values). `quail keys PREFIX`")
-    w("prints the same list for your own build.")
+    w("prints the same list for your own build. A build with `--features ocr` adds the step")
+    w("`ocr.pages@1` (profile `deep`) and the `ocr.*` keys (`ocr.pages`, `ocr.chars`, `ocr.mean_conf`,")
+    w("`ocr.script`, `ocr.page`), documented in `crates/quail-ocr/README.md`.")
     w("")
     nss = []
     for k in keys["keys"]:
