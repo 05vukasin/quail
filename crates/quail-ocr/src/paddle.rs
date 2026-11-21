@@ -444,14 +444,28 @@ impl PaddleEngine {
             return Ok(Vec::new());
         }
         // One line per call: batches are padded to their widest line, and ONNX Runtime keeps
-        // the largest buffers it ever needed.
+        // the largest buffers it ever needed. The line-orientation classifier is trained on
+        // the primary scripts and often calls Cyrillic lines upside down, so a flipped line
+        // is read both ways and the more confident reading wins.
         let mut out = Vec::with_capacity(crops.len());
-        for (i, c) in which.into_iter().zip(crops) {
+        let read = |c: RgbImage| -> Result<Option<(String, f32)>> {
             let r = cyr
                 .predict(vec![c])
                 .map_err(|e| oar_err("cyrillic recognizer", e))?;
-            if let (Some(t), Some(s)) = (r.texts.into_iter().next(), r.scores.first()) {
-                out.push((i, t, *s));
+            Ok(r.texts.into_iter().next().zip(r.scores.first().copied()))
+        };
+        for (i, c) in which.into_iter().zip(crops) {
+            let flipped = regions.get(i).is_some_and(|r| r.flipped);
+            let other = flipped.then(|| imageops::rotate180(&c));
+            let mut best = read(c)?;
+            if let Some(o) = other
+                && let Some(b) = read(o)?
+                && best.as_ref().is_none_or(|a| b.1 > a.1)
+            {
+                best = Some(b);
+            }
+            if let Some((t, s)) = best {
+                out.push((i, t, s));
             }
         }
         Ok(out)
@@ -461,8 +475,9 @@ impl PaddleEngine {
         if self.cyrillic.is_none() || hint == ScriptHint::Latin || regions.is_empty() {
             return Ok(());
         }
+        // Widest boxes first: the Latin text of a Cyrillic line may be empty.
         let mut by_len: Vec<usize> = (0..regions.len()).collect();
-        by_len.sort_by_key(|&i| std::cmp::Reverse(regions[i].text.chars().count()));
+        by_len.sort_by(|&a, &b| regions[b].bbox.width().total_cmp(&regions[a].bbox.width()));
         // A confident Latin reading is never Cyrillic text in disguise: only the weaker lines
         // (unless the caller expects Cyrillic) are worth a second recognizer.
         let sample: Vec<usize> = by_len
@@ -545,12 +560,15 @@ impl OcrEngine for PaddleEngine {
         let mut regions: Vec<Region> = res
             .text_regions
             .into_iter()
-            .filter_map(|r| {
-                let text = r.text.as_deref()?.trim().to_owned();
-                if text.is_empty() {
-                    return None;
-                }
-                let conf = r.confidence.unwrap_or(0.0).clamp(0.0, 1.0);
+            .map(|r| {
+                // A detected line the Latin recognizer reads as nothing (it turns Cyrillic
+                // into blanks) stays, with confidence 0, for the Cyrillic pass.
+                let text = r.text.as_deref().unwrap_or("").trim().to_owned();
+                let conf = if text.is_empty() {
+                    0.0
+                } else {
+                    r.confidence.unwrap_or(0.0).clamp(0.0, 1.0)
+                };
                 let quad = quad_of(&r.bounding_box.points);
                 let bbox = PxBox::around(quad);
                 let words = r
@@ -558,17 +576,18 @@ impl OcrEngine for PaddleEngine {
                     .as_deref()
                     .map(|wb| words_from_chars(&text, wb, conf))
                     .unwrap_or_default();
-                Some(Region {
+                Region {
                     text,
                     conf,
                     quad,
                     bbox,
                     flipped: r.orientation_angle.is_some_and(|a| (a - 180.0).abs() < 1.0),
                     words,
-                })
+                }
             })
             .collect();
         self.route(&up_img, &mut regions, hints.script)?;
+        regions.retain(|r| !r.text.trim().is_empty());
         #[allow(clippy::cast_precision_loss)]
         let (w, h) = (image.width as f32, image.height as f32);
         let back = |p: (f32, f32)| unrotate(p, rot, w, h);
