@@ -719,10 +719,9 @@ fn oversized_images_in_forms_inline_and_patterns_are_refused_when_rendering() {
         "/Pattern << /P0 5 0 R >>",
         vec![(5, pattern), (6, img)],
     );
-    // Inline images carry no document context in hayro, so their refusal (by the fixed
-    // default cap) cannot be reported: the render succeeds without the image. Memory is
-    // bounded either way.
-    for (bytes, reported) in [(in_form, true), (inline, false), (in_pattern, true)] {
+    // Inline images get the file's budget from the interpreter, so their refusal is reported
+    // like any other.
+    for (bytes, reported) in [(in_form, true), (inline, true), (in_pattern, true)] {
         let ((), peak) = peak_of(|| {
             let r = run(bytes.clone(), &Limits::default());
             assert!(r.doc.is_ok());
@@ -943,4 +942,232 @@ fn raster_parses_once_for_many_pages() {
         raster.render(i, 18.0, &Limits::default()).expect("render");
     }
     assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Second review: allocation discipline, render limits, stale caches.
+
+/// A page whose content is `prefix` followed by `mib` MiB of spaces, flate-compressed.
+fn big_content_pdf(mib: usize, layers: usize) -> Vec<u8> {
+    let mut content = b"BT /F1 24 Tf 72 700 Td (visible) Tj ET ".to_vec();
+    content.resize(content.len() + mib * MIB, b' ');
+    let mut body = content;
+    for _ in 0..layers {
+        body = zlib(&body);
+    }
+    let filters = vec!["/FlateDecode"; layers].join(" ");
+    page_pdf(
+        b"",
+        FONT,
+        vec![(4, stream_raw(&format!("/Filter [{filters}]"), &body))],
+    )
+}
+
+#[test]
+fn capped_inflate_does_not_double_its_buffer() {
+    // 300 MiB behind a 64 MiB budget: `read_to_end` would grow the buffer to 128 MiB before
+    // the cap is seen; chunked capped growth stays near 64 MiB.
+    let bytes = big_content_pdf(300, 1);
+    let (r, peak) = peak_of(|| run(bytes, &small_budget(64)));
+    assert!(has_problem(&r, "max_decompressed"), "{:?}", r.problems);
+    assert!(peak < 100 * MIB, "peak {} MiB", peak / MIB);
+}
+
+#[test]
+fn chained_layers_are_charged_together() {
+    // Two flate layers: the first expands to ~1 MiB, the second to 300 MiB; both layers'
+    // outputs count against the same 64 MiB budget.
+    let bytes = big_content_pdf(300, 2);
+    let (r, peak) = peak_of(|| run(bytes, &small_budget(64)));
+    assert!(has_problem(&r, "max_decompressed"), "{:?}", r.problems);
+    assert!(peak < 100 * MIB, "peak {} MiB", peak / MIB);
+}
+
+#[test]
+fn contents_concatenation_is_charged_and_capped() {
+    // 100 references to one 16 MiB stream: the concatenated copy is charged too.
+    let bytes = shared_pdf(100, 16, true);
+    let (r, peak) = peak_of(|| run(bytes, &small_budget(64)));
+    assert!(has_problem(&r, "max_decompressed"), "{:?}", r.problems);
+    assert!(peak < 120 * MIB, "peak {} MiB", peak / MIB);
+}
+
+#[test]
+fn many_distinct_images_hit_the_render_budget() {
+    // Ten distinct 2000 x 2000 1-bit images: tiny on disk, 8 bytes per pixel once drawn.
+    let img = stream_flate(
+        "/Type /XObject /Subtype /Image /Width 2000 /Height 2000 /BitsPerComponent 1 /ColorSpace /DeviceGray",
+        &vec![0x55; 250 * 2000],
+    );
+    let mut content = Vec::new();
+    let mut res = String::from("/XObject << ");
+    let mut extra = Vec::new();
+    for i in 0..10u32 {
+        content.extend_from_slice(format!("q 612 0 0 792 0 0 cm /I{i} Do Q ").as_bytes());
+        let _ = std::fmt::Write::write_fmt(&mut res, format_args!("/I{i} {} 0 R ", 10 + i));
+        extra.push((10 + i, img.clone()));
+    }
+    res.push_str(">>");
+    let bytes = page_pdf(&content, &res, extra);
+    let limits = Limits {
+        max_decompressed: 16 << 20,
+        max_render_pixels: 4_000_000,
+        ..Limits::default()
+    };
+    let (res, peak) = peak_of(|| PdfRaster::new(Blob::from(bytes)).render(0, 72.0, &limits));
+    assert!(
+        matches!(res, Err(Error::LimitExceeded(_))),
+        "{:?}",
+        res.map(|i| i.width)
+    );
+    assert!(peak < 160 * MIB, "peak {} MiB", peak / MIB);
+}
+
+#[test]
+fn inline_images_obey_max_render_pixels() {
+    // A 3000 x 3000 inline image (9 M px) on a 4 M px budget: refused and reported.
+    let data = zlib(&vec![0x80; 3000 * 3000]);
+    let mut c = b"q 612 0 0 792 0 0 cm BI /W 3000 /H 3000 /BPC 8 /CS /G /F /Fl ID ".to_vec();
+    c.extend_from_slice(&data);
+    c.extend_from_slice(b"\nEI Q");
+    let bytes = page_pdf(&c, "", vec![]);
+    let limits = Limits {
+        max_render_pixels: 4_000_000,
+        ..Limits::default()
+    };
+    let raster = PdfRaster::new(Blob::from(bytes));
+    assert!(matches!(
+        raster.render(0, 36.0, &limits),
+        Err(Error::LimitExceeded(_))
+    ));
+    assert!(raster.embedded_scan(0, &limits).is_none_or(|r| r.is_err()));
+}
+
+#[test]
+fn nested_tiling_patterns_stop_at_the_deadline() {
+    // Six nested patterns with tiny steps: copies multiply per level.
+    let mut extra = Vec::new();
+    let levels = 6;
+    for k in 0..levels {
+        let n = 10 + k;
+        let (c, r) = if k + 1 < levels {
+            (
+                b"/Pattern cs /P0 scn 0 0 10 10 re f".to_vec(),
+                format!("/Pattern << /P0 {} 0 R >>", n + 1),
+            )
+        } else {
+            (b"0 0 1 rg 0 0 5 5 re f".to_vec(), String::new())
+        };
+        extra.push((
+            n,
+            stream_flate(
+                &format!("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 1 /YStep 1 /Resources << {r} >>"),
+                &c,
+            ),
+        ));
+    }
+    let bytes = page_pdf(
+        b"/Pattern cs /P0 scn 0 0 612 792 re f",
+        "/Pattern << /P0 10 0 R >>",
+        extra,
+    );
+    let limits = Limits {
+        timeout: Duration::from_secs(2),
+        ..Limits::default()
+    };
+    let t = Instant::now();
+    let res = PdfRaster::new(Blob::from(bytes)).render(0, 72.0, &limits);
+    assert!(
+        matches!(res, Err(Error::Timeout | Error::LimitExceeded(_))),
+        "{:?}",
+        res.map(|i| i.width)
+    );
+    assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+}
+
+#[test]
+fn a_refused_render_does_not_poison_the_next_one() {
+    // The first render hits a tiny budget; hayro caches the (refused) content stream. The next
+    // render, with room to spare, must re-parse and draw the real page, not a blank one.
+    let bytes = big_content_pdf(8, 1);
+    let raster = PdfRaster::new(Blob::from(bytes));
+    let tight = Limits {
+        max_decompressed: 1 << 20,
+        ..Limits::default()
+    };
+    assert!(matches!(
+        raster.render(0, 72.0, &tight),
+        Err(Error::LimitExceeded(_))
+    ));
+    let img = raster.render(0, 72.0, &Limits::default()).expect("render");
+    assert!(
+        img.data.iter().any(|&v| v < 128),
+        "blank page after a refused render"
+    );
+}
+
+#[test]
+fn jbig2_halftone_grid_far_larger_than_its_region_is_refused() {
+    // A 64 x 64 region with a 16384 x 16384 halftone grid: a 1 GiB value array before.
+    let seg = |num: u32, typ: u8, data: &[u8], refs: &[u8]| {
+        let mut s = num.to_be_bytes().to_vec();
+        s.push(typ);
+        s.push((refs.len() as u8) << 5);
+        s.extend_from_slice(refs);
+        s.push(1);
+        s.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        s.extend_from_slice(data);
+        s
+    };
+    let mut pinfo = 64u32.to_be_bytes().to_vec();
+    pinfo.extend_from_slice(&64u32.to_be_bytes());
+    pinfo.extend_from_slice(&[0; 11]);
+    let mut pdict = vec![0x00, 1, 1];
+    pdict.extend_from_slice(&1u32.to_be_bytes());
+    pdict.extend_from_slice(&[0; 64]);
+    let mut ht = Vec::new();
+    for v in [64u32, 64, 0, 0] {
+        ht.extend_from_slice(&v.to_be_bytes());
+    }
+    ht.extend_from_slice(&[0, 0]);
+    ht.extend_from_slice(&16_384u32.to_be_bytes());
+    ht.extend_from_slice(&16_384u32.to_be_bytes());
+    ht.extend_from_slice(&[0; 8]);
+    ht.extend_from_slice(&256u16.to_be_bytes());
+    ht.extend_from_slice(&0u16.to_be_bytes());
+    ht.extend_from_slice(&[0; 256]);
+    let mut data = seg(0, 48, &pinfo, &[]);
+    data.extend(seg(1, 16, &pdict, &[]));
+    data.extend(seg(2, 22, &ht, &[1]));
+    data.extend(seg(3, 49, b"", &[]));
+    let img = stream_raw(
+        "/Type /XObject /Subtype /Image /Width 64 /Height 64 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode",
+        &data,
+    );
+    let bytes = page_pdf(
+        b"q 612 0 0 792 0 0 cm /Im0 Do Q",
+        "/XObject << /Im0 5 0 R >>",
+        vec![(5, img)],
+    );
+    let t = Instant::now();
+    let ((), peak) = peak_of(|| {
+        let raster = PdfRaster::new(Blob::from(bytes));
+        let _ = raster.render(0, 72.0, &Limits::default());
+        let _ = raster.embedded_scan(0, &Limits::default());
+    });
+    assert!(peak < 96 * MIB, "peak {} MiB", peak / MIB);
+    assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+}
+
+#[test]
+fn raster_reports_an_object_stream_bomb_as_a_limit() {
+    let layer1 = zlib(&objstm_payload(256));
+    let bytes = objstm_pdf("[/FlateDecode]", &layer1);
+    let raster = PdfRaster::new(Blob::from(bytes));
+    let res = raster.render(0, 72.0, &small_budget(16));
+    assert!(
+        matches!(res, Err(Error::LimitExceeded(_))),
+        "{:?}",
+        res.map(|i| i.width)
+    );
 }

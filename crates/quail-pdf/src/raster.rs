@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use hayro::vello_cpu::color::palette::css::WHITE;
-use hayro::{PixmapSettings, RenderCache, RenderSettings};
+use hayro::{PixmapSettings, RenderAbort, RenderCache, RenderLimits, RenderSettings};
 use hayro_interpret::font::GlyphRun;
 use hayro_interpret::kurbo::{BezPath, Rect};
 use hayro_interpret::util::TransformExt;
@@ -25,9 +25,9 @@ use hayro_syntax::budget::DecodeBudget;
 use hayro_syntax::page::Page as HPage;
 use quail_core::{Blob, Error, Format, Image, Limits, PageRaster, Result};
 
-use crate::device::{Abort, Clock, DryRun, Watchdog};
+use crate::device::{Abort, Clock, DryRun, MAX_CALLS_PER_PAGE, Watchdog};
 use crate::extract::REOPEN_AFTER_BYTES;
-use crate::open::{Caught, caught, open, panic_msg};
+use crate::open::{Caught, caught, open};
 
 /// Highest DPI [`PdfRaster::render`] accepts.
 pub const MAX_DPI: f32 = 1200.0;
@@ -91,6 +91,8 @@ impl PdfRaster {
                 let pages = pdf.pages();
                 match pages.get(usize::try_from(page).unwrap_or(usize::MAX)) {
                     Some(p) => f(p, &budget),
+                    // A page tree cut short by the decode budget is a limit, not a bad index.
+                    None if budget.limit_hit() => Err(Error::LimitExceeded("max_decompressed")),
                     None => Err(Error::Other(format!("page {page} does not exist"))),
                 }
             }
@@ -99,13 +101,28 @@ impl PdfRaster {
         st.decoded_since_open = st
             .decoded_since_open
             .saturating_add(limits.max_decompressed.saturating_sub(budget.remaining()));
-        // After an unwind out of hayro, or past the cache margin, start from a fresh parse.
-        let unwound = matches!(&result, Err(Error::Panic(_) | Error::Timeout));
-        if unwound || st.decoded_since_open > REOPEN_AFTER_BYTES {
+        // Start from a fresh parse after an unwind out of hayro, past the cache margin, or
+        // after ANY limit hit: hayro caches each page's decoded content (refused or partial
+        // ones included) for the life of the parse, so reusing it would silently return a
+        // blank page next time.
+        let unwound = matches!(
+            &result,
+            Err(Error::Panic(_) | Error::Timeout | Error::LimitExceeded(_))
+        );
+        if unwound || budget.limit_hit() || st.decoded_since_open > REOPEN_AFTER_BYTES {
             st.pdf = None;
         }
         result
     }
+}
+
+/// Bytes one render may allocate for decoded images and child pixmaps (pattern tiles, stencil
+/// paints, soft masks): the decode budget plus two canvases' worth at the pixel cap (at 4
+/// bytes per pixel). The main canvas itself is bounded by `max_render_pixels` up front.
+fn render_byte_budget(limits: &Limits) -> u64 {
+    limits
+        .max_decompressed
+        .saturating_add(limits.max_render_pixels.saturating_mul(8))
 }
 
 /// Luma from premultiplied RGBA over an opaque white background.
@@ -176,9 +193,17 @@ impl PageRaster for PdfRaster {
                 return Err(Error::LimitExceeded("max_render_pixels"));
             }
             dry_run(p, deadline)?;
+            // The renderer charges every decoded image and child pixmap (pattern tiles,
+            // stencil paints, soft masks) to this budget before allocating, ticks the deadline
+            // in every callback and tile copy, and caps callbacks.
+            let render_limits = Arc::new(RenderLimits::new(
+                Some(deadline),
+                render_byte_budget(limits),
+                MAX_CALLS_PER_PAGE,
+            ));
             let pixmap = catch_unwind(AssertUnwindSafe(|| {
                 let cache = RenderCache::new();
-                hayro::render(
+                hayro::render_limited(
                     p,
                     &cache,
                     &InterpreterSettings::default(),
@@ -188,10 +213,16 @@ impl PageRaster for PdfRaster {
                         y_scale: scale,
                         bg_color: WHITE,
                     },
+                    render_limits,
                 )
             }))
-            .map_err(|e| Error::Panic(format!("renderer: {}", panic_msg(&*e))))?;
-            if budget.take_limit_hit() {
+            .map_err(|e| match e.downcast_ref::<RenderAbort>() {
+                Some(RenderAbort::Deadline) => Error::Timeout,
+                Some(RenderAbort::Memory) => Error::LimitExceeded("render memory"),
+                Some(RenderAbort::Calls) => Error::LimitExceeded("draw operations per page"),
+                None => unwind_error(&*e, "renderer"),
+            })?;
+            if budget.limit_hit() {
                 return Err(Error::LimitExceeded("max_decompressed"));
             }
             Ok(Image {
@@ -231,7 +262,7 @@ impl PageRaster for PdfRaster {
                 (dev.images, dev.result)
             }))
             .map_err(|e| unwind_error(&*e, "scan"))?;
-            if budget.take_limit_hit() {
+            if budget.limit_hit() {
                 return Err(Error::LimitExceeded("max_decompressed"));
             }
             Ok(dev)
