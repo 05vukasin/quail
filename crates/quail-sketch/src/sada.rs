@@ -286,6 +286,35 @@ pub fn digest_int(value: &str) -> u64 {
     u64::from_be_bytes(digest(value))
 }
 
+/// [`digest_int`] of `words` joined by one space, without building the joined string.
+fn digest_words(words: &[&str]) -> u64 {
+    let mut st = blake2b_simd::Params::new()
+        .hash_length(8)
+        .personal(b"sada-fp-v1")
+        .to_state();
+    for (i, w) in words.iter().enumerate() {
+        if i > 0 {
+            st.update(b" ");
+        }
+        st.update(w.as_bytes());
+    }
+    let mut out = [0u8; 8];
+    out.copy_from_slice(st.finalize().as_bytes());
+    u64::from_be_bytes(out)
+}
+
+/// The distinct `k`-word windows of `words` (tokens hold no white space, so equal joined
+/// strings are equal windows) with their digests, in no particular order. Equal windows have
+/// equal digests, so sorting by digest first and the words second puts duplicates side by
+/// side; two different windows that share a digest both stay. (Digesting first and sorting
+/// integers beats sorting the windows: shingles rarely repeat.)
+fn distinct_digests<'a>(words: &'a [&'a str], k: usize) -> Vec<(u64, &'a [&'a str])> {
+    let mut v: Vec<(u64, &[&str])> = words.windows(k).map(|w| (digest_words(w), w)).collect();
+    v.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+    v.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    v
+}
+
 /// [`digest`] as 16 lowercase hex digits (`_hex_digest`).
 pub fn hex_digest(value: &str) -> String {
     format!("{:016x}", digest_int(value))
@@ -318,12 +347,17 @@ pub fn shingles(tokens: &[String]) -> Vec<String> {
 
 /// `minhash_of(features)`: all rows are `p` for an empty set.
 pub fn minhash_of(features: &[String]) -> [u64; PERMUTATIONS] {
-    if features.is_empty() {
+    let base: Vec<u64> = features.iter().map(|f| digest_int(f)).collect();
+    minhash_of_digests(&base)
+}
+
+/// [`minhash_of`] over the features' digests (duplicates do not matter).
+fn minhash_of_digests(base: &[u64]) -> [u64; PERMUTATIONS] {
+    if base.is_empty() {
         return [P; PERMUTATIONS];
     }
-    let base: Vec<u64> = features.iter().map(|f| digest_int(f)).collect();
     let mut mins = [u64::MAX; PERMUTATIONS];
-    for &x in &base {
+    for &x in base {
         for ((m, &a), &b) in mins.iter_mut().zip(&A).zip(&B) {
             let h = permute(a, b, x);
             if h < *m {
@@ -336,12 +370,19 @@ pub fn minhash_of(features: &[String]) -> [u64; PERMUTATIONS] {
 
 /// `raw_minhash_of(text)`: the version signature over unmasked shingles, with the number of
 /// shingles; `None` below [`MIN_SHINGLES`].
+///
+/// Same result as `minhash_of(&shingles(&tokens(text)))`, computed on borrowed tokens: each
+/// shingle is digested without being joined.
 pub fn raw_minhash(text: &str) -> Option<([u64; PERMUTATIONS], usize)> {
-    let features = shingles(&tokens(text));
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = WORD.find_iter(&lower).map(|m| m.as_str()).collect();
+    let k = if words.len() < 3 { 1 } else { 3 };
+    let features = distinct_digests(&words, k);
     if features.len() < MIN_SHINGLES {
         return None;
     }
-    Some((minhash_of(&features), features.len()))
+    let base: Vec<u64> = features.iter().map(|f| f.0).collect();
+    Some((minhash_of_digests(&base), features.len()))
 }
 
 /// `lsh_buckets(signature)`.
@@ -376,10 +417,12 @@ pub fn mask_entities(text: &str) -> Result<String, RegexLimit> {
 
 /// `template_fp(text)`: SimHash of the set of masked unigrams; 0 for no tokens.
 pub fn template_fp(text: &str) -> Result<u64, RegexLimit> {
-    let mut features = tokens(&mask_entities(text)?);
-    features.sort_unstable();
-    features.dedup();
-    Ok(simhash(features.iter().map(|f| (digest_int(f), 1))))
+    let lower = mask_entities(text)?.to_lowercase();
+    // Unigrams repeat a lot: dedup the borrowed tokens first, then digest each once.
+    let mut words: Vec<&str> = WORD.find_iter(&lower).map(|m| m.as_str()).collect();
+    words.sort_unstable();
+    words.dedup();
+    Ok(simhash(words.iter().map(|w| (digest_int(w), 1))))
 }
 
 /// `_normalize_heading`: numbering off, white space collapsed, stripped, lowercased.
@@ -401,6 +444,60 @@ pub fn structural_fp<'a>(headings: impl IntoIterator<Item = &'a str>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_paths_equal_the_string_paths() {
+        // The definitions, spelled out with owned shingles as the Python original does.
+        let reference_raw = |t: &str| {
+            let f = shingles(&tokens(t));
+            (f.len() >= MIN_SHINGLES).then(|| (minhash_of(&f), f.len()))
+        };
+        let reference_template = |t: &str| {
+            let mut f = tokens(&mask_entities(t).unwrap());
+            f.sort_unstable();
+            f.dedup();
+            simhash(f.iter().map(|x| (digest_int(x), 1)))
+        };
+        let words = [
+            "Ugovor",
+            "o",
+            "zakupu",
+            "the",
+            "agreement",
+            "<num>",
+            "Članak",
+            "1.200,50",
+            "plaća",
+            "ZAKUPAC",
+            "info@example.com",
+            "12.03.2024",
+            "rok",
+            "od",
+            "dana",
+        ];
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut texts = vec![String::new(), "a".into(), "a b".into(), "a b c".into()];
+        for n in [5usize, 60, 400, 3000] {
+            let mut t = String::new();
+            for i in 0..n {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                t.push_str(words[usize::try_from(x % 15).unwrap()]);
+                t.push_str(if i % 9 == 8 { ".\n" } else { " " });
+            }
+            texts.push(t);
+        }
+        for t in &texts {
+            assert_eq!(raw_minhash(t), reference_raw(t), "{} bytes", t.len());
+            assert_eq!(
+                template_fp(t).unwrap(),
+                reference_template(t),
+                "{} bytes",
+                t.len()
+            );
+        }
+    }
 
     #[test]
     fn python_word_class() {

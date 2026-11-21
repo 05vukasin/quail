@@ -3,7 +3,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use quail_sketch::{invoice, minhash, sada, simhash, template};
+use quail_sketch::{invoice, minhash, phash, sada, simhash, template};
 use quail_text::normalize::{NormalizeOptions, normalize};
 
 fn text(words: usize) -> String {
@@ -56,5 +56,54 @@ fn bench(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench);
+/// A gray (or RGB) scan-like page: noise plus dark text-like bars.
+fn page(w: usize, h: usize, channels: usize) -> Vec<u8> {
+    let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut d = Vec::with_capacity(w * h * channels);
+    for y in 0..h {
+        for i in 0..w * channels {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let ink = (y / 40) % 2 == 0 && (i / 90) % 3 != 0;
+            d.push(if ink { 20 } else { 230 } + (x % 16) as u8);
+        }
+    }
+    d
+}
+
+fn bench_phash(c: &mut Criterion) {
+    let mut g = c.benchmark_group("page_phash");
+    g.sample_size(20);
+    // A4 at 300 dpi (gray JBIG2/JPEG scan) and at 150 dpi in color.
+    for (name, w, h, ch) in [
+        ("gray A4 300dpi", 2480, 3508, 1u8),
+        ("rgb A4 150dpi", 1240, 1754, 3),
+    ] {
+        let data = page(w, h, usize::from(ch));
+        let (w32, h32) = (u32::try_from(w).unwrap(), u32::try_from(h).unwrap());
+        g.throughput(Throughput::Elements((w * h) as u64));
+        g.bench_function(name, |b| {
+            b.iter(|| phash::phash(w32, h32, ch, black_box(&data)));
+        });
+    }
+    // Worst case for the color path: every pixel a random color.
+    let (nw, nh) = (1240usize, 1754usize);
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    let noise: Vec<u8> = (0..nw * nh * 3)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x.to_le_bytes()[3]
+        })
+        .collect();
+    g.throughput(Throughput::Elements((nw * nh) as u64));
+    g.bench_function("rgb noise 150dpi", |b| {
+        b.iter(|| phash::phash(1240, 1754, 3, black_box(&noise)));
+    });
+    g.finish();
+}
+
+criterion_group!(benches, bench, bench_phash);
 criterion_main!(benches);
