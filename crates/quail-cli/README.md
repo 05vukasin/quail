@@ -138,8 +138,8 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 |---|---|---|
 | (always) | quail-engine, quail-hash | `engine.sniff@1`, `hash.identity@1` |
 | `docx` (default) | quail-docx | `docx.extract@1` |
-| `pdf` (default) | quail-pdf | `pdf.extract@1` (provides the `raster` artifact) |
-| `text` (default) | quail-text | `text.stats@1`, `text.lang@1` |
+| `pdf` (default) | quail-pdf | `pdf.extract@2` (provides the `raster` artifact) |
+| `text` (default) | quail-text | `text.stats@3`, `text.lang@2` |
 | `signals` (default) | quail-signals | `signal.scan@1` |
 | `refs` (default) | quail-refs | `ref.references@1` |
 | `parties` (default) | quail-parties | `party.candidates@1` |

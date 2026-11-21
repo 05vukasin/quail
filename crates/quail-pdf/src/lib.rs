@@ -1,6 +1,6 @@
 //! PDF extractor for quail.
 //!
-//! [`PdfExtractor`] (`pdf.extract@1`) turns a PDF into a [`Document`](quail_core::Document):
+//! [`PdfExtractor`] (`pdf.extract@2`) turns a PDF into a [`Document`](quail_core::Document):
 //! one physical [`Page`](quail_core::Page) per page with its size, its text in reading order
 //! and paragraph [`Block`](quail_core::Block)s carrying boxes (points, top-left origin) and
 //! zones (header/footer by geometry and repetition, body otherwise), and the images it draws.
@@ -86,4 +86,11 @@ pub mod keys {
     pub const IMAGE_ONLY_PAGES: FactKey = FactKey::new("pdf.image_only_pages");
     /// Extracted pages flagged `needs_ocr`. Int.
     pub const PAGES_NEEDING_OCR: FactKey = FactKey::new("pdf.pages_needing_ocr");
+    /// Extracted pages that are scans needing OCR: image-only, or mostly an image whose text
+    /// layer is too thin or garbage (a bad OCR layer, e.g. Cyrillic read as Latin). A scan
+    /// with a usable OCR layer is not counted. Int.
+    pub const SCANNED_PAGES: FactKey = FactKey::new("pdf.scanned_pages");
+    /// More than half of the extracted pages are [`SCANNED_PAGES`]: the document is a scan
+    /// that needs OCR. Emitted for every PDF with an extracted page. Bool.
+    pub const IS_SCANNED: FactKey = FactKey::new("pdf.is_scanned");
 }
