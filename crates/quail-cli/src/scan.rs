@@ -27,6 +27,10 @@ const BROKEN_PIPE_GRACE: Duration = Duration::from_secs(2);
 
 /// Runs the command.
 pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
+    // The handler goes in before anything slow (engine construction loads language models):
+    // a Ctrl-C during startup must cancel cleanly instead of killing the process.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let interrupted = install_ctrlc(&cancel);
     let limits = args.limits.limits();
     // Oversized files are refused by the source, before they are read.
     let read = ReadOptions::new().max_file_bytes(Some(limits.max_bytes));
@@ -40,7 +44,6 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     let mut mode = mode(args, limits, read)?;
 
     let sink = sink(args)?;
-    let cancel = Arc::new(AtomicBool::new(false));
     let broken_pipe = Arc::new(AtomicBool::new(false));
     let live = Arc::new(Live::default());
     let mut sink = CountingSink::new(
@@ -49,7 +52,6 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
         Arc::clone(&broken_pipe),
         Arc::clone(&cancel),
     );
-    let interrupted = install_ctrlc(&cancel);
 
     let mut opts = RunOptions::default();
     if let Some(t) = args.threads {
