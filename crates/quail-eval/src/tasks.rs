@@ -2,11 +2,16 @@
 //!
 //! ```toml
 //! [task.party]
-//! keys = ["signal.party", "signal.company"]
+//! keys = ["party.company"]
+//! field = "surface"
 //! normalize = "company"
 //! multi = true
 //! min_conf = 0.3
 //! description = "Contracting parties"
+//!
+//! [task.term]
+//! keys = ["clause.term"]
+//! pending = "no producer yet"
 //! ```
 //!
 //! The committed default is `tasks.toml` in this crate ([`TaskMap::builtin`]).
@@ -35,6 +40,15 @@ pub struct TaskSpec {
     /// Predictions below this confidence are treated as abstentions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_conf: Option<f32>,
+    /// For record values (`Value::Record`, also inside lists): the field whose value is the
+    /// prediction (`surface` of `party.company`, `raw` of `ref.doc_number`). Records without
+    /// the field give no prediction; non-record values are used as they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Why the task has no producer yet (`"quail-pdf #7"`); the keys are the planned names.
+    /// Pending tasks are still scored (as abstentions) and flagged in the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<String>,
     /// What the task is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -64,6 +78,9 @@ impl TaskMap {
         for (name, spec) in &f.task {
             if spec.keys.is_empty() {
                 return Err(Error::parse(origin, format!("task {name}: keys is empty")));
+            }
+            if spec.field.as_deref() == Some("") {
+                return Err(Error::parse(origin, format!("task {name}: field is empty")));
             }
             if let Some(c) = spec.min_conf
                 && !(0.0..=1.0).contains(&c)
@@ -113,6 +130,23 @@ mod tests {
         }
         assert!(m.get("party").unwrap().multi);
         assert_eq!(m.get("party").unwrap().normalize, Normalizer::Company);
+        assert_eq!(m.get("party").unwrap().field.as_deref(), Some("surface"));
+        assert!(m.get("party").unwrap().pending.is_none());
+        assert!(m.get("term").unwrap().pending.is_some());
+    }
+
+    #[test]
+    fn reads_field_and_pending() {
+        let p = Path::new("t.toml");
+        let m = TaskMap::from_toml(
+            "[task.a]\nkeys = [\"x.y\"]\nfield = \"raw\"\npending = \"later\"\n",
+            p,
+        )
+        .unwrap();
+        let a = m.get("a").unwrap();
+        assert_eq!(a.field.as_deref(), Some("raw"));
+        assert_eq!(a.pending.as_deref(), Some("later"));
+        assert!(TaskMap::from_toml("[task.a]\nkeys = [\"x.y\"]\nfield = \"\"\n", p).is_err());
     }
 
     #[test]

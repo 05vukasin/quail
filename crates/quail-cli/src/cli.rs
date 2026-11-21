@@ -58,6 +58,10 @@ pub struct LimitArgs {
     /// they get a `failed` record naming the limit.
     #[arg(long, value_name = "SIZE", value_parser = parse_size)]
     pub max_bytes: Option<u64>,
+    /// Bytes a document may inflate to while it is decoded (ZIP entries, PDF streams; e.g.
+    /// `512M`; default 256M). Past it the extractor stops with a partial document.
+    #[arg(long, value_name = "SIZE", value_parser = parse_size)]
+    pub max_decompressed: Option<u64>,
     /// Pages extracted per document (default 2000).
     #[arg(long, value_name = "N")]
     pub max_pages: Option<u32>,
@@ -72,6 +76,9 @@ impl LimitArgs {
         let mut l = Limits::default();
         if let Some(b) = self.max_bytes {
             l.max_bytes = b;
+        }
+        if let Some(d) = self.max_decompressed {
+            l.max_decompressed = d;
         }
         if let Some(p) = self.max_pages {
             l.max_pages = p;
@@ -246,6 +253,23 @@ mod tests {
         assert_eq!(parse_duration("500ms"), Ok(Duration::from_millis(500)));
         assert_eq!(parse_duration("2m"), Ok(Duration::from_mins(2)));
         assert!(parse_duration("2d").is_err());
+    }
+
+    #[test]
+    fn limit_overrides() {
+        let a = LimitArgs {
+            max_decompressed: Some(1 << 30),
+            max_pages: Some(5),
+            ..LimitArgs::default()
+        };
+        let l = a.limits();
+        assert_eq!(l.max_decompressed, 1 << 30);
+        assert_eq!(l.max_pages, 5);
+        assert_eq!(l.max_bytes, Limits::default().max_bytes);
+        assert_eq!(
+            LimitArgs::default().limits().max_decompressed,
+            Limits::default().max_decompressed
+        );
     }
 
     #[test]

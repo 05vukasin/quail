@@ -39,7 +39,7 @@ quail scan /data | head -3
 | `--max-in-flight N`, `--max-in-flight-bytes SIZE` | memory bound between source and sink (default 2 × threads, 1G) |
 | `--ordered` | records in source order |
 | `--include GLOB`, `--exclude GLOB`, `--ext a,b`, `--skip-hidden`, `--sorted`, `--follow-symlinks` | walk filters (`quail-io`'s `FsSource`) |
-| `--max-bytes SIZE`, `--max-pages N`, `--timeout DUR` | per-file `Limits` overrides |
+| `--max-bytes SIZE`, `--max-decompressed SIZE`, `--max-pages N`, `--timeout DUR` | per-file `Limits` overrides |
 | `-q, --quiet` / `--json-stats` | no stderr output / final stats as one JSON object |
 
 Behaviour:
@@ -74,7 +74,9 @@ quail inspect scan.pdf --json --text  # {"record": .., "document": ..}
 
 Facts are grouped by namespace and show value, `conf` (when below 1), `src` and evidence
 (`p3 header [10..42] box(72,40,300,58)`). Long text is cut at 160 characters, lists at 8
-items. Exit code 1 for a `failed` record.
+items. Records print as `{field=value ...}` (`party.company`, `ref.doc_number`, `ref.cites`);
+a list of records (`party.candidates`) prints one record per line under its key. Floats show
+at most four decimals. Exit code 1 for a `failed` record.
 
 ## keys
 
@@ -107,7 +109,11 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | (always) | quail-engine, quail-hash | `engine.sniff@1`, `hash.identity@1` |
 | `docx` (default) | quail-docx | `docx.extract@1` |
 | `pdf` | quail-pdf | `pdf.extract@1` — to wire in when #7 merges |
-| `text` | quail-text | `text.stats@1`, `text.lang@1` — to wire in when #6 merges |
+| `text` (default) | quail-text | `text.stats@1`, `text.lang@1` |
+| `signals` (default) | quail-signals | `signal.scan@1` |
+| `refs` (default) | quail-refs | `ref.references@1` |
+| `parties` (default) | quail-parties | `party.candidates@1` |
+| `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); `sketch.page_phash@1` not wired: needs the `raster` artifact, which the engine cannot see an extractor provide yet |
 | `zstd` | (quail-io) | `--zstd` output |
 
 Key docs (`src/keydocs.rs`) are generated from each crate's `keys` module by

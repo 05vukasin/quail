@@ -117,12 +117,20 @@ pub fn render_record(rec: &FileRecord) -> String {
             .max()
             .unwrap_or(0);
         for f in facts {
-            let _ = write!(
-                s,
-                "  {:width$}  {}",
-                f.key.as_str(),
-                fmt_value(&f.value, MAX_TEXT)
-            );
+            // A list of records (ranked candidates) gets one line per item below the fact.
+            let items = match &f.value {
+                Value::List(items)
+                    if !items.is_empty() && items.iter().all(|x| matches!(x, Value::Record(_))) =>
+                {
+                    Some(items)
+                }
+                _ => None,
+            };
+            let shown = match items {
+                Some(items) => format!("{} record(s)", items.len()),
+                None => fmt_value(&f.value, MAX_TEXT),
+            };
+            let _ = write!(s, "  {:width$}  {shown}", f.key.as_str());
             if f.conf < 1.0 {
                 let _ = write!(s, "  conf {:.2}", f.conf);
             }
@@ -131,6 +139,9 @@ pub fn render_record(rec: &FileRecord) -> String {
                 let _ = write!(s, "  at {}", fmt_evidence(e));
             }
             s.push('\n');
+            for item in items.into_iter().flatten() {
+                let _ = writeln!(s, "  {:width$}    - {}", "", fmt_value(item, MAX_TEXT));
+            }
         }
     }
     s
@@ -231,7 +242,7 @@ pub fn fmt_value(v: &Value, max: usize) -> String {
     match v {
         Value::Bool(b) => b.to_string(),
         Value::Int(i) => i.to_string(),
-        Value::Float(x) => format!("{x}"),
+        Value::Float(x) => fmt_float(*x),
         Value::Text(t) => {
             let one_line: String = t
                 .chars()
@@ -278,11 +289,25 @@ pub fn fmt_value(v: &Value, max: usize) -> String {
         Value::Record(fields) => {
             let shown: Vec<String> = fields
                 .iter()
-                .map(|(k, x)| format!("{k}: {}", fmt_value(x, 40)))
+                .map(|(k, x)| format!("{k}={}", fmt_value(x, 40)))
                 .collect();
-            format!("{{{}}}", shown.join(", "))
+            format!("{{{}}}", shown.join(" "))
         }
     }
+}
+
+/// A float for reading: four decimals at most (trailing zeros dropped), scientific below
+/// 0.001. Scores and confidences are `f32` widened to `f64`; their full digits are noise.
+fn fmt_float(x: f64) -> String {
+    if x == 0.0 || !x.is_finite() || (x.fract() == 0.0 && x.abs() < 1e15) {
+        return format!("{x}");
+    }
+    if x.abs() < 1e-3 {
+        return format!("{x:.1e}");
+    }
+    let s = format!("{x:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.to_string()
 }
 
 fn decimal(units: i64, scale: u8) -> String {
@@ -340,5 +365,17 @@ mod tests {
         assert_eq!(decimal(420_050, 2), "4200.50");
         let l = Value::List((0..10).map(Value::Int).collect());
         assert_eq!(fmt_value(&l, 10), "[0, 1, 2, 3, 4, 5, 6, 7, … (10 items)]");
+        assert_eq!(fmt_value(&Value::Float(f64::from(0.8_f32)), 10), "0.8");
+        assert_eq!(fmt_value(&Value::Float(1.4e-11), 10), "1.4e-11");
+        assert_eq!(fmt_value(&Value::Float(2.0), 10), "2");
+        let r = Value::record([
+            ("surface", Value::text("Alpha LLC")),
+            ("roles", Value::List(vec![Value::text("supplier")])),
+            ("score", Value::Float(f64::from(0.97_f32))),
+        ]);
+        assert_eq!(
+            fmt_value(&r, 40),
+            "{surface=\"Alpha LLC\" roles=[\"supplier\"] score=0.97}"
+        );
     }
 }

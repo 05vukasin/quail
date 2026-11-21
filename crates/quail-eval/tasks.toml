@@ -1,55 +1,72 @@
 # Gold task -> quail fact keys. Gold files name tasks, never fact keys, so renaming a key means
-# editing this file only. Keys of crates that have not landed yet are the planned names; fix
-# them here when the emitting crate merges.
+# editing this file only. Every key below is emitted on master unless the task is `pending`
+# (then the keys are the planned names; fix them when the producer merges).
 #
 # normalize: none | text | company | date | identifier | number | bool | language
 # multi:     true = set of values (every value scored), false = only the most confident one
 # min_conf:  predictions below it count as abstentions
+# field:     for record values, the field that is the prediction
+# pending:   why there is no producer yet (scored as abstentions, flagged in the report)
 
 [task.doc_type]
 description = "Kind of document (contract, invoice, annex, letter, ...)"
-keys = ["classify.doc_type"]
+# quail-refs: msa contract nda sow amendment amended_restated annex change_order side_letter
+# po order invoice quote (and unknown).
+keys = ["ref.instrument_kind"]
 normalize = "text"
 
 [task.doc_title]
 description = "Title of the document as written"
-keys = ["signal.title", "docx.title", "pdf.title"]
+# ref.title from the text first (conf < 1); the file properties (conf 1) are pooled too,
+# so a title property wins when it is set.
+keys = ["ref.title", "docx.title", "pdf.title"]
 normalize = "text"
 
 [task.party]
 description = "Contracting parties / companies named as parties"
-keys = ["signal.party", "docx.clm_first_party", "docx.clm_second_party"]
+# One record per mention; deduplicated after normalization, most confident first. The DOCX
+# CLM properties (plain text) are pooled too. `party.candidates` (top 10) scored F1 within
+# 2 points of this on Kleister/CUAD with a much worse ECE.
+keys = ["party.company", "docx.clm_first_party", "docx.clm_second_party"]
+field = "surface"
 normalize = "company"
 multi = true
 
 [task.effective_date]
 description = "Date the agreement takes effect"
-keys = ["signal.effective_date"]
+# Without a stated effective date the agreement date is the effective date (Kleister-NDA:
+# +5 F1; CUAD: -0.5).
+keys = ["signal.date_effective", "signal.date_signed"]
 normalize = "date"
 
 [task.agreement_date]
 description = "Date the agreement was signed or dated"
-keys = ["signal.agreement_date", "signal.document_date"]
+# "made and entered into as of <date>" is tagged effective by quail-signals; CUAD's
+# Agreement Date is that date (F1 24.8 -> 76.2 with it pooled).
+keys = ["signal.date_signed", "signal.date_effective"]
 normalize = "date"
 
 [task.expiration_date]
 description = "Date the agreement ends"
-keys = ["signal.expiration_date"]
+keys = ["signal.date_expiry"]
 normalize = "date"
 
 [task.jurisdiction]
 description = "Governing law / jurisdiction"
-keys = ["signal.jurisdiction"]
+keys = ["clause.governing_law"]
 normalize = "text"
+pending = "no governing-law producer yet"
 
 [task.term]
 description = "Duration of the agreement, as written (e.g. 2 years)"
-keys = ["signal.term"]
+keys = ["clause.term"]
 normalize = "text"
+pending = "no term producer yet"
 
 [task.contract_number]
 description = "Contract / reference number"
-keys = ["signal.contract_number"]
+keys = ["ref.doc_number"]
+field = "raw"
 normalize = "identifier"
 multi = true
 
@@ -71,11 +88,13 @@ normalize = "language"
 
 [task.is_scanned]
 description = "The document is a scan (needs OCR)"
-keys = ["pdf.is_scanned", "ocr.is_scanned"]
+keys = ["ocr.is_scanned"]
 normalize = "bool"
+pending = "quail-pdf #7 reports pdf.pages_needing_ocr (Int), not a verdict; no OCR crate yet"
 
 [task.near_duplicate_of]
 description = "BLAKE3 of files that are near-duplicates of this one"
 keys = ["sketch.near_duplicate_of"]
 normalize = "identifier"
 multi = true
+pending = "cross-file: quail-sketch emits per-file sketch.minhash / sketch.minhash_bands; matching them across files is the service's job"

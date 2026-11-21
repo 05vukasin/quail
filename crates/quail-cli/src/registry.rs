@@ -81,6 +81,81 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "Document language with top candidates (lingua + sr/hr/bs layer).",
     },
+    #[cfg(feature = "signals")]
+    StepDoc {
+        id: quail_signals::SignalScan::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Identifiers with check digits, dates with roles, amounts, contact domains.",
+    },
+    #[cfg(feature = "refs")]
+    StepDoc {
+        id: quail_refs::RefAnalyzer::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Own document numbers, cited documents, title, instrument kind, page/version markers.",
+    },
+    #[cfg(feature = "parties")]
+    StepDoc {
+        id: quail_parties::PartyCandidates::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Company mentions with roles and defined terms, ranked candidates, name statements.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::MinHashAnalyzer::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "MinHash of word 3-shingles with 32 LSH band keys.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::SimHashText::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "64-bit SimHash of weighted word 3-shingles.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::SimHashTemplate::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "64-bit SimHash of entity-masked words (same template, other values).",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::LayoutAnalyzer::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Page-geometry and block-structure SimHashes, heading skeleton digest.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::InvoiceLayout::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Invoice labels and number-pattern digest.",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::TextKey::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "128-bit key of the folded words (same words whatever the bytes).",
+    },
+    #[cfg(feature = "sketch")]
+    StepDoc {
+        id: quail_sketch::SadaMinHash::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Byte-compatible port of the reference service's MinHash and template sketches.",
+    },
+    // TODO(engine): `sketch.page_phash@1` requires the `raster` artifact. The PDF extractor
+    // (quail-pdf #7) inserts it at run time, but `EngineBuilder::build` only accepts
+    // `BUILTIN_ARTIFACTS` (`document`) or an analyzer's `provides()`, so the build fails with
+    // `Unsatisfied { artifact: "raster" }` even with quail-pdf. Register it (StepDoc + builder,
+    // `all(sketch, pdf)`) once extractors can declare the artifacts they provide.
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
@@ -100,6 +175,23 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     let b = b
         .analyzer(Box::new(quail_text::TextStats))
         .analyzer(Box::new(quail_text::TextLang::new()));
+    #[cfg(feature = "signals")]
+    let b = b.analyzer(Box::new(quail_signals::SignalScan));
+    // Compiles its patterns once; shared by every worker.
+    #[cfg(feature = "refs")]
+    let b = b.analyzer(Box::new(quail_refs::RefAnalyzer::new()));
+    #[cfg(feature = "parties")]
+    let b = b.analyzer(Box::new(quail_parties::PartyCandidates));
+    // `sketch.minhash_sada@1` is Standard: the engine leaves it out under `Profile::Fast`.
+    #[cfg(feature = "sketch")]
+    let b = b
+        .analyzer(Box::new(quail_sketch::MinHashAnalyzer))
+        .analyzer(Box::new(quail_sketch::SimHashText))
+        .analyzer(Box::new(quail_sketch::SimHashTemplate))
+        .analyzer(Box::new(quail_sketch::LayoutAnalyzer))
+        .analyzer(Box::new(quail_sketch::InvoiceLayout))
+        .analyzer(Box::new(quail_sketch::TextKey))
+        .analyzer(Box::new(quail_sketch::SadaMinHash));
     b
 }
 
@@ -115,6 +207,14 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     // TODO(quail-pdf #7): v.push(("quail-pdf", keydocs::PDF));
     #[cfg(feature = "text")]
     v.push(("quail-text", keydocs::TEXT));
+    #[cfg(feature = "signals")]
+    v.push(("quail-signals", keydocs::SIGNALS));
+    #[cfg(feature = "refs")]
+    v.push(("quail-refs", keydocs::REFS));
+    #[cfg(feature = "parties")]
+    v.push(("quail-parties", keydocs::PARTIES));
+    #[cfg(feature = "sketch")]
+    v.push(("quail-sketch", keydocs::SKETCH));
     v
 }
 
@@ -145,6 +245,55 @@ mod tests {
         }
     }
 
+    /// The Standard sketch runs under the default profile and is inactive under Fast.
+    #[test]
+    #[cfg(feature = "sketch")]
+    fn standard_sketches_follow_the_profile() {
+        let standard = [quail_sketch::SadaMinHash::ID];
+        let fast = builder(Profile::Fast, Limits::default()).build().unwrap();
+        let std_ = builder(Profile::Standard, Limits::default())
+            .build()
+            .unwrap();
+        for id in standard {
+            assert!(fast.inactive().contains(&id), "{id} active under fast");
+            assert!(!fast.plan().any(|x| x == id));
+            assert!(
+                std_.plan().any(|x| x == id),
+                "{id} not planned under standard"
+            );
+        }
+        assert!(fast.plan().any(|x| x == quail_sketch::MinHashAnalyzer::ID));
+    }
+
+    /// Every key the evaluation task map reads exists in this build, unless the task is
+    /// pending or the key's namespace belongs to a crate this build does not have (`pdf.*`
+    /// before quail-pdf is wired). Catches a task pointing at a misspelled or renamed key.
+    #[test]
+    fn eval_tasks_read_real_keys() {
+        let tables = key_tables();
+        let known: BTreeSet<&str> = tables
+            .iter()
+            .flat_map(|(_, t)| t.iter().map(|k| k.key.as_str()))
+            .collect();
+        let namespaces: BTreeSet<&str> = tables
+            .iter()
+            .flat_map(|(_, t)| t.iter().map(|k| k.key.namespace()))
+            .collect();
+        let map = quail_eval::tasks::TaskMap::builtin();
+        assert!(!map.tasks.is_empty());
+        for (name, spec) in &map.tasks {
+            if spec.pending.is_some() {
+                continue;
+            }
+            for key in &spec.keys {
+                let ns = key.split('.').next().unwrap_or("");
+                if namespaces.contains(ns) {
+                    assert!(known.contains(key.as_str()), "task {name}: no key {key}");
+                }
+            }
+        }
+    }
+
     /// Every `FactKey::new("...")` in a crate's sources appears in its table: the tables
     /// are generated, this catches a key added without regenerating.
     #[test]
@@ -157,6 +306,14 @@ mod tests {
             ("quail-docx", "quail-docx/src/keys.rs"),
             #[cfg(feature = "text")]
             ("quail-text", "quail-text/src/lib.rs"),
+            #[cfg(feature = "signals")]
+            ("quail-signals", "quail-signals/src/lib.rs"),
+            #[cfg(feature = "refs")]
+            ("quail-refs", "quail-refs/src/lib.rs"),
+            #[cfg(feature = "parties")]
+            ("quail-parties", "quail-parties/src/lib.rs"),
+            #[cfg(feature = "sketch")]
+            ("quail-sketch", "quail-sketch/src/lib.rs"),
         ];
         let tables = key_tables();
         for (krate, file) in sources {

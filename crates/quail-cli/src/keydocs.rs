@@ -327,3 +327,251 @@ pub const TEXT: &[KeyDoc] = &[
         doc: "Language of one page, with the page as evidence; `conf` is its score (Text).",
     },
 ];
+
+/// Keys of `quail_signals::keys`.
+#[cfg(feature = "signals")]
+pub const SIGNALS: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_signals::keys::IBAN,
+        doc: "IBAN, compact and uppercase (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::BIC,
+        doc: "BIC / SWIFT code (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::VAT,
+        doc: "EU / UK VAT number with its country prefix, compact (`DE136695976`, `ATU04571784`) (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::RS_PIB,
+        doc: "Serbian tax number PIB, 9 digits (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::RS_MB,
+        doc: "Serbian registration number (matični broj) of a company, 8 digits (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::RS_ACCOUNT,
+        doc: "Serbian bank account `BBB-NNNNNNNNNNNNN-KK`, middle part zero-padded (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::HR_OIB,
+        doc: "Croatian OIB, 11 digits (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::LEI,
+        doc: "LEI, 20 characters (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::DUNS,
+        doc: "DUNS number, 9 digits (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::US_EIN,
+        doc: "US EIN `12-3456789` (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::JMBG_COUNT,
+        doc: "Number of valid JMBGs (personal IDs) in the file; the values are never emitted (Int).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::DATE,
+        doc: "A calendar date (Date).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::DATE_EFFECTIVE,
+        doc: "A date a keyword marks as the start / effective date (Date).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::DATE_EXPIRY,
+        doc: "A date a keyword marks as the end / expiry date (Date).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::DATE_SIGNED,
+        doc: "A date a keyword marks as the signing date (Date).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::DATE_INVOICE,
+        doc: "A date a keyword marks as the invoice / issue date (Date).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::DATE_DUE,
+        doc: "A date a keyword marks as the payment due date (Date).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::AMOUNT,
+        doc: "An amount with its currency, exact decimal (Money).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::AMOUNT_TOTAL,
+        doc: "An amount after a total keyword (`Ukupno`, `Total`, `Za uplatu`) (Money).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::AMOUNT_NET,
+        doc: "An amount marked as without VAT (`bez PDV-a`, `excl. VAT`) (Money).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::AMOUNT_GROSS,
+        doc: "An amount marked as with VAT (`sa PDV-om`, `incl. VAT`) (Money).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::EMAIL_DOMAIN,
+        doc: "Domain of an e-mail address, free-mail hosts excluded (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::WEB_DOMAIN,
+        doc: "Domain of a URL or web address (Text).",
+    },
+    KeyDoc {
+        key: quail_signals::keys::PHONE,
+        doc: "Phone number in E.164 (`+381111234567`) (Text).",
+    },
+];
+
+/// Keys of `quail_refs::keys`.
+#[cfg(feature = "refs")]
+pub const REFS: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_refs::keys::DOC_NUMBER,
+        doc: "An own number of this document (record: `kind`, `raw`, `key`, `base`, `date`).",
+    },
+    KeyDoc {
+        key: quail_refs::keys::CITES,
+        doc: "A document this one cites (record: `kind`, `relation`, `raw`, `key`, `base`, `ordinal`, `date`).",
+    },
+    KeyDoc {
+        key: quail_refs::keys::TITLE,
+        doc: "The document title (Text).",
+    },
+    KeyDoc {
+        key: quail_refs::keys::INSTRUMENT_KIND,
+        doc: "The instrument kind the title (or the first own label) names (Text, see `crate::Kind`).",
+    },
+    KeyDoc {
+        key: quail_refs::keys::ORDINAL,
+        doc: "The ordinal of the instrument: Amendment No. 3 → 3 (Int).",
+    },
+    KeyDoc {
+        key: quail_refs::keys::PAGE_MARKER,
+        doc: "A page-of-page marker, one per page at most (record: `n`, `of`).",
+    },
+    KeyDoc {
+        key: quail_refs::keys::VERSION_HINT,
+        doc: "A version marker (record: `kind`, `n`).",
+    },
+    KeyDoc {
+        key: quail_refs::keys::STUDY_CODE,
+        doc: "A clinical study code (`D\\d{3}[0-9A-Z]C\\d{5}`), upper-cased (Text).",
+    },
+    KeyDoc {
+        key: quail_refs::keys::CLM_RECORD,
+        doc: "A CLM record id, `con_<digits>` (Text).",
+    },
+];
+
+/// Keys of `quail_parties::keys`.
+#[cfg(feature = "parties")]
+pub const PARTIES: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_parties::keys::COMPANY,
+        doc: "A company mention (Record: `surface`, `key`, `norm`, `quality`, `legal_form`?, `jurisdiction`?, `jurisdiction_conf`?, `roles`, `role_conf`, `defined_term`?).",
+    },
+    KeyDoc {
+        key: quail_parties::keys::ALIAS_OF,
+        doc: "A name statement (Record: `current`, `other`, `kind` = `former_name`, `trading_name` or `dba`).",
+    },
+    KeyDoc {
+        key: quail_parties::keys::CANDIDATES,
+        doc: "Ranked candidates (List of Record: `key`, `surface`, `score`, `roles`).",
+    },
+    KeyDoc {
+        key: quail_parties::keys::SIGNATORY_TITLE,
+        doc: "A title a signatory signs under (Text), no person name.",
+    },
+    KeyDoc {
+        key: quail_parties::keys::SIGNATORY_COUNT,
+        doc: "Lines of signature blocks naming a signatory by title or label (Int).",
+    },
+];
+
+/// Keys of `quail_sketch::keys`.
+#[cfg(feature = "sketch")]
+pub const SKETCH: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_sketch::keys::MINHASH,
+        doc: "MinHash signature of the word 3-shingles of the normalized, folded text (`Value::Bytes`, 128 rows × 4 bytes little-endian; see `crate::minhash`). Compare with `crate::jaccard_estimate`. Absent below `crate::minhash::MIN_SHINGLES` distinct shingles.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::MINHASH_BANDS,
+        doc: "LSH band keys of `MINHASH` (`Value::List` of 32 `Value::U64`, band index mixed in, so all bands can share one index). Two files sharing any key are candidates.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::MINHASH_SHINGLES,
+        doc: "Distinct word 3-shingles behind `MINHASH` (`Value::Int`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SIMHASH_TEXT,
+        doc: "64-bit SimHash of the weighted word 3-shingles (`Value::U64`). Compare with `crate::hamming`.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SIMHASH_TEMPLATE,
+        doc: "64-bit SimHash of the entity-masked words: numbers, dates, amounts, codes, names, URLs and e-mail addresses replaced by their class (`Value::U64`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::LAYOUT,
+        doc: "64-bit SimHash of the page geometry: quantized block boxes, kinds and zones of the first pages (`Value::U64`). Only for documents with block boxes (PDF).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::LAYOUT_BLOCKS,
+        doc: "Blocks with a box that went into `LAYOUT` (`Value::Int`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::STRUCTURE,
+        doc: "64-bit SimHash of the block-kind sequence: headings and levels, lists, tables and their shape, paragraph runs (`Value::U64`). Any format with blocks.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::HEADINGS,
+        doc: "Digest of the heading skeleton (heading texts, numbering stripped, lowercased), the `structural_fp` of `crate::sada` as a big-endian integer (`Value::U64`). Compare for equality. Absent with fewer than two headings.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::INVOICE_LAYOUT,
+        doc: "Invoice layout digest: which of 16 invoice labels occur, plus the shapes of invoice-number-like codes (`Value::U64`, see `crate::invoice`). Compare for equality.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::INVOICE_LABELS,
+        doc: "Invoice labels found (`Value::Int`, 1..=16).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::INVOICE_NUMBER_PATTERNS,
+        doc: "Distinct invoice-number shapes found (`Value::Int`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::TEXT_KEY,
+        doc: "XXH3-128 of the folded words joined by one space (`Value::Bytes`, 16 bytes): the same words, whatever the bytes, spacing, case, diacritics or script. Absent below 400 characters.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SADA_MINHASH,
+        doc: "Python-compatible version signature (`Value::Bytes`, 128 rows × 8 bytes little-endian), see `crate::sada`.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SADA_MINHASH_BANDS,
+        doc: "Python-compatible LSH bucket keys of `SADA_MINHASH` (`Value::List` of 32 `Value::Text`, `\"<band>:<16 hex>\"`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SADA_SHINGLES,
+        doc: "Distinct shingles behind `SADA_MINHASH` (`Value::Int`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::SADA_TEMPLATE,
+        doc: "Python-compatible template SimHash of the entity-masked words (`Value::U64`).",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::PAGE_PHASH,
+        doc: "64-bit DCT pHash per scanned page (`Value::List` of `Value::U64`), aligned with `PAGE_PHASH_PAGES`.",
+    },
+    KeyDoc {
+        key: quail_sketch::keys::PAGE_PHASH_PAGES,
+        doc: "Zero-based page indices of `PAGE_PHASH` (`Value::List` of `Value::Int`).",
+    },
+];

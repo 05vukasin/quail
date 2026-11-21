@@ -15,7 +15,7 @@
 //! four keys, so a key missing from a line is recorded as `absent`. Splits without
 //! `expected.tsv` (test-A) are skipped.
 //!
-//! Status: tested on generated samples only; not yet run on the real dataset.
+//! Status: run on the real dataset (337 annotated documents of train and dev-0).
 
 use std::path::Path;
 

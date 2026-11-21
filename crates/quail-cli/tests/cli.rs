@@ -555,6 +555,26 @@ fn keys_and_version() {
     if cfg!(feature = "text") {
         expected.extend(["text.stats@1", "text.lang@1"]);
     }
+    if cfg!(feature = "signals") {
+        expected.push("signal.scan@1");
+    }
+    if cfg!(feature = "refs") {
+        expected.push("ref.references@1");
+    }
+    if cfg!(feature = "parties") {
+        expected.push("party.candidates@1");
+    }
+    if cfg!(feature = "sketch") {
+        expected.extend([
+            "sketch.minhash@1",
+            "sketch.simhash_text@1",
+            "sketch.simhash_template@1",
+            "sketch.layout@1",
+            "sketch.invoice_layout@1",
+            "sketch.text_key@1",
+            "sketch.minhash_sada@1",
+        ]);
+    }
     assert_eq!(ids, expected);
     // Deterministic.
     let again: Json = serde_json::from_slice(&run(&["version", "--json"]).stdout).unwrap();
@@ -603,4 +623,68 @@ fn docx_gets_text_facts() {
     }
     let lang = recs[0].facts_for("text.lang").next().unwrap();
     assert_eq!(lang.value, quail_core::Value::text("en"));
+}
+
+/// With the signals, refs and parties features, a contract-like DOCX gets their facts, and
+/// `inspect` prints record values field by field.
+#[test]
+#[cfg(all(
+    feature = "docx",
+    feature = "signals",
+    feature = "refs",
+    feature = "parties"
+))]
+fn docx_gets_signal_ref_and_party_facts() {
+    let t = tempfile::tempdir().unwrap();
+    let body = "This Agreement No. 114/23 is made between Alpha Widgets LLC (the \"Supplier\") \
+                and Beta Components GmbH (the \"Customer\"). Effective Date: March 1, 2021. \
+                Payments go to IBAN DE89 3704 0044 0532 0130 00. Total: EUR 4,200.50.";
+    let a = write(t.path(), "a.docx", &docx("Supply Agreement", body));
+    let out = t.path().join("out.jsonl");
+    let o = run(&[
+        "scan",
+        a.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--quiet",
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let recs = records(&fs::read_to_string(&out).unwrap());
+    let r = &recs[0];
+    let keys: Vec<&str> = r.facts.iter().map(|f| f.key.as_str()).collect();
+    for k in [
+        "signal.iban",
+        "signal.date_effective",
+        "ref.instrument_kind",
+        "party.company",
+    ] {
+        assert!(keys.contains(&k), "{k} missing in {keys:?}");
+    }
+    let iban = r.facts_for("signal.iban").next().unwrap();
+    assert_eq!(
+        iban.value,
+        quail_core::Value::text("DE89370400440532013000")
+    );
+    let surfaces: Vec<String> = r
+        .facts_for("party.company")
+        .filter_map(|f| match f.value.field("surface") {
+            Some(quail_core::Value::Text(s)) => Some(s.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        surfaces.iter().any(|s| s.contains("Alpha Widgets")),
+        "{surfaces:?}"
+    );
+
+    let o = run(&["inspect", a.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let s = stdout(&o);
+    assert!(
+        s.contains("[party]") && s.contains("[ref]") && s.contains("[signal]"),
+        "{s}"
+    );
+    assert!(s.contains("surface=\"Alpha Widgets LLC\""), "{s}");
+    // Ranked candidates: one line per record.
+    assert!(s.contains("record(s)") && s.contains("    - {key="), "{s}");
 }

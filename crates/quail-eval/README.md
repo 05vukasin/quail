@@ -75,8 +75,10 @@ One JSON file per document, in a dataset directory outside the repository:
 
 Committed in this crate and compiled in (override with `--tasks`). Per task: `keys` (fact
 keys pooled as predictions), `normalize` (`none`, `text`, `company`, `date`, `identifier`,
-`number`, `bool`, `language`), `multi` (set semantics) and `min_conf`. Keys of crates not
-merged yet are the planned names: fix them here when the crate lands. Tasks: `doc_type`,
+`number`, `bool`, `language`), `multi` (set semantics), `min_conf`, `field` (for record
+values: the field that is the prediction, e.g. `surface` of `party.company`, `raw` of
+`ref.doc_number`; lists of records are flattened) and `pending` (why the task has no producer
+yet; its keys are the planned names, it is scored as abstentions and flagged in the report). Tasks: `doc_type`,
 `doc_title`, `party`, `effective_date`, `agreement_date`, `expiration_date`,
 `jurisdiction`, `term`, `contract_number`, `iban`, `amount_total`, `language`,
 `is_scanned`, `near_duplicate_of`.
@@ -120,7 +122,7 @@ hook; no renderer ships yet (`NoRenderer`), the pack says so on every page.
 `assign(id) = holdout` iff `blake3("<seed>:<id>")` as a fraction of 2^64 is below the share
 (default 20 %, seed `quail-eval-holdout-2026-11-20`). Per file, so adding files never moves
 others. `splits` writes `<dataset>.dev.txt` / `<dataset>.holdout.txt` (BLAKE3 ids only:
-committable, in `crates/quail-eval/split/` once real gold exists); files already listed keep
+committed in `crates/quail-eval/split/`: Kleister-NDA 253 dev / 84 holdout, CUAD 409 / 100); files already listed keep
 their side even if seed or share change. `--check` fails if lists are stale or a gold file's
 `split` disagrees; `--apply` fixes the gold files. `convert` uses the same assignment.
 
@@ -128,8 +130,8 @@ their side even if seed or share change. `--check` fails if lists are stale or a
 
 | adapter | reads | tasks | status |
 |---|---|---|---|
-| `kleister-nda` | `{train,dev-0}/expected.tsv` + `in.tsv` (decompress `in.tsv.xz` first), `documents/*.pdf` | `party`, `effective_date`, `jurisdiction`, `term` (missing key → absent) | synthetic tests only, not run on the real data |
-| `cuad` | `CUAD_v1.json` (SQuAD form), contract PDFs/TXTs by title | `doc_title`, `party` (contains), `agreement_date`, `effective_date`, `expiration_date` (dates parsed to ISO; non-date answers skipped and counted; no answer → absent) | synthetic tests only, not run on the real data |
+| `kleister-nda` | `{train,dev-0}/expected.tsv` + `in.tsv` (decompress `in.tsv.xz` first), `documents/*.pdf` | `party`, `effective_date`, `jurisdiction`, `term` (missing key → absent) | run on the real data: 337 documents (train + dev-0), 1315 labels |
+| `cuad` | `CUAD_v1.json` (SQuAD form), contract PDFs/TXTs by title | `doc_title`, `party` (contains), `agreement_date`, `effective_date`, `expiration_date` (dates parsed to ISO; non-date answers skipped and counted; no answer → absent) | run on the real data: 510 documents (1 without a file), 3675 labels, 773 non-date answers skipped |
 
 CUAD's party spans include defined-term aliases ("Distributor"), so party precision against
 CUAD is low by construction; recall is the meaningful number there.

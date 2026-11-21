@@ -53,6 +53,23 @@ pub fn value_strings(v: &Value) -> Vec<String> {
     }
 }
 
+/// The strings of `v` for a task reading record field `field`: records give the strings of
+/// that field (none when it is missing), lists are flattened, other values are as in
+/// [`value_strings`]. Without a field this is [`value_strings`].
+pub fn field_strings(v: &Value, field: Option<&str>) -> Vec<String> {
+    let Some(name) = field else {
+        return value_strings(v);
+    };
+    match v {
+        Value::Record(_) => v.field(name).map(value_strings).unwrap_or_default(),
+        Value::List(items) => items
+            .iter()
+            .flat_map(|x| field_strings(x, Some(name)))
+            .collect(),
+        other => vec![value_string(other)],
+    }
+}
+
 /// A fact value as one display string.
 pub fn value_string(v: &Value) -> String {
     match v {
@@ -196,6 +213,27 @@ mod tests {
         assert_eq!(m(7, 0), "7");
         let l = Value::List(vec![Value::text("a"), Value::List(vec![Value::Int(1)])]);
         assert_eq!(value_strings(&l), vec!["a", "1"]);
+    }
+
+    #[test]
+    fn record_fields() {
+        let r = |s: &str| Value::record([("surface", Value::text(s)), ("key", Value::text("k"))]);
+        assert_eq!(
+            field_strings(&r("Alpha LLC"), Some("surface")),
+            ["Alpha LLC"]
+        );
+        assert!(field_strings(&r("x"), Some("missing")).is_empty());
+        let l = Value::List(vec![
+            r("A"),
+            Value::record([("other", Value::Int(1))]),
+            r("B"),
+        ]);
+        assert_eq!(field_strings(&l, Some("surface")), ["A", "B"]);
+        assert_eq!(
+            field_strings(&Value::text("plain"), Some("surface")),
+            ["plain"]
+        );
+        assert_eq!(field_strings(&r("A"), None), ["surface=A, key=k"]);
     }
 
     #[test]
