@@ -145,7 +145,7 @@ pub fn scan(w: &PageWords, pos: PagePos, domains: &[String]) -> PageScan {
 }
 
 struct Scanner<'a> {
-    w: &'a PageWords,
+    w: &'a PageWords<'a>,
     pos: PagePos,
     /// Token index of every word, in order.
     words: Vec<usize>,
@@ -164,7 +164,7 @@ const BREAKING: &[char] = &[
 ];
 
 impl<'a> Scanner<'a> {
-    fn new(w: &'a PageWords, pos: PagePos, domains: &'a [String]) -> Self {
+    fn new(w: &'a PageWords<'a>, pos: PagePos, domains: &'a [String]) -> Self {
         let mut words = Vec::new();
         let mut wpos = Vec::with_capacity(w.len());
         let mut bare_buf = String::new();

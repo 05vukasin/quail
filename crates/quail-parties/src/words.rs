@@ -1,7 +1,14 @@
 //! One page as a token stream: normalized text, tokens with folded keys, line numbers and
 //! zones, and the way back to source spans.
+//!
+//! The normalized text, its map and the folded tokens come from `text.stats`'s
+//! `normalized_text` artifact when the caller passes the page from there
+//! ([`PageWords::with_shared`]); else they are computed here, with the same result.
+
+use std::borrow::Cow;
 
 use quail_core::{Page, Span, Zone};
+use quail_text::NormalizedPage;
 use quail_text::fold::{FoldOptions, fold_into};
 use quail_text::normalize::{NormalizeOptions, OffsetMap, normalize_mapped};
 use quail_text::token::{TokenKind, tokens_with_symbols};
@@ -26,11 +33,11 @@ pub struct Tok {
 }
 
 /// A page ready for scanning.
-pub struct PageWords {
+pub struct PageWords<'a> {
     /// Normalized page text.
-    pub text: String,
+    pub text: Cow<'a, str>,
     /// Map from normalized offsets back to the page text.
-    pub map: OffsetMap,
+    pub map: Cow<'a, OffsetMap>,
     /// Tokens in order.
     pub toks: Vec<Tok>,
     /// All folded keys, concatenated.
@@ -39,42 +46,68 @@ pub struct PageWords {
     pub lines: u32,
 }
 
-impl PageWords {
+impl PageWords<'static> {
     /// Tokenizes `page.text` (at most `budget` bytes of it, on a char boundary).
     pub fn new(page: &Page, budget: usize) -> Self {
+        PageWords::with_shared(page, budget, None)
+    }
+}
+
+impl<'a> PageWords<'a> {
+    /// [`PageWords::new`], taking the normalized page from `shared` (the page's entry of the
+    /// `normalized_text` artifact) when it is given and the whole page fits in `budget`.
+    pub fn with_shared(page: &Page, budget: usize, shared: Option<&'a NormalizedPage>) -> Self {
         let mut src_end = budget.min(page.text.len());
         while !page.text.is_char_boundary(src_end) {
             src_end -= 1;
         }
         let src = &page.text[..src_end];
-        let mut text = String::new();
-        let mut map = OffsetMap::new();
-        normalize_mapped(src, &NormalizeOptions::default(), &mut text, &mut map);
+        let shared = shared.filter(|s| src.len() == page.text.len() && s.source_len() == src.len());
+        let (text, map) = if let Some(s) = shared {
+            (Cow::Borrowed(s.text()), Cow::Borrowed(s.map()))
+        } else {
+            let mut text = String::new();
+            let mut map = OffsetMap::new();
+            normalize_mapped(src, &NormalizeOptions::default(), &mut text, &mut map);
+            (Cow::Owned(text), Cow::Owned(map))
+        };
         let zones = ZoneIndex::new(page);
         let mut toks = Vec::new();
         let mut keys = String::with_capacity(text.len());
         let mut line = 0u32;
         let mut prev_end = 0usize;
-        for t in tokens_with_symbols(&text) {
-            let gap = &text[prev_end..t.start];
-            line += u32::try_from(gap.bytes().filter(|&b| b == b'\n').count()).unwrap_or(0);
-            let k0 = keys.len();
-            fold_into(t.text, &FoldOptions::KEY, &mut keys);
-            let zone = if zones.spans.is_empty() {
-                Zone::Unknown
-            } else {
-                zones.zone_at(map.to_source(t.start))
+        let mut push =
+            |start: usize, end: usize, kind: TokenKind, key: &mut dyn FnMut(&mut String)| {
+                let gap = text.get(prev_end..start).unwrap_or("");
+                line += u32::try_from(gap.bytes().filter(|&b| b == b'\n').count()).unwrap_or(0);
+                let k0 = keys.len();
+                key(&mut keys);
+                let zone = if zones.spans.is_empty() {
+                    Zone::Unknown
+                } else {
+                    zones.zone_at(map.to_source(start))
+                };
+                toks.push(Tok {
+                    start,
+                    end,
+                    kind,
+                    key: (to_u32(k0), to_u32(keys.len())),
+                    line,
+                    space_before: !gap.is_empty() || prev_end == 0,
+                    zone,
+                });
+                prev_end = end;
             };
-            toks.push(Tok {
-                start: t.start,
-                end: t.end,
-                kind: t.kind,
-                key: (to_u32(k0), to_u32(keys.len())),
-                line,
-                space_before: !gap.is_empty() || prev_end == 0,
-                zone,
-            });
-            prev_end = t.end;
+        if let Some(s) = shared {
+            for (i, t) in s.tokens().iter().enumerate() {
+                push(t.start(), t.end(), t.kind, &mut |k| k.push_str(s.key(i)));
+            }
+        } else {
+            for t in tokens_with_symbols(&text) {
+                push(t.start, t.end, t.kind, &mut |k| {
+                    fold_into(t.text, &FoldOptions::KEY, k);
+                });
+            }
         }
         Self {
             text,
