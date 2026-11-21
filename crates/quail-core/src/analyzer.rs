@@ -124,6 +124,12 @@ impl Emitter {
         }
     }
 
+    /// The file's deadline, when the engine set one. Steps that hand work to other components
+    /// (a renderer, an OCR engine) pass it on instead of starting a fresh time budget.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.deadline
+    }
+
     /// `Err(Error::Timeout)` once the file's time budget is spent. Long loops (per page, per
     /// chunk) call this so a hostile file cannot hold a worker: the engine cannot preempt.
     pub fn check_deadline(&self) -> Result<()> {

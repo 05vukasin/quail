@@ -89,9 +89,11 @@ fn int(n: usize) -> Value {
 }
 
 fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> {
-    // The file's time budget. The emitter's own deadline is not readable, and extraction is
-    // the file's first step, so the budget starts now; the raster's calls share it.
-    let file_deadline = Instant::now().checked_add(limits.timeout);
+    // The file's time budget: the engine's deadline when it set one (so the raster's later
+    // calls share it), otherwise one starting now.
+    let file_deadline = out
+        .deadline()
+        .or_else(|| Instant::now().checked_add(limits.timeout));
     let bytes = blob.as_bytes();
     if bytes.len() as u64 > limits.max_bytes {
         return Err(Error::LimitExceeded("max_bytes"));
