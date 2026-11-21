@@ -4,9 +4,11 @@
 //! table structure. Table cells far apart on one baseline end up in separate blocks; a
 //! column of cells stacks into one block. This module:
 //!
-//! 1. splits blocks into lines and estimates each line's box: the block's height divided
-//!    evenly, the width in proportion to the line's length (numbers right-aligned, text
-//!    left-aligned);
+//! 1. takes each block's measured lines ([`quail_core::Block::lines`]) with their own boxes;
+//!    for a block without them, or with a line holding several cells, it splits the text
+//!    into lines and estimates each line's box:
+//!    the block's height divided evenly, the width in proportion to the line's length
+//!    (numbers right-aligned, text left-aligned);
 //! 2. groups lines into rows by vertical centre;
 //! 3. finds table regions: a header row (two or more column roles) or a run of rows with
 //!    several cells and amounts, plus the short text rows between them (wrapped
@@ -73,10 +75,47 @@ fn numeric_line(t: &str) -> bool {
     digits > 0 && letters <= 4
 }
 
-/// Lines of a page with estimated boxes.
+/// Whether a block's measured line boxes are used: it has them, and none of its lines holds
+/// a cell gap (two or more spaces). Such a line is several table cells the layout read as
+/// one line, and its box spans the columns between them; the estimate spreads the block's
+/// lines by their length instead, which finds those columns more often (measured on the
+/// `RealKIE` FCC and private invoice sets).
+fn measured(page: &Page, b: &quail_core::Block) -> bool {
+    !b.lines.is_empty()
+        && b.lines
+            .iter()
+            .all(|l| !l.span.slice(&page.text).trim().contains("  "))
+}
+
+/// Lines of a page with their measured boxes, or estimated ones (see [`measured`]).
 pub(crate) fn lines(page: &Page) -> Vec<Line> {
     let mut out = Vec::new();
     for b in &page.blocks {
+        if measured(page, b) {
+            for l in &b.lines {
+                if l.span.start < b.span.start || l.span.end > b.span.end {
+                    continue;
+                }
+                let raw = l.span.slice(&page.text);
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let start = l.span.start as usize + (raw.len() - raw.trim_start().len());
+                out.push(Line {
+                    text: trimmed.to_owned(),
+                    span: Span {
+                        start: u32::try_from(start).unwrap_or(u32::MAX),
+                        end: u32::try_from(start + trimmed.len()).unwrap_or(u32::MAX),
+                    },
+                    bbox: l.bbox,
+                });
+                if out.len() >= MAX_LINES {
+                    return out;
+                }
+            }
+            continue;
+        }
         let Some(bb) = b.bbox else { continue };
         let text = b.span.slice(&page.text);
         let parts: Vec<(usize, &str)> = {
@@ -505,4 +544,72 @@ fn nearest(bands: &[(f32, f32)], x: f32) -> usize {
             d(a.1).total_cmp(&d(b.1))
         })
         .map_or(0, |(i, _)| i)
+}
+
+#[cfg(test)]
+mod tests {
+    use quail_core::{Block, BlockKind, LineBox, PageKind, TextSource, Zone};
+
+    use super::*;
+
+    fn bx(x0: f32, y0: f32, x1: f32, y1: f32) -> BBox {
+        BBox { x0, y0, x1, y1 }
+    }
+
+    /// A page with one block over `lines` (text, measured box), joined by `\n`.
+    fn page(lines: &[(&str, BBox)]) -> Page {
+        let mut text = String::new();
+        let mut boxes = Vec::new();
+        for (t, b) in lines {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            let start = u32::try_from(text.len()).unwrap();
+            text.push_str(t);
+            let end = u32::try_from(text.len()).unwrap();
+            boxes.push(LineBox {
+                span: Span { start, end },
+                bbox: *b,
+            });
+        }
+        let all = boxes.iter().fold(None, |u, l| union(u, Some(l.bbox)));
+        let span = Span {
+            start: 0,
+            end: u32::try_from(text.len()).unwrap(),
+        };
+        let mut block = Block::new(span, BlockKind::Paragraph, Zone::Body, all);
+        block.lines = boxes;
+        let mut p = Page::new(0, PageKind::Physical);
+        p.size = Some((600.0, 800.0));
+        p.text = text;
+        p.text_source = TextSource::Native;
+        p.blocks = vec![block];
+        p
+    }
+
+    #[test]
+    fn measured_line_boxes_are_used() {
+        // A short right-aligned line the estimate would put at the left edge.
+        let p = page(&[
+            ("Consulting services", bx(100.0, 100.0, 300.0, 110.0)),
+            ("Total", bx(260.0, 114.0, 300.0, 124.0)),
+        ]);
+        let ls = lines(&p);
+        assert_eq!(ls.len(), 2);
+        assert_eq!(ls[1].text, "Total");
+        assert_eq!(ls[1].span.slice(&p.text), "Total");
+        assert_eq!(ls[1].bbox, bx(260.0, 114.0, 300.0, 124.0));
+    }
+
+    #[test]
+    fn blocks_with_merged_cells_keep_the_estimate() {
+        let p = page(&[
+            ("Analyst", bx(100.0, 100.0, 140.0, 110.0)),
+            ("$41   $18,200  $6,300", bx(100.0, 114.0, 300.0, 124.0)),
+        ]);
+        let ls = lines(&p);
+        assert_eq!(ls.len(), 2);
+        // Estimated: the block's height split evenly, not the measured boxes.
+        assert!((ls[0].bbox.y1 - 112.0).abs() < 0.01, "{:?}", ls[0].bbox);
+    }
 }
