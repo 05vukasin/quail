@@ -11,8 +11,10 @@ use quail_core::{Analyzer, Artifacts, Blob, Ctx, Emitter, Format, Limits, Profil
 use quail_sketch::{CompatMinHash, InvoiceLayout, compat, invoice};
 
 const MB: usize = 1 << 20;
-/// Wall-time bound per input for the whole compatibility path, in a debug build.
-const BOUND: Duration = Duration::from_secs(2);
+/// Wall-time bound per input for the whole compatibility path, in a debug build. Locally it takes
+/// about 1 s; shared CI runners (macOS especially) are several times slower. Exponential
+/// backtracking on these 1 MB inputs would take minutes, so 10 s still catches it.
+const BOUND: Duration = Duration::from_secs(10);
 
 fn repeat(unit: &str) -> String {
     unit.repeat(MB / unit.len() + 1)
