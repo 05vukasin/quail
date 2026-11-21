@@ -437,6 +437,10 @@ impl Renderer<'_> {
         if self.misses_target(props.transform.transform_rect_bbox(local)) {
             return;
         }
+        // quail: charge the decoded samples and their RGBA copy (8 bytes per declared pixel)
+        // before decoding; repeated draws of a big image are charged every time.
+        self.global
+            .charge(u64::from(image.width()) * u64::from(image.height()) * 8);
 
         self.apply_image_props(&props);
         let mut transform = props.transform;

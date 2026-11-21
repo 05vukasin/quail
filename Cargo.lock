@@ -861,8 +861,6 @@ dependencies = [
 [[package]]
 name = "hayro"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34d3977ae664ab6eea015be3024379c83c6a3580f67d51be6884f1992bf683ba"
 dependencies = [
  "ab_glyph_rasterizer",
  "bytemuck",
@@ -1657,10 +1655,12 @@ name = "quail-pdf"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "flate2",
  "hayro",
  "hayro-interpret",
  "hayro-syntax",
  "lopdf",
+ "md-5",
  "miniz_oxide 0.8.9",
  "quail-core",
 ]

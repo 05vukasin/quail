@@ -64,6 +64,9 @@ use vello_cpu::{Mask, Pixmap, RenderContext, peniko};
 
 mod clip;
 mod glyph;
+// quail: render limits.
+mod limits;
+pub use limits::{RenderAbort, RenderLimits};
 mod glyph_cache;
 mod image;
 mod mask;
@@ -83,9 +86,27 @@ pub(crate) struct GlobalState {
     aliasing_threshold: Option<u8>,
     hinting: bool,
     glyph_caching: bool,
+    // quail: limits of this render, if any.
+    limits: Option<std::sync::Arc<RenderLimits>>,
 }
 
 impl GlobalState {
+    /// quail: a device callback or a loop step.
+    #[inline]
+    pub(crate) fn tick(&self) {
+        if let Some(l) = &self.limits {
+            l.tick();
+        }
+    }
+
+    /// quail: about to allocate `bytes` for an image or a pixmap.
+    #[inline]
+    pub(crate) fn charge(&self, bytes: u64) {
+        if let Some(l) = &self.limits {
+            l.charge(bytes);
+        }
+    }
+
     pub(crate) fn new(cache: &RenderCache<'_>, settings: &RenderSettings) -> Self {
         Self {
             level: Level::new(),
@@ -97,6 +118,7 @@ impl GlobalState {
             aliasing_threshold: settings.aliasing_threshold,
             hinting: settings.hinting,
             glyph_caching: settings.glyph_caching,
+            limits: None,
         }
     }
 }
@@ -126,6 +148,9 @@ impl<'r> Renderer<'r> {
     }
 
     fn child_context(&self, width: u16, height: u16) -> RenderContext {
+        // quail: charge the child canvas (8 bytes per pixel) before allocating it.
+        self.global
+            .charge(u64::from(width) * u64::from(height) * 8);
         let mut ctx =
             RenderContext::new_with(width, height, derive_settings(self.ctx.render_settings()));
         ctx.set_aliasing_threshold(self.global.aliasing_threshold);
@@ -148,15 +173,19 @@ impl<'r> Renderer<'r> {
 }
 
 impl<'a, 'r> Device<'a> for Renderer<'r> {
+    // quail: every callback ticks the render limits.
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, props: ImageDrawProps<'a>) {
+        self.global.tick();
         Self::draw_pdf_image(self, image, props);
     }
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
+        self.global.tick();
         Self::push_clip_path(self, clip_path);
     }
 
     fn push_clip_rect(&mut self, rect: &Rect) {
+        self.global.tick();
         Self::push_clip_rect(self, rect);
     }
 
@@ -166,6 +195,7 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
         mask: Option<SoftMask<'a>>,
         blend_mode: BlendMode,
     ) {
+        self.global.tick();
         Self::push_transparency_group(self, opacity, mask, blend_mode);
     }
 
@@ -178,10 +208,12 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
     }
 
     fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
+        self.global.tick();
         Self::draw_path(self, path, props, draw_mode);
     }
 
     fn draw_rect(&mut self, rect: &Rect, props: DrawProps<'a>, draw_mode: &DrawMode) {
+        self.global.tick();
         Self::draw_rect(self, rect, props, draw_mode);
     }
 
@@ -191,6 +223,7 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
         props: DrawProps<'a>,
         draw_mode: &DrawMode,
     ) {
+        self.global.tick();
         Self::draw_glyph_run(self, glyph_run, props, draw_mode);
     }
 }
@@ -282,6 +315,44 @@ pub fn render<'a>(
     render_settings: &RenderSettings,
     pixmap_settings: &PixmapSettings,
 ) -> Pixmap {
+    render_impl(
+        page,
+        cache,
+        interpreter_settings,
+        render_settings,
+        pixmap_settings,
+        None,
+    )
+}
+
+/// quail: like [`render`], under `limits`. When a limit is hit the call unwinds with a
+/// [`RenderAbort`] payload (via `resume_unwind`); catch it with `catch_unwind`.
+pub fn render_limited<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    interpreter_settings: &InterpreterSettings,
+    render_settings: &RenderSettings,
+    pixmap_settings: &PixmapSettings,
+    limits: std::sync::Arc<RenderLimits>,
+) -> Pixmap {
+    render_impl(
+        page,
+        cache,
+        interpreter_settings,
+        render_settings,
+        pixmap_settings,
+        Some(limits),
+    )
+}
+
+fn render_impl<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    interpreter_settings: &InterpreterSettings,
+    render_settings: &RenderSettings,
+    pixmap_settings: &PixmapSettings,
+    limits: Option<std::sync::Arc<RenderLimits>>,
+) -> Pixmap {
     let (width, height) = page.render_dimensions();
     let mut ctx = RenderContext::new(
         (width * pixmap_settings.x_scale) as u16,
@@ -291,13 +362,14 @@ pub fn render<'a>(
         pixmap_settings.x_scale as f64,
         pixmap_settings.y_scale as f64,
     ) * page.initial_transform(true).to_kurbo();
-    render_into(
+    render_into_impl(
         page,
         cache,
         interpreter_settings,
         render_settings,
         &mut ctx,
         transform,
+        limits,
     );
     ctx.flush();
 
@@ -326,6 +398,26 @@ pub fn render_into<'a>(
     ctx: &mut RenderContext,
     transform: Affine,
 ) {
+    render_into_impl(
+        page,
+        cache,
+        interpreter_settings,
+        render_settings,
+        ctx,
+        transform,
+        None,
+    );
+}
+
+fn render_into_impl<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    interpreter_settings: &InterpreterSettings,
+    render_settings: &RenderSettings,
+    ctx: &mut RenderContext,
+    transform: Affine,
+    limits: Option<std::sync::Arc<RenderLimits>>,
+) {
     let target = Rect::new(0.0, 0.0, ctx.width() as f64, ctx.height() as f64);
     let mut state = Context::new(
         transform,
@@ -339,7 +431,9 @@ pub fn render_into<'a>(
     ctx.reset_filter_effect();
     ctx.set_aliasing_threshold(render_settings.aliasing_threshold);
 
-    let global = GlobalState::new(cache, render_settings);
+    let mut global = GlobalState::new(cache, render_settings);
+    // quail: this render's limits.
+    global.limits = limits;
     let mut device = Renderer::new(ctx, &global);
     let crop_box = page.intersected_crop_box().to_kurbo();
     let [a, b, c, d, _, _] = transform.as_coeffs();

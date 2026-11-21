@@ -50,6 +50,7 @@ opt-level = 2
 # Hardened hayro crates for hostile PDFs: per-file decode budget, image size checks before
 # allocation, JBIG2 bitmap caps. Every change is marked `// quail:`; see vendor/README.md.
 [patch.crates-io]
+hayro = { path = "vendor/hayro" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }

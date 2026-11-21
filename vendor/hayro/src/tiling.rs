@@ -64,11 +64,16 @@ impl Renderer<'_> {
 
         for j in y.copies.clone() {
             for i in x.copies.clone() {
+                // quail: nested patterns multiply copies; every copy ticks the limits.
+                self.global.tick();
                 let offset = Affine::translate((f64::from(i) * x.step, f64::from(j) * y.step));
                 t.interpret(&mut renderer, to_texture * offset, is_stroke);
             }
         }
 
+        // quail: the tile pixmap outlives this call (it is the paint); charge it.
+        self.global
+            .charge(u64::from(x.size) * u64::from(y.size) * 4);
         let mut pixmap = Pixmap::new(x.size, y.size);
         ctx.flush();
         ctx.render(&mut pixmap, &mut vello_cpu::Resources::default());
