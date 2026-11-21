@@ -15,23 +15,26 @@
 //! | [`garbage`] | how broken a text layer looks: `Clean`, `Garbage` or `TooShort` |
 //! | [`lang`] | language identification with top candidates |
 //! | [`money`] | numbers and amounts as written (`1,200.50`, `1.200,50`, `1 200,50`, `(€1,200.50)`, `5 miliona din.`) as exact decimals; currency symbols, words and codes |
+//! | [`normalized`] | the `normalized_text` artifact: pages normalized once, with offset maps and keyed tokens |
 //!
 //! Everything borrows where it can ([`std::borrow::Cow`] results, iterators over `&str`,
 //! `*_into` variants that append to a caller's buffer) and nothing keeps global state.
 //!
 //! # Analyzers
 //!
-//! - [`TextStats`] (`text.stats@1`, Fast): characters, words, pages with text, script
+//! - [`TextStats`] (`text.stats@2`, Fast): characters, words, pages with text, script
 //!   ratios, garbage ratio.
-//! - [`TextLang`] (`text.lang@1`, Fast): document language with top-3 candidates.
+//! - [`TextLang`] (`text.lang@2`, Fast): document language with top-3 candidates.
 //!
-//! Both require the `document` artifact. Keys are in [`keys`].
+//! Both require the `document` artifact. Keys are in [`keys`]. [`TextStats`] also provides
+//! the [`NormalizedText`] artifact (`normalized_text`) for later text analyzers.
 
 pub mod fold;
 pub mod garbage;
 pub mod lang;
 pub mod money;
 pub mod normalize;
+pub mod normalized;
 pub mod script;
 pub mod shingle;
 pub mod token;
@@ -40,6 +43,7 @@ pub mod translit;
 mod analyzers;
 
 pub use analyzers::{TextLang, TextStats};
+pub use normalized::{NormalizedPage, NormalizedText};
 
 /// Fact keys emitted by this crate.
 pub mod keys {

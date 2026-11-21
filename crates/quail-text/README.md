@@ -15,6 +15,7 @@ Text utilities every text analyzer builds on, plus two text-level analyzers. Nam
 | `garbage` | `garbage_report` / `garbage_ratio`: share of broken-text-layer characters; `verdict()` → `Clean`, `Garbage` (ratio > `NEEDS_OCR_RATIO` = 0.10) or `TooShort` (< 20 characters, never an OCR reason by itself) |
 | `money` | exact-decimal numbers and amounts: `parse_number` with a `NumberFormat` (`MONEY`: two decimals, no sign; `QUANTITY`: four decimals, sign, `1'200`) and a `DecimalHint` for `1,500`; `parse_money` with currency (symbol, word in any case incl. Cyrillic `дин.`, ISO code in capitals), multiplier (`5 million`, `2 miliona`) and sign (`-1,200.00`, `1.200,00-`, `(1,200.00)`); `Decimal` with `Display`; the currency and multiplier tables. Shared by `quail-signals` and `quail-items` |
 | `lang` | `LanguageDetector`: Lingua (high accuracy, 11 languages) + an sr/hr/bs marker layer, scored candidates |
+| `normalized` | the `normalized_text` artifact (`NormalizedText`): per page the default-normalized text, its `OffsetMap`, every token (`tokens_with_symbols`) with its `FoldOptions::KEY` key, and the source length |
 
 ## Stability of stored sketches
 
@@ -36,13 +37,34 @@ threads (measured: 1 thread in the process after construction and detection). Th
 
 Both require the `document` artifact and run in `Fast`.
 
-- `text.stats@1`: `text.chars`, `text.words`, `text.pages_with_text`, `text.script`
+- `text.stats@2`: `text.chars`, `text.words`, `text.pages_with_text`, `text.script`
   (`latin|cyrillic|greek|other|mixed`), `text.script.{latin,cyrillic,greek,other}`,
   `text.garbage_ratio`, `text.garbage_pages`. Characters, scripts and garbage are measured on the text
   as extracted, words on the normalized (de-hyphenated) text; a garbage page is one whose own verdict is
   `Garbage` (too-short pages never are).
-- `text.lang@1`: `text.lang` (best, `conf` = score), `text.lang_top` (`[[code, score], ...]`, top 3);
+- `text.lang@2`: `text.lang` (best, `conf` = score), `text.lang_top` (`[[code, score], ...]`, top 3);
   from `Standard` on also `text.page_lang` per page (page evidence). Skips `needs_ocr` pages.
+
+## Shared normalization: `normalized_text`
+
+`text.stats` normalizes every page anyway, so it provides what it built as the `NormalizedText`
+artifact (`provides = ["normalized_text"]`), from `Ctx::document()` (OCR text when OCR ran). Per
+page: the text normalized with `NormalizeOptions::default()`, its `OffsetMap` (both directions),
+all tokens with spans, kinds and `FoldOptions::KEY` keys, and the length of the page text it came
+from. Pages cut by `Limits::max_text_bytes` (and the ones after) are absent.
+
+Consumers declare `after(&["normalized_text"])` (soft) and call `NormalizedText::page(pos, &page.text)`
+only when they would normalize that whole page with the defaults themselves; otherwise (no
+`text.stats`, page cut by their own budget, other options) they run their own pass. The result is the
+same either way, so no output depends on whether `text.stats` is active. `text.lang` uses it for the
+pages it reads whole.
+
+Built eagerly (tokens and keys included): `text.stats` tokenized every page already to count words,
+so the extra cost is folding the keys, +10–25 % of `text.stats` time (one fold per token instead of one
+per token in each consumer). Heap: 16 bytes per token, the normalized text, the keys that differ from
+their token, 16 bytes per offset-map checkpoint: median 4.4–4.5 bytes per byte of page text, 63 KB per
+file on average on 363 private PDFs/DOCX (max 1.0 MB), 259 KB on CUAD's 510 contracts (max 1.6 MB).
+It lives until the file is done.
 
 ## Limits and cost
 

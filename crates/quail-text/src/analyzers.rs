@@ -1,11 +1,14 @@
-//! `text.stats@1` and `text.lang@1`.
+//! `text.stats@2` and `text.lang@2`.
 
-use quail_core::{Analyzer, AnalyzerId, Ctx, Emitter, Evidence, Page, Profile, Result, Value};
+use quail_core::{
+    Analyzer, AnalyzerId, Artifact, Ctx, Emitter, Evidence, Page, Profile, Result, Value,
+};
 
 use crate::garbage::{GarbageReport, garbage_report};
 use crate::keys;
 use crate::lang::{Detection, LanguageDetector};
 use crate::normalize::{NormalizeOptions, normalize_into};
+use crate::normalized::{NormalizedPage, NormalizedText};
 use crate::script::ScriptCounts;
 use crate::token::tokens;
 
@@ -33,6 +36,9 @@ fn within(text: &str, budget: usize) -> &str {
 /// text (de-hyphenated). A page counts as garbage by the same rule as
 /// [`GarbageReport::verdict`] (too-short pages never do). Reads at most
 /// `Limits::max_text_bytes` of text and records a problem when it stops early.
+///
+/// Provides the [`NormalizedText`] artifact (`normalized_text`): every page it read whole,
+/// normalized with the default options, with its offset map and keyed tokens.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TextStats;
 
@@ -50,6 +56,10 @@ impl Analyzer for TextStats {
         &["document"]
     }
 
+    fn provides(&self) -> &'static [&'static str] {
+        &[NormalizedText::NAME]
+    }
+
     fn after(&self) -> &'static [&'static str] {
         &["revised_document"]
     }
@@ -62,6 +72,7 @@ impl Analyzer for TextStats {
         let Some(doc) = ctx.document() else {
             return Ok(());
         };
+        let mut normalized: Vec<Option<NormalizedPage>> = Vec::with_capacity(doc.pages.len());
         let mut budget = usize::try_from(ctx.limits.max_text_bytes).unwrap_or(usize::MAX);
         let mut chars = 0usize;
         let mut words = 0usize;
@@ -80,19 +91,26 @@ impl Analyzer for TextStats {
             }
             let text = within(&page.text, budget);
             budget -= text.len();
+            // A page read whole goes into the artifact, and its words come from there.
+            let whole = (text.len() == page.text.len()).then(|| NormalizedPage::new(text));
             let g = garbage_report(text);
-            if g.chars == 0 {
-                continue;
+            if g.chars > 0 {
+                pages_with_text += 1;
+                chars += g.chars;
+                garbage.merge(&g);
+                scripts.add(text);
+                // Words of the normalized text: "ugo-\nvor" is one word.
+                words += if let Some(p) = &whole {
+                    p.words()
+                } else {
+                    norm.clear();
+                    normalize_into(text, &NormalizeOptions::default(), &mut norm);
+                    tokens(&norm).count()
+                };
             }
-            pages_with_text += 1;
-            chars += g.chars;
-            garbage.merge(&g);
-            scripts.add(text);
-            // Words of the normalized text: "ugo-\nvor" is one word.
-            norm.clear();
-            normalize_into(text, &NormalizeOptions::default(), &mut norm);
-            words += tokens(&norm).count();
+            normalized.push(whole);
         }
+        out.provide(NormalizedText::from_pages(normalized));
         out.fact(keys::CHARS, Value::Int(to_i64(chars)));
         out.fact(keys::WORDS, Value::Int(to_i64(words)));
         out.fact(keys::PAGES_WITH_TEXT, Value::Int(to_i64(pages_with_text)));
@@ -134,7 +152,8 @@ fn to_i64(n: usize) -> i64 {
 /// with enough text, with the page as evidence. Pages flagged `needs_ocr` are skipped:
 /// their text layer is not trusted. Text is normalized (de-hyphenated, NFKC) first and at
 /// most [`DetectorOptions::max_marker_chars`](crate::lang::DetectorOptions) characters of
-/// the document are read.
+/// the document are read. Pages that [`TextStats`] already normalized are taken from the
+/// [`NormalizedText`] artifact when they are read whole (same result).
 #[derive(Clone, Debug, Default)]
 pub struct TextLang {
     detector: LanguageDetector,
@@ -189,7 +208,7 @@ impl Analyzer for TextLang {
     }
 
     fn after(&self) -> &'static [&'static str] {
-        &["revised_document"]
+        &["revised_document", NormalizedText::NAME]
     }
 
     fn profile(&self) -> Profile {
@@ -200,17 +219,25 @@ impl Analyzer for TextLang {
         let Some(doc) = ctx.document() else {
             return Ok(());
         };
-        let opts = NormalizeOptions::default();
+        let shared = ctx.get::<NormalizedText>();
+        // `text` normalized with the defaults, appended to `out`: from the artifact when the
+        // whole page is read and it has the page, else normalized here.
+        let append = |pos: usize, page: &Page, part: &str, out: &mut String| match shared
+            .and_then(|n| n.page(pos, &page.text))
+        {
+            Some(p) if part.len() == page.text.len() => out.push_str(p.text()),
+            _ => normalize_into(part, &NormalizeOptions::default(), out),
+        };
         let cap_chars = self.detector.options().max_marker_chars;
         // Bytes, not chars: 4 bytes per char at most.
         let cap = cap_chars.saturating_mul(4);
         let mut text = String::new();
-        for page in doc.pages.iter().filter(|p| usable(p)) {
+        for (pos, page) in doc.pages.iter().enumerate().filter(|(_, p)| usable(p)) {
             out.check_deadline()?;
             if text.len() >= cap {
                 break;
             }
-            normalize_into(within(&page.text, cap - text.len()), &opts, &mut text);
+            append(pos, page, within(&page.text, cap - text.len()), &mut text);
             text.push('\n');
         }
         if let Some(d) = self.detector.detect(&text)
@@ -228,12 +255,13 @@ impl Analyzer for TextLang {
             return Ok(());
         }
         let mut buf = String::new();
-        for page in doc.pages.iter().filter(|p| usable(p)) {
+        for (pos, page) in doc.pages.iter().enumerate().filter(|(_, p)| usable(p)) {
             out.check_deadline()?;
             buf.clear();
-            normalize_into(
+            append(
+                pos,
+                page,
                 within(&page.text, Self::PAGE_SAMPLE_CHARS * 4),
-                &opts,
                 &mut buf,
             );
             if ScriptCounts::of(&buf).letters() < Self::MIN_PAGE_LETTERS {
@@ -277,19 +305,30 @@ mod tests {
     fn run(a: &dyn Analyzer, doc: Document, profile: Profile, limits: &Limits) -> Vec<Fact> {
         let mut artifacts = Artifacts::new();
         artifacts.insert(doc);
+        run_on(a, &artifacts, profile, limits).0
+    }
+
+    /// Runs `a` over `artifacts`; its facts and artifacts.
+    fn run_on(
+        a: &dyn Analyzer,
+        artifacts: &Artifacts,
+        profile: Profile,
+        limits: &Limits,
+    ) -> (Vec<Fact>, Artifacts) {
         let blob = Blob::from(Vec::new());
         let ctx = Ctx {
             blob: &blob,
             format: Format::Pdf,
             locator: "mem://test",
-            artifacts: &artifacts,
+            artifacts,
             facts: &[],
             limits,
             profile,
         };
         let mut out = Emitter::new(a.id());
         a.run(&ctx, &mut out).unwrap();
-        out.into_parts().0
+        let (facts, artifacts, _) = out.into_parts();
+        (facts, artifacts)
     }
 
     fn get<'a>(facts: &'a [Fact], key: &FactKey) -> Option<&'a Value> {
@@ -434,6 +473,61 @@ mod tests {
         assert_eq!(pages, [(0, &Value::text("sr")), (1, &Value::text("en"))]);
         for f in &std {
             assert!((0.0..=1.0).contains(&f.conf));
+        }
+    }
+
+    #[test]
+    fn stats_provide_whole_pages_only() {
+        let doc = Document {
+            pages: vec![
+                page(0, "Ugo-\nvor  o zakupu"),
+                page(1, "abcdefgh"),
+                page(2, "x"),
+            ],
+        };
+        let mut artifacts = Artifacts::new();
+        artifacts.insert(doc.clone());
+        let limits = Limits {
+            max_text_bytes: 22,
+            ..Limits::default()
+        };
+        let (_, made) = run_on(&TextStats, &artifacts, Profile::Fast, &limits);
+        let n = made.get::<NormalizedText>().unwrap();
+        let p = n.page(0, &doc.pages[0].text).unwrap();
+        assert_eq!(p.text(), "Ugovor o zakupu");
+        assert_eq!(p.words(), 3);
+        // Page 1 was cut by the limit, page 2 never read.
+        assert!(n.page(1, &doc.pages[1].text).is_none());
+        assert!(n.page(2, &doc.pages[2].text).is_none());
+    }
+
+    #[test]
+    fn lang_is_the_same_with_the_artifact() {
+        let sr = "Zakupac je du\u{17e}an da pla\u{107}a zakup-\nninu do petog u mesecu za teku\u{107}i \
+                  mesec. Re\u{161}enje o tome donosi op\u{161}tina posle sednice ve\u{107}a. ";
+        let en = "The tenant shall pay the rent by the fifth day of each month to the \
+                  landlord\u{2019}s bank account, as agreed between the parties. ";
+        // A long page (cut for the per-page sample) and short ones.
+        let doc = Document {
+            pages: vec![
+                page(0, &sr.repeat(40)),
+                page(1, en),
+                page(2, sr),
+                page(3, ""),
+            ],
+        };
+        for profile in [Profile::Fast, Profile::Standard] {
+            let mut alone = Artifacts::new();
+            alone.insert(doc.clone());
+            let (want, _) = run_on(&TextLang::new(), &alone, profile, &Limits::default());
+            let mut shared = Artifacts::new();
+            shared.insert(doc.clone());
+            let (_, made) = run_on(&TextStats, &shared, profile, &Limits::default());
+            shared.absorb(made);
+            assert!(shared.get::<NormalizedText>().is_some());
+            let (got, _) = run_on(&TextLang::new(), &shared, profile, &Limits::default());
+            assert_eq!(got, want);
+            assert!(!got.is_empty());
         }
     }
 }

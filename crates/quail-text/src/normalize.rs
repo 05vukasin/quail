@@ -116,13 +116,40 @@ pub fn normalize_mapped(
 }
 
 /// One place where output and source stop running in lockstep: output char at `out`
-/// (`out_len` bytes) came from source bytes `src..src_end`.
+/// (`out_len` bytes) came from source bytes `src..src_end`. Stored as `u32` (page texts are
+/// addressed by `u32` spans anyway) to keep maps small; read through [`Point::wide`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Point {
+    out: u32,
+    out_len: u32,
+    src: u32,
+    src_end: u32,
+}
+
+/// A [`Point`] in `usize`.
+#[derive(Clone, Copy)]
+struct Wide {
     out: usize,
     out_len: usize,
     src: usize,
     src_end: usize,
+}
+
+impl Point {
+    #[inline]
+    fn wide(self) -> Wide {
+        Wide {
+            out: self.out as usize,
+            out_len: self.out_len as usize,
+            src: self.src as usize,
+            src_end: self.src_end as usize,
+        }
+    }
+}
+
+#[inline]
+fn narrow(x: usize) -> u32 {
+    u32::try_from(x).unwrap_or(u32::MAX)
 }
 
 /// Sparse map from byte offsets in normalized text back to the source text.
@@ -145,6 +172,16 @@ impl OffsetMap {
         Self::default()
     }
 
+    /// Heap bytes held by the checkpoints.
+    pub fn heap_bytes(&self) -> usize {
+        self.points.capacity() * std::mem::size_of::<Point>()
+    }
+
+    /// Drops spare capacity (for maps that are kept).
+    pub(crate) fn shrink_to_fit(&mut self) {
+        self.points.shrink_to_fit();
+    }
+
     fn clear(&mut self) {
         self.points.clear();
         self.out_len = 0;
@@ -156,10 +193,10 @@ impl OffsetMap {
         let lockstep = single && src == self.src_end && src_end - src == out_len;
         if !lockstep {
             self.points.push(Point {
-                out: self.out_len,
-                out_len,
-                src,
-                src_end,
+                out: narrow(self.out_len),
+                out_len: narrow(out_len),
+                src: narrow(src),
+                src_end: narrow(src_end),
             });
         }
         self.out_len += out_len;
@@ -171,8 +208,12 @@ impl OffsetMap {
         let x = x.min(self.out_len);
         // Last point that covers or precedes x (for an end: precedes x - 1).
         let key = if end { x.saturating_sub(1) } else { x };
-        let i = self.points.partition_point(|p| p.out <= key);
-        let Some(p) = i.checked_sub(1).and_then(|i| self.points.get(i)) else {
+        let i = self.points.partition_point(|p| p.out as usize <= key);
+        let Some(p) = i
+            .checked_sub(1)
+            .and_then(|i| self.points.get(i))
+            .map(|p| p.wide())
+        else {
             return x;
         };
         if end && x == 0 {
@@ -193,10 +234,11 @@ impl OffsetMap {
     /// Normalized offset for a source offset, as a start (`end == false`) or exclusive end.
     fn map_back(&self, x: usize, end: bool) -> usize {
         // Last point whose source range starts at or before x (for an end: before x).
-        let i = self
-            .points
-            .partition_point(|p| if end { p.src < x } else { p.src <= x });
-        let next_out = self.points.get(i).map_or(self.out_len, |p| p.out);
+        let i = self.points.partition_point(|p| {
+            let src = p.src as usize;
+            if end { src < x } else { src <= x }
+        });
+        let next_out = self.points.get(i).map_or(self.out_len, |p| p.out as usize);
         let Some(mut j) = i.checked_sub(1) else {
             return x.min(next_out);
         };
@@ -204,12 +246,12 @@ impl OffsetMap {
         // range: a start maps to the first of them.
         while !end
             && j > 0
-            && x < self.points[j].src_end
+            && x < self.points[j].src_end as usize
             && self.points[j - 1].src == self.points[j].src
         {
             j -= 1;
         }
-        let p = &self.points[j];
+        let p = self.points[j].wide();
         let inside = if end { x <= p.src_end } else { x < p.src_end };
         if inside {
             if end { p.out + p.out_len } else { p.out }
