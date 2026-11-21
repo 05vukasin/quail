@@ -28,6 +28,8 @@ use rayon::prelude::*;
 use strum::IntoEnumIterator;
 
 use crate::alphabet::Alphabet;
+// quail: hash-table lookups for the probability models (see fast.rs).
+use crate::fast::{FastMap, MAX_TABLE_CHARS, MAX_TABLE_LANGUAGES, NgramTable, pack};
 use crate::constant::{
     CHARS_TO_LANGUAGES_MAPPING, JAPANESE_CHARACTER_SET, TOKENS_WITH_OPTIONAL_WHITESPACE,
     TOKENS_WITHOUT_WHITESPACE,
@@ -71,6 +73,8 @@ pub struct LanguageDetector {
     ngram_language_models: &'static LanguageModelMap,
     unique_ngram_language_models: &'static CountModelMap,
     most_common_ngram_language_models: &'static CountModelMap,
+    // quail: 1- to 3-gram probabilities of every language, built at construction.
+    ngram_table: Option<NgramTable>,
 }
 
 impl LanguageDetector {
@@ -91,6 +95,8 @@ impl LanguageDetector {
             ngram_language_models: &NGRAM_MODELS,
             unique_ngram_language_models: &UNIQUE_NGRAM_MODELS,
             most_common_ngram_language_models: &MOST_COMMON_NGRAM_MODELS,
+            // quail: built once here; `None` beyond `MAX_TABLE_LANGUAGES` (upstream lookups).
+            ngram_table: build_ngram_table(&languages),
         };
 
         if is_every_language_model_preloaded {
@@ -999,18 +1005,35 @@ impl LanguageDetector {
 
         let mut language_counter = Counter::<Language>::new();
 
+        // quail: count the words containing each character once, instead of searching every
+        // word for every character of every mapping entry. Same counts: an entry adds, per
+        // character of its string, the number of words that contain that character.
+        let mut words_with_char: FastMap<char, usize> = FastMap::default();
+        let mut seen: Vec<char> = Vec::new();
+        for word in words.iter() {
+            seen.clear();
+            for character in word.chars() {
+                if !seen.contains(&character) {
+                    seen.push(character);
+                    *words_with_char.entry(character).or_insert(0) += 1;
+                }
+            }
+        }
+
         for (characters, langs) in CHARS_TO_LANGUAGES_MAPPING.iter() {
             let relevant_languages = filtered_languages
                 .intersection(langs)
                 .collect::<HashSet<_>>();
-
-            for word in words.iter() {
-                for character in characters.chars() {
-                    if word.contains(character) {
-                        for language in relevant_languages.iter() {
-                            language_counter[*language] += 1;
-                        }
-                    }
+            if relevant_languages.is_empty() {
+                continue;
+            }
+            let count: usize = characters
+                .chars()
+                .map(|character| words_with_char.get(&character).copied().unwrap_or(0))
+                .sum();
+            if count > 0 {
+                for language in relevant_languages.iter() {
+                    language_counter[*language] += count;
                 }
             }
         }
@@ -1034,6 +1057,15 @@ impl LanguageDetector {
         filtered_languages: &HashSet<Language>,
     ) -> HashMap<Language, f64> {
         let mut probabilities = hashmap!();
+        // quail: one table probe per n-gram for every language.
+        if let Some(table) = &self.ngram_table {
+            for (language, sum) in self.sum_ngram_probabilities_with_table(table, model, filtered_languages) {
+                if sum < 0.0 {
+                    probabilities.insert(language, sum);
+                }
+            }
+            return probabilities;
+        }
         for language in filtered_languages.iter() {
             let sum = self.compute_sum_of_ngram_probabilities(*language, model);
             if sum < 0.0 {
@@ -1041,6 +1073,57 @@ impl LanguageDetector {
             }
         }
         probabilities
+    }
+
+    // quail: the per-language sums of `compute_sum_of_ngram_probabilities`, for all languages
+    // at once. For each language the first backoff level found is added, in model order, so
+    // every sum adds the same values in the same order as upstream.
+    fn sum_ngram_probabilities_with_table(
+        &self,
+        table: &NgramTable,
+        ngram_model: &[Vec<NgramRef>],
+        filtered_languages: &HashSet<Language>,
+    ) -> Vec<(Language, f64)> {
+        let languages: Vec<Language> = filtered_languages.iter().copied().collect();
+        let columns: Vec<Option<usize>> = languages.iter().map(|l| table.column(*l)).collect();
+        let mut sums = vec![0.0f64; languages.len()];
+        let mut found = vec![false; languages.len()];
+        for ngrams in ngram_model.iter() {
+            found.fill(false);
+            let mut remaining = languages.len();
+            for ngram in ngrams {
+                if remaining == 0 {
+                    break;
+                }
+                if ngram.char_count <= MAX_TABLE_CHARS {
+                    let Some(row) = pack(ngram.value).and_then(|key| table.row(key)) else {
+                        continue;
+                    };
+                    for (i, column) in columns.iter().enumerate() {
+                        if found[i] {
+                            continue;
+                        }
+                        if let Some(probability) = column.and_then(|c| NgramTable::value(row, c)) {
+                            sums[i] += probability;
+                            found[i] = true;
+                            remaining -= 1;
+                        }
+                    }
+                } else {
+                    for (i, language) in languages.iter().enumerate() {
+                        if found[i] {
+                            continue;
+                        }
+                        if let Some(probability) = self.look_up_ngram_probability(*language, ngram) {
+                            sums[i] += probability;
+                            found[i] = true;
+                            remaining -= 1;
+                        }
+                    }
+                }
+            }
+        }
+        languages.into_iter().zip(sums).collect()
     }
 
     fn compute_sum_of_ngram_probabilities(
@@ -1077,6 +1160,25 @@ impl LanguageDetector {
         filtered_languages: &HashSet<Language>,
     ) -> Counter<Language> {
         let mut unigram_counter = Counter::<Language>::new();
+        // quail: unigrams are always in the table.
+        if let Some(table) = &self.ngram_table {
+            for language in filtered_languages.iter() {
+                let Some(column) = table.column(*language) else {
+                    continue;
+                };
+                for unigrams in unigram_model.iter() {
+                    let unigram = unigrams.first().unwrap();
+                    if pack(unigram.value)
+                        .and_then(|key| table.row(key))
+                        .and_then(|row| NgramTable::value(row, column))
+                        .is_some()
+                    {
+                        unigram_counter[language] += 1;
+                    }
+                }
+            }
+            return unigram_counter;
+        }
         for language in filtered_languages.iter() {
             for unigrams in unigram_model.iter() {
                 if self
@@ -1096,6 +1198,18 @@ pub(crate) fn split_text_into_words(text: &str) -> Vec<String> {
         .find_iter(&text.trim().to_lowercase())
         .map(|mat| mat.as_str().to_string())
         .collect()
+}
+
+// quail: the lookup table for a detector's languages; `None` (upstream lookups) for more
+// than `MAX_TABLE_LANGUAGES` languages. Languages are sorted so the columns do not depend on
+// the `HashSet` order.
+fn build_ngram_table(languages: &HashSet<Language>) -> Option<NgramTable> {
+    if languages.is_empty() || languages.len() > MAX_TABLE_LANGUAGES {
+        return None;
+    }
+    let mut sorted: Vec<Language> = languages.iter().copied().collect();
+    sorted.sort();
+    Some(NgramTable::build(&sorted))
 }
 
 fn load_count_model(
@@ -1214,7 +1328,11 @@ fn compute_confidence_values(
     probability_maps: Vec<HashMap<Language, f64>>,
     probabilities: HashMap<Language, f64>,
 ) {
-    let denominator: f64 = probabilities.values().sum();
+    // quail: sum in language order, not in the `HashMap`'s random order, so the result does
+    // not change from call to call in the last bits.
+    let mut probabilities: Vec<(Language, f64)> = probabilities.into_iter().collect();
+    probabilities.sort_by(|a, b| a.0.cmp(&b.0));
+    let denominator: f64 = probabilities.iter().map(|(_, p)| p).sum();
 
     // If the denominator is still zero, the exponent of the summed
     // log probabilities is too large to be computed for very long input strings.
@@ -1222,9 +1340,11 @@ fn compute_confidence_values(
     // leave the other languages at 0.0.
     if denominator == 0.0 {
         // For very long inputs, only trigrams are used, so we safely access them at index 0.
-        let probability_map = &probability_maps[0];
+        // quail: in language order, so a tie always picks the same language.
+        let mut probability_map: Vec<(&Language, &f64)> = probability_maps[0].iter().collect();
+        probability_map.sort_by(|a, b| a.0.cmp(b.0));
         let most_likely_language = *probability_map
-            .iter()
+            .into_iter()
             .max_by(|(_, first_probability), (_, second_probability)| {
                 first_probability.total_cmp(second_probability)
             })
@@ -2269,3 +2389,4 @@ mod tests {
         assert_eq!(detector.detect_language_of(""), None);
     }
 }
+

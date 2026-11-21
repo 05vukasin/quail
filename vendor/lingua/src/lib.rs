@@ -422,6 +422,7 @@ mod alphabet;
 mod builder;
 mod constant;
 mod detector;
+mod fast; // quail: hash-table model lookups
 mod file;
 mod isocode;
 mod language;

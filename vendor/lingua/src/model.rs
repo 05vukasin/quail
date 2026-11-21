@@ -15,6 +15,7 @@
  */
 
 use crate::detector::{CountModelFst, LanguageModelFst};
+use crate::fast::{FastSet, pack}; // quail
 use crate::file::{read_count_model_data_file, read_probability_model_data_file};
 use crate::language::Language;
 use crate::ngram::{Ngram, NgramRef};
@@ -216,14 +217,34 @@ pub(crate) fn create_ngrams(words: &[String], ngram_length: usize) -> HashSet<Ng
     ngrams
 }
 
+// quail: the distinct n-grams in order of first occurrence. Upstream iterated a `HashSet`
+// (random order per call), so the f64 sums over them changed in the last bits from call to
+// call. Also slices each word once instead of walking it from the start per n-gram.
 pub(crate) fn create_lower_order_ngrams(
     words: &[String],
     ngram_length: usize,
 ) -> Vec<Vec<NgramRef<'_>>> {
-    let ngrams = create_ngrams(words, ngram_length);
-    let mut lower_order_ngrams = Vec::with_capacity(ngrams.len());
-    for ngram in ngrams {
-        lower_order_ngrams.push(ngram.range_of_lower_order_ngrams().collect_vec());
+    if !(1..6).contains(&ngram_length) {
+        panic!("ngram length {ngram_length} is not in range 1..6");
+    }
+    let mut seen = FastSet::<u128>::default();
+    let mut lower_order_ngrams = Vec::new();
+    let mut bounds = Vec::new();
+    for word in words.iter() {
+        bounds.clear();
+        bounds.extend(word.char_indices().map(|(i, _)| i));
+        bounds.push(word.len());
+        let chars_count = bounds.len() - 1;
+        if chars_count >= ngram_length {
+            for i in 0..=chars_count - ngram_length {
+                let slice = &word[bounds[i]..bounds[i + ngram_length]];
+                // At most five characters, so `pack` always succeeds.
+                if pack(slice).is_some_and(|key| seen.insert(key)) {
+                    lower_order_ngrams
+                        .push(NgramRef::new(slice).range_of_lower_order_ngrams().collect_vec());
+                }
+            }
+        }
     }
     lower_order_ngrams
 }

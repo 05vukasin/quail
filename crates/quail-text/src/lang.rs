@@ -960,6 +960,23 @@ mod tests {
         }
     }
 
+    /// The vendored Lingua sums in a fixed order (upstream iterated a randomly seeded
+    /// `HashSet`), so even the `f64` scores repeat exactly, for long texts (trigrams only)
+    /// and short ones (1- to 5-grams, the fst path).
+    #[test]
+    fn backend_scores_are_deterministic() {
+        let long = "Zakupac je dužan da plaća zakupninu do petog u mesecu. The tenant shall \
+                    pay the rent. Der Mieter zahlt die Miete. Уговор о закупу пословног \
+                    простора. Le locataire paie le loyer. "
+            .repeat(20);
+        for text in [long.as_str(), "plaća zakupninu", "the rent is due"] {
+            let first = DET.inner.compute_language_confidence_values(text);
+            for _ in 0..20 {
+                assert_eq!(DET.inner.compute_language_confidence_values(text), first);
+            }
+        }
+    }
+
     #[test]
     fn candidates_are_a_distribution() {
         let d = DET.detect("Ugovor o zakupu poslovnog prostora").unwrap();

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap; // quail: no HashSet
 use std::sync::LazyLock;
 
 use strum::IntoEnumIterator;
@@ -98,13 +98,16 @@ impl Alphabet {
     }
 }
 
+// quail: sorted, merged code point ranges with a binary search instead of a `HashSet` of
+// every code point (SipHash per character; the Han set alone held ~100 000 entries). The
+// same characters match.
 pub(crate) struct CharSet {
-    characters: HashSet<char>,
+    ranges: Vec<(u32, u32)>,
 }
 
 impl CharSet {
     pub fn from_char_classes(char_classes: &[&str]) -> Self {
-        let mut characters = HashSet::new();
+        let mut ranges: Vec<(u32, u32)> = Vec::new();
 
         for char_class in char_classes {
             let table = crate::script::BY_NAME
@@ -114,13 +117,22 @@ impl CharSet {
                 .1;
 
             for &(start, end) in table {
-                for codepoint in start..=end {
-                    characters.insert(codepoint);
+                if start <= end {
+                    ranges.push((start as u32, end as u32));
                 }
             }
         }
 
-        CharSet { characters }
+        ranges.sort_unstable();
+        let mut merged: Vec<(u32, u32)> = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            match merged.last_mut() {
+                Some(last) if start <= last.1.saturating_add(1) => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+
+        CharSet { ranges: merged }
     }
 
     pub fn from_char_class(char_class: &str) -> Self {
@@ -132,7 +144,9 @@ impl CharSet {
     }
 
     pub fn is_char_match(&self, ch: char) -> bool {
-        self.characters.contains(&ch)
+        let c = ch as u32;
+        let i = self.ranges.partition_point(|&(_, end)| end < c);
+        self.ranges.get(i).is_some_and(|&(start, _)| start <= c)
     }
 }
 
