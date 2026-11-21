@@ -10,8 +10,10 @@ caller registers them on an `EngineBuilder`.
 |-----------------|-------|---------------------------------------------------------------|
 | `engine.format` | text  | `pdf`, `docx`, `zip`, `image`, `text`, `unknown`              |
 | `engine.mime`   | text  | most specific MIME type known from the bytes                  |
+| `engine.duplicate_of` | text | `dedup_by_content` only: locator of the earlier file with the same bytes whose record this one reuses |
 
-Both come from the step `engine.sniff@1`, the first entry of every record's `steps`.
+`engine.format` and `engine.mime` come from the step `engine.sniff@1`, the first entry of
+every record's `steps`; `engine.duplicate_of` from `engine.dedup@1`, the last.
 
 ## Sniffing
 
@@ -74,6 +76,9 @@ preempted inside a thread; process isolation is the service's job.
 | `cancel`              | none                    | `Arc<AtomicBool>`: stop pulling, drain, return      |
 | `stack_size`          | 32 MiB                  | worker stacks: deep recursion on hostile nesting would abort the process |
 | `on_artifacts`        | none                    | `Arc<dyn Fn(&FileRecord, &Artifacts)>` per processed file, on the worker (see below) |
+| `dedup_by_content`    | false                   | reuse the record of an earlier file with the same bytes (see below) |
+| `dedup_max_records`   | 10 000                  | records kept for dedup (LRU)                        |
+| `dedup_max_bytes`     | 64 MiB                  | approximate heap bytes kept for dedup (LRU)         |
 
 Workers are std threads; one writer thread owns the sink; `crossbeam-channel` in between.
 The reader learns of freed slots from the writer and wakes every 20 ms, so it notices
@@ -88,7 +93,28 @@ pulled file is in memory before the byte budget can refuse it.
 
 `RunStats`: files, bytes, ok/partial/failed, source errors / error records / panics, sink
 errors and the first one, unwritten, stopped_on_sink_error, cancelled, stalls,
-writer_panicked, hook panics and the first one, elapsed, `files_per_sec()`, `mb_per_sec()`.
+writer_panicked, hook panics and the first one, duplicates and dedup evictions, elapsed,
+`files_per_sec()`, `mb_per_sec()`.
+
+### Content dedup (`dedup_by_content`, `quail scan --dedup`)
+
+Each worker hashes its file (BLAKE3, the `blake3` crate built like quail-hash's) before
+processing. The first file of a content is processed normally and its finished record kept
+in a run-scoped LRU cache (`dedup_max_records`, `dedup_max_bytes`). A later file with the
+same bytes gets a copy of that record (facts, steps, format, pages, status, warnings) with its
+own locator, plus `engine.duplicate_of` and the step `engine.dedup@1`; its only timing is
+`engine.dedup` (hash and lookup). No step runs for it and `on_artifacts` is not called.
+
+- A copy that arrives while the first is still in flight waits for it (condition variable),
+  at most 2 × `limits.timeout`, then is processed normally: no deadlock, whatever the
+  thread count or ordering.
+- A first copy that ends `Failed`, panics, or does not fit the cache is not reused; the next
+  copy is processed (and may become the cached one).
+- Ordered mode works unchanged: every file keeps its sequence number.
+- Records are assumed to depend on the bytes only; an analyzer reading `Ctx::locator` would
+  leak the first locator into the copies.
+- `quail-worker`'s `IsolatedRunner` ignores it: with path jobs the supervisor never holds the
+  bytes (`quail scan` refuses `--dedup` with `--isolate`).
 
 ## Getting artifacts out
 

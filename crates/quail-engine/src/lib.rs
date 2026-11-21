@@ -26,16 +26,19 @@
 //! worker needs process isolation, which is the job of the service around the library.
 
 mod builder;
+mod dedup;
 mod engine;
 mod panic;
 mod run;
 pub mod sniff;
 
 pub use builder::{BUILTIN_ARTIFACTS, BuildError, EngineBuilder};
+pub use dedup::DEDUP_ID;
 pub use engine::{Engine, SNIFF_ID};
 pub use panic::install_quiet_panic_hook;
 pub use run::{
-    ArtifactsHook, DEFAULT_MAX_IN_FLIGHT_BYTES, DEFAULT_STACK_SIZE, RunOptions, RunStats,
+    ArtifactsHook, DEFAULT_DEDUP_MAX_BYTES, DEFAULT_DEDUP_MAX_RECORDS, DEFAULT_MAX_IN_FLIGHT_BYTES,
+    DEFAULT_STACK_SIZE, RunOptions, RunStats,
 };
 pub use sniff::{Sniff, detect, sniff};
 
@@ -48,4 +51,9 @@ pub mod keys {
     pub const FORMAT: FactKey = FactKey::new("engine.format");
     /// Most specific MIME type known from the bytes, e.g. `application/pdf`.
     pub const MIME: FactKey = FactKey::new("engine.mime");
+    /// On a record reused from an earlier file of the same run with the same bytes
+    /// ([`RunOptions::dedup_by_content`](crate::RunOptions::dedup_by_content)): the locator
+    /// of that first file. Its record was not re-analyzed: the other facts are the first
+    /// file's, and its only timing is the `engine.dedup` step.
+    pub const DUPLICATE_OF: FactKey = FactKey::new("engine.duplicate_of");
 }

@@ -11,6 +11,9 @@ rust-version.workspace = true
 quail-core.workspace = true
 thiserror.workspace = true
 crossbeam-channel = "0.5.15"
+# Content digest for `RunOptions::dedup_by_content`; same build as quail-hash (`pure`: no C
+# toolchain, SIMD still selected at runtime).
+blake3 = { version = "1.8", default-features = false, features = ["std", "pure"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

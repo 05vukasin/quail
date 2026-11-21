@@ -24,6 +24,10 @@ pub const ENGINE: &[KeyDoc] = &[
         key: quail_engine::keys::MIME,
         doc: "Most specific MIME type known from the bytes, e.g. `application/pdf`.",
     },
+    KeyDoc {
+        key: quail_engine::keys::DUPLICATE_OF,
+        doc: "On a record reused from an earlier file of the same run with the same bytes (`RunOptions::dedup_by_content`): the locator of that first file. Its record was not re-analyzed: the other facts are the first file's, and its only timing is the `engine.dedup` step.",
+    },
 ];
 
 /// Keys of `quail_hash::keys`.

@@ -54,6 +54,12 @@ pub const STEPS: &[StepDoc] = &[
         doc: "Format and MIME type from the bytes (magic numbers, ZIP directory).",
     },
     StepDoc {
+        id: quail_engine::DEDUP_ID,
+        kind: StepKind::Engine,
+        formats: &[],
+        doc: "`scan --dedup` only: a file whose bytes were already analyzed in the run reuses that record (`engine.duplicate_of`).",
+    },
+    StepDoc {
         id: quail_hash::IdentityAnalyzer::ID,
         kind: StepKind::Analyzer,
         formats: &[],
