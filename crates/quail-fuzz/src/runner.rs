@@ -14,6 +14,8 @@ use crate::worker::WorkerOpts;
 
 /// How a case ended.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+// The signal-based classes are only produced by the Unix child runner.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub enum Class {
     /// Processed; nothing remarkable.
     Ok,
@@ -203,6 +205,9 @@ pub struct Runner {
     thresholds: Thresholds,
 }
 
+// One `Mode` per runner, never in a collection: variant size does not matter (the Unix
+// child handle makes `Child` larger on some targets).
+#[allow(clippy::large_enum_variant)]
 enum Mode {
     Child {
         exe: PathBuf,
