@@ -1,0 +1,25 @@
+[package]
+name = "quail-items"
+description = "Price items: one record per offered or billed line (description, quantity, unit, unit price, total) with CPV category candidates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+# The CPV index under data/ is derived from public EU and Serbian procurement sources, see
+# data/README.md.
+include = ["src/**", "data/**", "benches/**", "tests/**", "README.md", "Cargo.toml"]
+
+[dependencies]
+quail-core.workspace = true
+quail-text = { path = "../quail-text" }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "items"
+harness = false
+
+[lints]
+workspace = true

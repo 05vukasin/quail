@@ -2800,6 +2800,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quail-items"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "quail-core",
+ "quail-text",
+]
+
+[[package]]
 name = "quail-ocr"
 version = "0.1.0"
 dependencies = [
