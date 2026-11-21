@@ -166,7 +166,8 @@ mod tests {
         assert_eq!(m.get("party").unwrap().normalize, Normalizer::Company);
         assert_eq!(m.get("party").unwrap().field.as_deref(), Some("surface"));
         assert!(m.get("party").unwrap().pending.is_none());
-        assert!(m.get("term").unwrap().pending.is_some());
+        assert!(m.get("term").unwrap().pending.is_none());
+        assert!(m.get("is_scanned").unwrap().pending.is_some());
         assert!(m.get("items").unwrap().rows);
         assert!(!m.get("party").unwrap().rows);
     }

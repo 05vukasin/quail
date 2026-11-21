@@ -2832,12 +2832,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "quail-clauses"
+version = "0.1.0"
+dependencies = [
+ "quail-core",
+]
+
+[[package]]
 name = "quail-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
  "ctrlc",
  "lopdf",
+ "quail-clauses",
  "quail-cli",
  "quail-core",
  "quail-docx",

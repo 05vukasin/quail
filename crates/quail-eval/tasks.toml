@@ -66,14 +66,17 @@ normalize = "date"
 [task.jurisdiction]
 description = "Governing law / jurisdiction"
 keys = ["clause.governing_law"]
+# Canonical English name of the place (`Delaware`, `England and Wales`); `code` holds ISO 3166.
+field = "jurisdiction"
 normalize = "text"
-pending = "no governing-law producer yet"
 
 [task.term]
 description = "Duration of the agreement, as written (e.g. 2 years)"
-keys = ["clause.term"]
+keys = ["clause.term", "clause.survival"]
+# `2 years`, `18 months` in the units the text uses (`duration` holds ISO 8601, `P2Y`). How
+# long obligations survive is pooled: Kleister-NDA labels the confidentiality period as the term.
+field = "text"
 normalize = "text"
-pending = "no term producer yet"
 
 [task.contract_number]
 description = "Contract / reference number"

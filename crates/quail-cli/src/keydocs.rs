@@ -600,6 +600,31 @@ pub const PARTIES: &[KeyDoc] = &[
     },
 ];
 
+/// Keys of `quail_clauses::keys`.
+#[cfg(feature = "clauses")]
+pub const CLAUSES: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_clauses::keys::GOVERNING_LAW,
+        doc: "Governing law (Record: `jurisdiction`, `code`, `raw`, `basis`).",
+    },
+    KeyDoc {
+        key: quail_clauses::keys::TERM,
+        doc: "Term of the agreement (Record: `duration`, `text`, `raw`, `renewal`).",
+    },
+    KeyDoc {
+        key: quail_clauses::keys::SURVIVAL,
+        doc: "How long obligations survive (Record: `duration`, `text`, `raw`).",
+    },
+    KeyDoc {
+        key: quail_clauses::keys::NOTICE_PERIOD,
+        doc: "A notice period (Record: `duration`, `text`, `raw`).",
+    },
+    KeyDoc {
+        key: quail_clauses::keys::TERMINATION,
+        doc: "A termination right (Record: `kind`, `raw`).",
+    },
+];
+
 /// Keys of `quail_sketch::keys`.
 #[cfg(feature = "sketch")]
 pub const SKETCH: &[KeyDoc] = &[

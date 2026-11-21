@@ -12,7 +12,7 @@ name = "quail"
 path = "src/main.rs"
 
 [features]
-default = ["docx", "pdf", "text", "signals", "refs", "parties", "sketch", "items", "summary"]
+default = ["docx", "pdf", "text", "signals", "refs", "parties", "clauses", "sketch", "items", "summary"]
 # Extractors and analyzers wired in by `registry.rs`, one feature per crate.
 docx = ["dep:quail-docx"]
 pdf = ["dep:quail-pdf"]
@@ -20,6 +20,7 @@ text = ["dep:quail-text"]
 signals = ["dep:quail-signals"]
 refs = ["dep:quail-refs"]
 parties = ["dep:quail-parties"]
+clauses = ["dep:quail-clauses"]
 sketch = ["dep:quail-sketch"]
 items = ["dep:quail-items"]
 summary = ["dep:quail-summary"]
@@ -40,6 +41,7 @@ quail-text = { path = "../quail-text", optional = true }
 quail-signals = { path = "../quail-signals", optional = true }
 quail-refs = { path = "../quail-refs", optional = true }
 quail-parties = { path = "../quail-parties", optional = true }
+quail-clauses = { path = "../quail-clauses", optional = true }
 quail-items = { path = "../quail-items", optional = true }
 quail-summary = { path = "../quail-summary", optional = true }
 quail-sketch = { path = "../quail-sketch", optional = true }
