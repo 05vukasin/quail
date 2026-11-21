@@ -6,7 +6,7 @@ later service can answer "who is cheapest for X" across suppliers. Namespace `it
 The crate reports each line as written plus normalized fields and top-3 category candidates
 (EU CPV 2008). It never decides that two suppliers' lines are the same service.
 
-- Analyzer: `item.lines@4` (`ItemLines`), requires `document`, runs after `revised_document`,
+- Analyzer: `item.lines@5` (`ItemLines`), requires `document`, runs after `revised_document`,
   reads `Ctx::document()`. Line extraction is `Profile::Fast`; category candidates are added
   from `Profile::Standard` on. The CPV index is built lazily on the first file that needs
   categories (about 0.16 s, about 9 MB RSS) and shared by every clone of the analyzer.
@@ -95,7 +95,7 @@ UJN translation) is embedded; see `data/README.md` for sources and licence, and
 ## Limits
 
 At most `MAX_ITEMS` (5 000) items per file (then a problem), tables up to 5 000 rows × 64
-columns, 24 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked per
+columns, 40 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked per
 page and per table. Scanned pages without a text layer produce nothing unless OCR filled a
 `RevisedDocument`.
 
@@ -116,6 +116,17 @@ numbers of adjacent cells).
 
 ## Versions
 
+- `item.lines@5`: descriptions by token shape (`src/desc.rs`). A layout or text description
+  holding an air time is split at its dates, times, weekdays and spot codes, and the run of
+  words that reads most like a description is kept (`3 WBTV M 04/21/14 11:24 PM WBTV News @ 11p`
+  becomes `WBTV News @ 11p`; the code goes to `code`). Without a time only dates split it, so
+  product names keep their codes. Dayparts (`M-F`) are kept, make-good notes (`® MG for …`)
+  dropped. Without a header the most text-like column is the description (program over
+  station, network and code columns); a station or code alone under a program row takes that
+  program. A header role over an empty column moves to the unnamed column its values sit in;
+  a price header over a text column without an amount is dropped; `Total Spots` is a
+  quantity; up to 40 rebuilt columns; period labels (`2024`, `Year 2`) are column labels.
+  RealKIE FCC dev: F1 46.2 to 51.7; text-layer documents without a line 16 to 4.
 - `item.lines@4`: PDF tables from the measured line boxes of `Block.lines` (estimated boxes
   only for blocks without them or with merged cells). RealKIE FCC dev: F1 42.6 to 46.2.
 
