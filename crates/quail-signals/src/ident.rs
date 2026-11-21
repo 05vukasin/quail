@@ -204,7 +204,7 @@ impl<'a> IdentScan<'a> {
         while iban.len() < want && j < p.len() && last_group == 4 {
             match p.gap_before(j)? {
                 " " => {}
-                "\n" => breaks += 1,
+                "\n" if !p.paragraph_before(j) => breaks += 1,
                 _ => return None,
             }
             let t = p.text(j);
@@ -212,7 +212,9 @@ impl<'a> IdentScan<'a> {
                 || !matches!(p.kind(j), Some(TokenKind::Number | TokenKind::Alnum))
                 || t.is_empty()
                 || t.len() > 4
-                || !t.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                || !t
+                    .bytes()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
             {
                 return None;
             }
@@ -255,7 +257,12 @@ impl<'a> IdentScan<'a> {
                 conf::IBAN
             };
             self.last_iban = Some(last);
-            out.push(Cand::new(keys::IBAN, Value::text(iban), conf, p.span(i, last)));
+            out.push(Cand::new(
+                keys::IBAN,
+                Value::text(iban),
+                conf,
+                p.span(i, last),
+            ));
             return Some(last + 1);
         }
         // IBAN.

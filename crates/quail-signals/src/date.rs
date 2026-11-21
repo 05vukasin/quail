@@ -208,6 +208,8 @@ const INSTRUMENTS: &[&str] = &[
     "license",
     "plan",
     "indenture",
+    "memorandum",
+    "work",
     "ugovor",
     "ugovora",
     "ugovorom",
@@ -233,6 +235,38 @@ const OTHER: &[&str] = &[
     "other", "separate",
 ];
 
+/// Words before the instrument noun that make it an earlier one whatever its determiner (`have
+/// previously entered into the Agreement dated ...`).
+const EARLIER: &[&str] = &["previously", "heretofore", "originally", "formerly"];
+
+/// Words a period may follow inside a sentence: legal forms and other abbreviations of
+/// company names and references (`Inc.`, `N.A.`, `S.A.`, `ref.`, `No.`).
+const ABBREVIATIONS: &[&str] = &[
+    "inc", "ltd", "co", "corp", "llc", "plc", "lp", "llp", "bv", "nv", "ag", "sa", "no", "nos",
+    "ref", "jr", "sr", "st", "mr", "ms", "dr", "vs",
+];
+
+/// Does the token at `j` end a sentence? A `.` after an abbreviation or a single letter does
+/// not (`Bar Trading S.A.`, `Quux Bank, N. A.`); nor does one after an initialism (`U.S.`).
+fn sentence_end(p: &PageText, j: usize) -> bool {
+    match p.text(j) {
+        ";" => true,
+        "." => {
+            let before = j.checked_sub(1).filter(|&b| p.touch(j) && p.wordlike(b));
+            !before.is_some_and(|b| {
+                let w = p.key(b);
+                w.chars().count() == 1 || w.contains('.') || ABBREVIATIONS.contains(&w)
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Words searched back from a role phrase for the instrument noun (a parties clause between
+/// them: `the Supply Agreement entered into between X Inc. and Y S.A. (a subsidiary of Z)
+/// dated ...`).
+const CITED_WORDS: usize = 24;
+
 /// Is token `i` a word inside quotes (a defined term: `(the "Agreement")`)?
 fn quoted(p: &PageText, i: usize) -> bool {
     let q = |j: usize| matches!(p.text(j), "\"" | "'");
@@ -244,42 +278,80 @@ fn quoted(p: &PageText, i: usize) -> bool {
 fn cited(p: &PageText, first: usize) -> bool {
     let line = p.line(first);
     let mut words = 0;
+    // A verb between the noun and the phrase (`This Amendment to the Statement of Work dated
+    // X, is made effective as of Y`): the noun sits in a phrase of the subject, so another
+    // instrument there does not decide; the subject's own noun further back does.
+    let mut verb = false;
     let mut j = first;
-    while j > 0 && words < 14 {
+    while j > 0 && words < CITED_WORDS {
         j -= 1;
-        if line - p.line(j).min(line) > 2 || matches!(p.text(j), "." | ";") {
+        if line - p.line(j).min(line) > 3 || sentence_end(p, j) {
             return false;
         }
         if !p.wordlike(j) {
             continue;
         }
         words += 1;
+        verb = verb || matches!(p.key(j), "is" | "are");
         if !INSTRUMENTS.contains(&p.key(j)) || quoted(p, j) {
             continue;
         }
-        // The determiner of this noun phrase.
-        let mut k = j;
-        let mut between = 0;
-        while k > 0 && between < 10 {
-            k -= 1;
-            if line - p.line(k).min(line) > 3 || matches!(p.text(k), "." | ";" | ":" | ")") {
-                return false;
-            }
-            if !p.wordlike(k) {
-                continue;
-            }
-            let w = p.key(k);
-            if THIS.contains(&w) {
-                return false;
-            }
-            if OTHER.contains(&w) {
-                // `the Agreement` and `This is an Agreement` are this one.
-                let is_before = prev_word(p, k).is_some_and(|b| p.key(b) == "is");
-                return !((w == "the" && between == 0) || (matches!(w, "a" | "an") && is_before));
-            }
-            between += 1;
+        match determiner(p, j, line) {
+            Some(true) if verb => {}
+            Some(other) => return other,
+            None => return false,
         }
-        return false;
+    }
+    false
+}
+
+/// What the determiner of the instrument noun at `j` says: `Some(true)` another instrument,
+/// `Some(false)` this one, `None` no determiner in reach.
+fn determiner(p: &PageText, j: usize, line: u32) -> Option<bool> {
+    let mut k = j;
+    let mut between = 0;
+    while k > 0 && between < 14 {
+        k -= 1;
+        if line - p.line(k).min(line) > 4 || sentence_end(p, k) || matches!(p.text(k), ":" | ")") {
+            return None;
+        }
+        if !p.wordlike(k) {
+            continue;
+        }
+        let w = p.key(k);
+        if THIS.contains(&w) {
+            return Some(false);
+        }
+        if EARLIER.contains(&w) {
+            return Some(true);
+        }
+        if OTHER.contains(&w) {
+            // `the Agreement` and `This is an Agreement` are this one, unless it was made
+            // earlier (`have previously entered into the Agreement`).
+            let is_before = prev_word(p, k).is_some_and(|b| p.key(b) == "is");
+            let this = (w == "the" && between == 0) || (matches!(w, "a" | "an") && is_before);
+            return Some(!this || earlier_before(p, k));
+        }
+        between += 1;
+    }
+    None
+}
+
+/// An [`EARLIER`] word within the four words before token `k`, in the sentence.
+fn earlier_before(p: &PageText, k: usize) -> bool {
+    let mut seen = 0;
+    let mut j = k;
+    while j > 0 && seen < 4 {
+        j -= 1;
+        if sentence_end(p, j) {
+            return false;
+        }
+        if p.wordlike(j) {
+            seen += 1;
+            if EARLIER.contains(&p.key(j)) {
+                return true;
+            }
+        }
     }
     false
 }
@@ -363,7 +435,9 @@ fn role_conf(r: Role) -> f32 {
 fn role_of(p: &PageText, a: usize, b: usize, first_page: bool) -> Option<(Role, f32)> {
     if let Some((role, first)) = find_before_wrapped(p, a, ROLES, ROLE_REACH) {
         let role = role.filter(|_| !blocked(p, first))?;
-        if matches!(role, Role::Effective | Role::Signed) && cited(p, first) {
+        // `DATED: ...`, `Effective Date: ...`: a field of this document's head.
+        let field = a > 0 && p.text(a - 1) == ":";
+        if matches!(role, Role::Effective | Role::Signed) && !field && cited(p, first) {
             return None;
         }
         return Some((role, role_conf(role)));

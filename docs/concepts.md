@@ -52,7 +52,7 @@ A **fact** is one piece of metadata:
   "key": "signal.iban",
   "value": {"t": "text", "v": "DE89370400440532013000"},
   "conf": 0.98,
-  "src": {"name": "signal.scan", "version": 3},
+  "src": {"name": "signal.scan", "version": 4},
   "evidence": {"page": 0, "zone": "body", "span": {"start": 775, "end": 802},
                "bbox": {"x0": 72.1, "y0": 279.9, "x1": 527.7, "y1": 344.1}}
 }

@@ -14,6 +14,9 @@ pub(crate) struct Tok {
     key: (u32, u32),
     /// Line number (count of `\n` before it).
     pub line: u32,
+    /// The original text has a blank line (a paragraph break) right before it; the
+    /// normalized text keeps only one `\n` of it.
+    pub para: bool,
 }
 
 /// Normalized text of one page and its tokens. Buffers are reused across pages.
@@ -46,9 +49,18 @@ impl PageText {
         let mut line = 0u32;
         let mut last = 0usize;
         let norm = &self.norm;
+        let mut prev_end = 0usize;
         for t in tokens_with_symbols(norm) {
-            line += u32::try_from(memchr_count(&norm.as_bytes()[last..t.start])).unwrap_or(0);
+            let breaks = memchr_count(&norm.as_bytes()[last..t.start]);
+            line += u32::try_from(breaks).unwrap_or(0);
             last = t.start;
+            let para = breaks > 0 && {
+                let a = self.map.to_source(prev_end);
+                let b = self.map.to_source(t.start);
+                text.get(a..b)
+                    .is_some_and(|g| memchr_count(g.as_bytes()) >= 2)
+            };
+            prev_end = t.end;
             let k0 = self.keys.len();
             fold_into(t.text, &FoldOptions::KEY, &mut self.keys);
             let k1 = self.keys.len();
@@ -58,6 +70,7 @@ impl PageText {
                 kind: t.kind,
                 key: (to_u32(k0), to_u32(k1)),
                 line,
+                para,
             });
         }
     }
@@ -101,6 +114,11 @@ impl PageText {
     /// Tokens `i - 1` and `i` touch.
     pub fn touch(&self, i: usize) -> bool {
         matches!(self.gap_before(i), Some(""))
+    }
+
+    /// Is there a blank line in the original text right before token `i`?
+    pub fn paragraph_before(&self, i: usize) -> bool {
+        self.toks.get(i).is_some_and(|t| t.para)
     }
 
     pub fn line(&self, i: usize) -> u32 {

@@ -1,6 +1,6 @@
 //! Rule-based candidates for formatted business data. Namespace `signal.*`.
 //!
-//! One analyzer, [`SignalScan`] (`signal.scan@3`, `Fast`, requires `document`), reads every
+//! One analyzer, [`SignalScan`] (`signal.scan@4`, `Fast`, requires `document`), reads every
 //! page and reports *candidates*, not verdicts: each fact has a calibrated `conf` (see
 //! [`conf`]) and [`Evidence`](quail_core::Evidence) with the page, the zone and box of the
 //! block it sits in, and its byte span in the original page text.
