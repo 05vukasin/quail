@@ -20,13 +20,28 @@ use quail_engine::{DEFAULT_STACK_SIZE, Engine, EngineBuilder};
 /// Panic locations seen while running the current case.
 static PANICS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// A source path without the machine-specific prefix: `hayro-0.9.0/src/x.rs` for a
+/// registry crate, `crates/...` or `vendor/...` for workspace files.
+pub fn short_path(p: &str) -> &str {
+    if let Some(i) = p.find("/registry/src/") {
+        let rest = &p[i + 14..];
+        return rest.find('/').map_or(rest, |j| &rest[j + 1..]);
+    }
+    for marker in ["/crates/", "/vendor/", "/rustlib/src/rust/"] {
+        if let Some(i) = p.rfind(marker) {
+            return &p[i + 1..];
+        }
+    }
+    p
+}
+
 /// Installs a panic hook that records `file:line` of every panic (caught or not) and prints
 /// one line per panic to stderr, so even a panic that turns into an abort leaves its location.
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let loc = info
             .location()
-            .map_or_else(|| "?".to_owned(), |l| format!("{}:{}", l.file(), l.line()));
+            .map_or_else(|| "?".to_owned(), |l| format!("{}:{}", short_path(l.file()), l.line()));
         let msg = info
             .payload()
             .downcast_ref::<&str>()
@@ -464,6 +479,12 @@ mod tests {
         assert_eq!(back.panics, r.panics);
         assert_eq!(back.features, r.features);
         assert_eq!(squash("page 12 of 345"), "page # of #");
+        assert_eq!(
+            short_path("/home/u/.cargo/registry/src/index.crates.io-abc/hayro-0.9.0/src/a.rs"),
+            "hayro-0.9.0/src/a.rs"
+        );
+        assert_eq!(short_path("/w/q/crates/quail-pdf/src/b.rs"), "crates/quail-pdf/src/b.rs");
+        assert_eq!(short_path("vendor/x/src/c.rs"), "vendor/x/src/c.rs");
     }
 
     #[test]
