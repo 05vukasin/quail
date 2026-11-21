@@ -6,6 +6,10 @@
 # multi:     true = set of values (every value scored), false = only the most confident one
 # min_conf:  predictions below it count as abstentions
 # field:     for record values, the field that is the prediction
+# only / except: for record values, keep / drop records by field value ({ kind = [...] })
+# aliases:   predicted value -> the gold vocabulary's value
+# absent_if_equals: the gold leaves this task out when it equals the named task's value; a
+#            prediction equal to that value is then neither TP nor FP
 # pending:   why there is no producer yet (scored as abstentions, flagged in the report)
 
 [task.doc_type]
@@ -14,6 +18,9 @@ description = "Kind of document (contract, invoice, annex, letter, ...)"
 # po order invoice quote (and unknown).
 keys = ["ref.instrument_kind"]
 normalize = "text"
+# serbian-public (silver) names Serbian *aneks* `annex` (quail: `amendment`, a contract
+# amendment by law) and files public notices and generic decisions under `other`.
+aliases = { amendment = "annex", notice = "other", decision = "other" }
 
 [task.doc_title]
 description = "Title of the document as written"
@@ -31,6 +38,9 @@ keys = ["party.company", "docx.clm_first_party", "docx.clm_second_party"]
 field = "surface"
 normalize = "company"
 multi = true
+# Mentions whose only role is `mentioned` score below 0.3 (quail-parties #30): P +22 / R -3.5
+# points on Kleister-NDA dev, P +29 / R -9 on CUAD dev, P +22 / R -1.4 on serbian-public.
+min_conf = 0.3
 
 [task.effective_date]
 description = "Date the agreement takes effect"
@@ -38,6 +48,8 @@ description = "Date the agreement takes effect"
 # +5 F1; CUAD: -0.5).
 keys = ["signal.date_effective", "signal.date_signed"]
 normalize = "date"
+# CUAD (and serbian-public) leave the effective date out when it is the agreement date.
+absent_if_equals = "agreement_date"
 
 [task.agreement_date]
 description = "Date the agreement was signed or dated"
@@ -69,6 +81,48 @@ keys = ["ref.doc_number"]
 field = "raw"
 normalize = "identifier"
 multi = true
+# A Serbian registry ("Broj:") number is the document_number task.
+except = { kind = ["registry"] }
+
+[task.document_number]
+description = "The document's own registry (delovodni) number, e.g. 'Broj: 404-12/25-3'"
+keys = ["ref.doc_number"]
+field = "raw"
+normalize = "identifier"
+only = { kind = ["registry"] }
+
+[task.parent_contract_number]
+description = "Number of the contract / framework agreement this document amends, implements or reports on"
+keys = ["ref.cites"]
+field = "raw"
+normalize = "identifier"
+multi = true
+except = { kind = ["procurement"] }
+
+[task.procurement_number]
+description = "Public procurement number (JN broj / referentni broj)"
+keys = ["ref.cites"]
+field = "raw"
+normalize = "identifier"
+only = { kind = ["procurement"] }
+
+[task.tax_id]
+description = "Tax identification numbers in the document (Serbian PIB, 9 digits)"
+keys = ["signal.rs_pib"]
+normalize = "identifier"
+multi = true
+
+[task.registration_number]
+description = "Company registration numbers (Serbian maticni broj / MB, 8 digits)"
+keys = ["signal.rs_mb"]
+normalize = "identifier"
+multi = true
+
+[task.bank_account]
+description = "Domestic bank account numbers (Serbian 3-13-2 format)"
+keys = ["signal.rs_account"]
+normalize = "bank_account"
+multi = true
 
 [task.iban]
 description = "IBANs in the document"
@@ -85,6 +139,11 @@ normalize = "number"
 description = "Main language of the text"
 keys = ["text.lang"]
 normalize = "language"
+
+[task.script]
+description = "Writing system of the text: latin | cyrillic | mixed"
+keys = ["text.script"]
+normalize = "text"
 
 [task.is_scanned]
 description = "The document is a scan (needs OCR)"

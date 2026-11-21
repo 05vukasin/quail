@@ -25,7 +25,7 @@ use crate::normalize::Normalizer;
 use crate::{Error, Result};
 
 /// How one task is predicted.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskSpec {
     /// Fact keys whose values are predictions for the task (all of them are pooled).
@@ -45,6 +45,23 @@ pub struct TaskSpec {
     /// the field give no prediction; non-record values are used as they are.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    /// For record values: keep only records whose field has one of the listed values
+    /// (`only = { kind = ["registry"] }`). Records without the field are dropped.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub only: BTreeMap<String, Vec<String>>,
+    /// For record values: drop records whose field has one of the listed values
+    /// (`except = { kind = ["registry", "procurement"] }`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub except: BTreeMap<String, Vec<String>>,
+    /// Predicted value → the gold vocabulary's value, compared after normalizing both
+    /// (`aliases = { amendment = "annex" }` when a gold set calls Serbian *aneks* `annex`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub aliases: BTreeMap<String, String>,
+    /// When the gold marks this task absent *because* it equals another task's value (CUAD
+    /// leaves `effective_date` out when it is the agreement date): a prediction equal to a
+    /// gold label of the named task is neither a TP nor an FP on such documents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absent_if_equals: Option<String>,
     /// Why the task has no producer yet (`"quail-pdf #7"`); the keys are the planned names.
     /// Pending tasks are still scored (as abstentions) and flagged in the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,6 +98,18 @@ impl TaskMap {
             }
             if spec.field.as_deref() == Some("") {
                 return Err(Error::parse(origin, format!("task {name}: field is empty")));
+            }
+            if spec.absent_if_equals.as_deref() == Some(name.as_str()) {
+                return Err(Error::parse(
+                    origin,
+                    format!("task {name}: absent_if_equals names the task itself"),
+                ));
+            }
+            if (!spec.only.is_empty() || !spec.except.is_empty()) && spec.field.is_none() {
+                return Err(Error::parse(
+                    origin,
+                    format!("task {name}: only / except need a field"),
+                ));
             }
             if let Some(c) = spec.min_conf
                 && !(0.0..=1.0).contains(&c)
@@ -147,6 +176,31 @@ mod tests {
         assert_eq!(a.field.as_deref(), Some("raw"));
         assert_eq!(a.pending.as_deref(), Some("later"));
         assert!(TaskMap::from_toml("[task.a]\nkeys = [\"x.y\"]\nfield = \"\"\n", p).is_err());
+    }
+
+    #[test]
+    fn reads_filters_aliases_and_absent_if_equals() {
+        let p = Path::new("t.toml");
+        let m = TaskMap::from_toml(
+            "[task.a]\nkeys = [\"x.y\"]\nfield = \"raw\"\nonly = { kind = [\"registry\"] }\n\
+             except = { kind = [\"procurement\"] }\naliases = { amendment = \"annex\" }\n\
+             absent_if_equals = \"b\"\n",
+            p,
+        )
+        .unwrap();
+        let a = m.get("a").unwrap();
+        assert_eq!(a.only["kind"], ["registry"]);
+        assert_eq!(a.except["kind"], ["procurement"]);
+        assert_eq!(a.aliases["amendment"], "annex");
+        assert_eq!(a.absent_if_equals.as_deref(), Some("b"));
+        assert!(
+            TaskMap::from_toml("[task.a]\nkeys = [\"x.y\"]\nabsent_if_equals = \"a\"\n", p)
+                .is_err()
+        );
+        assert!(
+            TaskMap::from_toml("[task.a]\nkeys = [\"x.y\"]\nonly = { kind = [\"k\"] }\n", p)
+                .is_err()
+        );
     }
 
     #[test]
