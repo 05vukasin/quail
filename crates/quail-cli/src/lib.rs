@@ -7,11 +7,13 @@
 //! - [`inspect`]: `quail inspect`, one file pretty-printed.
 //! - [`info`]: `quail keys` and `quail version`.
 //! - [`dump`]: `--dump-documents`, fed by the engine's artifacts hook.
+//! - [`isolate`]: `quail scan --isolate`, files processed in worker child processes.
 
 pub mod cli;
 pub mod dump;
 pub mod info;
 pub mod inspect;
+pub mod isolate;
 pub mod keydocs;
 pub mod registry;
 pub mod scan;
@@ -24,8 +26,10 @@ use clap::Parser;
 
 use crate::cli::{Cli, Command};
 
-/// Parses the arguments and runs the command.
+/// Parses the arguments and runs the command. In a worker child of `scan --isolate` it serves
+/// jobs instead and never returns.
 pub fn main() -> ExitCode {
+    isolate::maybe_serve();
     let cli = Cli::parse();
     let result = match &cli.command {
         Command::Scan(a) => scan::run(a),

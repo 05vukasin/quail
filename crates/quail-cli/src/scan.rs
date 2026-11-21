@@ -7,12 +7,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
-use quail_core::Source;
-use quail_engine::RunOptions;
+use quail_core::{Limits, Source};
+use quail_engine::{Engine, RunOptions};
 use quail_io::{FsSource, JsonlSink, ListSource, ReadOptions};
 
 use crate::cli::ScanArgs;
+use quail_worker::IsolatedRunner;
+
 use crate::dump::DocumentDump;
+use crate::isolate::{self, PathSource, ScanJobs, WorkerSpec};
 use crate::registry;
 use crate::stats::{self, CountingSink, Live};
 
@@ -27,7 +30,6 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     let limits = args.limits.limits();
     // Oversized files are refused by the source, before they are read.
     let read = ReadOptions::new().max_file_bytes(Some(limits.max_bytes));
-    let mut source = source(args, read)?;
 
     let dump = match &args.dump_documents {
         Some(p) => Some(
@@ -35,9 +37,7 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
         ),
         None => None,
     };
-    let engine = registry::builder(args.profile.into(), limits)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut mode = mode(args, limits, read)?;
 
     let sink = sink(args)?;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -76,7 +76,16 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     });
     spawn_pipe_watchdog(Arc::clone(&broken_pipe), Arc::clone(&done), dump.clone());
 
-    let run_stats = engine.run(&mut *source, &mut sink, &opts);
+    let (run_stats, isolated) = match &mut mode {
+        Mode::InProcess(source, engine) => (engine.run(&mut **source, &mut sink, &opts), None),
+        Mode::Isolated(iso) => match iso.1.run_jobs(&mut iso.0, &mut sink, &opts) {
+            Ok(s) => (s.run.clone(), Some(s)),
+            Err(e) => {
+                done.store(true, Ordering::Relaxed);
+                return Err(e.to_string());
+            }
+        },
+    };
 
     done.store(true, Ordering::Relaxed);
     if let Some(p) = progress {
@@ -96,13 +105,13 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
         let _ = writeln!(
             err,
             "{}",
-            stats::json(&run_stats, &sink.tally, opts.threads)
+            stats::json(&run_stats, &sink.tally, opts.threads, isolated.as_ref())
         );
     } else if !args.quiet {
         let _ = write!(
             err,
             "{}",
-            stats::summary(&run_stats, &sink.tally, opts.threads)
+            stats::summary(&run_stats, &sink.tally, opts.threads, isolated.as_ref())
         );
     }
     if let Some(e) = &dump_err {
@@ -127,6 +136,48 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// How the files are processed.
+enum Mode {
+    /// Engine threads in this process.
+    InProcess(Box<dyn Source>, Box<Engine>),
+    /// Worker child processes reading paths.
+    Isolated(Box<(ScanJobs, IsolatedRunner)>),
+}
+
+/// In process: one engine shared by the threads. Isolated: each worker builds its own and
+/// the supervisor only walks paths (no models are loaded here).
+fn mode(args: &ScanArgs, limits: Limits, read: ReadOptions) -> Result<Mode, String> {
+    let spec = WorkerSpec {
+        profile: args.profile.into(),
+        limits,
+    };
+    if args.isolate {
+        let cap = spec.limits.max_bytes;
+        let paths = path_source(args, read)?;
+        let opts = isolate::options(&spec, args.worker_mem, !args.no_retry);
+        let jobs = isolate::jobs(paths, cap);
+        return Ok(Mode::Isolated(Box::new((jobs, IsolatedRunner::new(opts)))));
+    }
+    let engine = registry::builder(spec.profile, spec.limits)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(Mode::InProcess(source(args, read)?, Box::new(engine)))
+}
+
+/// The paths of the scan without reading the files, for workers that read them.
+fn path_source(args: &ScanArgs, read: ReadOptions) -> Result<PathSource, String> {
+    if let Some(m) = &args.manifest {
+        if m == Path::new("-") {
+            let r = BufReader::new(io::stdin());
+            let src = ListSource::from_reader(r, None).read_options(read);
+            return Ok(PathSource::Manifest(Box::new(src)));
+        }
+        let src = ListSource::open(m).map_err(|e| format!("manifest: {e}"))?;
+        return Ok(PathSource::Manifest(Box::new(src.read_options(read))));
+    }
+    Ok(PathSource::Walk(Box::new(fs_source(args, read)?)))
+}
+
 fn source(args: &ScanArgs, read: ReadOptions) -> Result<Box<dyn Source>, String> {
     if let Some(m) = &args.manifest {
         if m == Path::new("-") {
@@ -138,6 +189,10 @@ fn source(args: &ScanArgs, read: ReadOptions) -> Result<Box<dyn Source>, String>
         let src = ListSource::open(m).map_err(|e| format!("manifest: {e}"))?;
         return Ok(Box::new(src.read_options(read)));
     }
+    Ok(Box::new(fs_source(args, read)?))
+}
+
+fn fs_source(args: &ScanArgs, read: ReadOptions) -> Result<FsSource, String> {
     let mut b = FsSource::builder()
         .roots(args.paths.iter().cloned())
         .skip_hidden(args.skip_hidden)
@@ -153,7 +208,7 @@ fn source(args: &ScanArgs, read: ReadOptions) -> Result<Box<dyn Source>, String>
     for e in args.ext.iter().filter(|e| !e.trim().is_empty()) {
         b = b.extension(e.trim());
     }
-    Ok(Box::new(b.build().map_err(|e| e.to_string())?))
+    b.build().map_err(|e| e.to_string())
 }
 
 fn sink(args: &ScanArgs) -> Result<JsonlSink, String> {

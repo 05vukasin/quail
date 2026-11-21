@@ -66,7 +66,13 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[Format::Docx],
         doc: "Streaming OOXML reader: sections as logical pages, zones, properties, rsids.",
     },
-    // TODO(quail-pdf #7): StepDoc for `pdf.extract@1` (feature "pdf").
+    #[cfg(feature = "pdf")]
+    StepDoc {
+        id: quail_pdf::PdfExtractor::ID,
+        kind: StepKind::Extractor,
+        formats: &[Format::Pdf],
+        doc: "Pure-Rust PDF reader: positioned text in reading order, zones, images, OCR flags, raster.",
+    },
     #[cfg(feature = "text")]
     StepDoc {
         id: quail_text::TextStats::ID,
@@ -151,11 +157,13 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "Byte-compatible port of the reference service's MinHash and template sketches.",
     },
-    // TODO(engine): `sketch.page_phash@1` requires the `raster` artifact. The PDF extractor
-    // (quail-pdf #7) inserts it at run time, but `EngineBuilder::build` only accepts
-    // `BUILTIN_ARTIFACTS` (`document`) or an analyzer's `provides()`, so the build fails with
-    // `Unsatisfied { artifact: "raster" }` even with quail-pdf. Register it (StepDoc + builder,
-    // `all(sketch, pdf)`) once extractors can declare the artifacts they provide.
+    #[cfg(all(feature = "sketch", feature = "pdf"))]
+    StepDoc {
+        id: quail_sketch::PagePHash::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "64-bit DCT pHash of each scanned page (embedded scan or 36 dpi render; needs `raster`).",
+    },
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
@@ -168,9 +176,8 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
         .analyzer(Box::new(quail_hash::IdentityAnalyzer));
     #[cfg(feature = "docx")]
     let b = b.extractor(Box::new(quail_docx::DocxExtractor::new()));
-    // TODO(quail-pdf #7):
-    // #[cfg(feature = "pdf")]
-    // let b = b.extractor(Box::new(quail_pdf::PdfExtractor::new()));
+    #[cfg(feature = "pdf")]
+    let b = b.extractor(Box::new(quail_pdf::PdfExtractor::new()));
     #[cfg(feature = "text")]
     let b = b
         .analyzer(Box::new(quail_text::TextStats))
@@ -192,6 +199,9 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
         .analyzer(Box::new(quail_sketch::InvoiceLayout))
         .analyzer(Box::new(quail_sketch::TextKey))
         .analyzer(Box::new(quail_sketch::SadaMinHash));
+    // Needs the `raster` artifact, which only the PDF extractor provides.
+    #[cfg(all(feature = "sketch", feature = "pdf"))]
+    let b = b.analyzer(Box::new(quail_sketch::PagePHash));
     b
 }
 
@@ -204,7 +214,8 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     ];
     #[cfg(feature = "docx")]
     v.push(("quail-docx", keydocs::DOCX));
-    // TODO(quail-pdf #7): v.push(("quail-pdf", keydocs::PDF));
+    #[cfg(feature = "pdf")]
+    v.push(("quail-pdf", keydocs::PDF));
     #[cfg(feature = "text")]
     v.push(("quail-text", keydocs::TEXT));
     #[cfg(feature = "signals")]
@@ -267,7 +278,7 @@ mod tests {
 
     /// Every key the evaluation task map reads exists in this build, unless the task is
     /// pending or the key's namespace belongs to a crate this build does not have (`pdf.*`
-    /// before quail-pdf is wired). Catches a task pointing at a misspelled or renamed key.
+    /// without the `pdf` feature). Catches a task pointing at a misspelled or renamed key.
     #[test]
     fn eval_tasks_read_real_keys() {
         let tables = key_tables();
@@ -304,6 +315,8 @@ mod tests {
             ("quail-hash", "quail-hash/src/lib.rs"),
             #[cfg(feature = "docx")]
             ("quail-docx", "quail-docx/src/keys.rs"),
+            #[cfg(feature = "pdf")]
+            ("quail-pdf", "quail-pdf/src/lib.rs"),
             #[cfg(feature = "text")]
             ("quail-text", "quail-text/src/lib.rs"),
             #[cfg(feature = "signals")]

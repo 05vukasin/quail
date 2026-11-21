@@ -1,0 +1,166 @@
+//! Generated inputs shared by the integration tests: DOCX and PDF built in code, no real
+//! documents.
+#![allow(dead_code, clippy::cast_precision_loss, clippy::similar_names)]
+
+use std::io::{Cursor, Write};
+
+use lopdf::content::{Content, Operation};
+use lopdf::{Document, Object, Stream, dictionary};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
+
+/// A minimal DOCX: one section with a title paragraph, a body paragraph and core properties.
+pub fn docx(title: &str, body: &str) -> Vec<u8> {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut z = ZipWriter::new(Cursor::new(Vec::new()));
+    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let parts = [
+        (
+            "[Content_Types].xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_owned(),
+        ),
+        (
+            "_rels/.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#.to_owned(),
+        ),
+        (
+            "word/document.xml",
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W}"><w:body><w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:r><w:t>{title}</w:t></w:r></w:p><w:p><w:r><w:t>{body}</w:t></w:r></w:p></w:body></w:document>"#
+            ),
+        ),
+        (
+            "docProps/core.xml",
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{title}</dc:title></cp:coreProperties>"#
+            ),
+        ),
+    ];
+    for (name, data) in parts {
+        z.start_file(name, opts).unwrap();
+        z.write_all(data.as_bytes()).unwrap();
+    }
+    z.finish().unwrap().into_inner()
+}
+
+/// US Letter, points.
+const W: f32 = 612.0;
+const H: f32 = 792.0;
+
+/// One page of a generated PDF.
+pub enum PdfPage<'a> {
+    /// Lines of Helvetica text, top to bottom.
+    Text(&'a [&'a str]),
+    /// One grayscale image drawn over the whole page, no text: what a scanner produces.
+    Scan,
+}
+
+/// A PDF with these pages and an Info dictionary (`Title`, `Producer`).
+pub fn pdf(pages: &[PdfPage<'_>], title: &str) -> Vec<u8> {
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let font_id = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+        "Encoding" => "WinAnsiEncoding",
+    });
+    // A 64x64 diagonal gradient with a dark block: a non-flat image, so the pHash has
+    // something to hash.
+    let side = 64u32;
+    let pixels: Vec<u8> = (0..side * side)
+        .map(|i| {
+            let (x, y) = (i % side, i / side);
+            if (16..32).contains(&x) && (20..44).contains(&y) {
+                10
+            } else {
+                u8::try_from((x + y) * 2).unwrap_or(255)
+            }
+        })
+        .collect();
+    let image_id = doc.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => i64::from(side),
+            "Height" => i64::from(side),
+            "ColorSpace" => "DeviceGray",
+            "BitsPerComponent" => 8,
+        },
+        pixels,
+    ));
+    let mut kids = Vec::new();
+    for page in pages {
+        let mut ops = Vec::new();
+        match page {
+            PdfPage::Scan => {
+                ops.push(Operation::new("q", vec![]));
+                ops.push(Operation::new(
+                    "cm",
+                    vec![W.into(), 0.into(), 0.into(), H.into(), 0.into(), 0.into()],
+                ));
+                ops.push(Operation::new("Do", vec!["Im1".into()]));
+                ops.push(Operation::new("Q", vec![]));
+            }
+            PdfPage::Text(lines) => {
+                for (i, l) in lines.iter().enumerate() {
+                    let top = 72.0 + 16.0 * i as f32;
+                    ops.push(Operation::new("BT", vec![]));
+                    ops.push(Operation::new("Tf", vec!["F1".into(), 11.into()]));
+                    ops.push(Operation::new("Td", vec![72.into(), (H - top).into()]));
+                    ops.push(Operation::new(
+                        "Tj",
+                        vec![Object::string_literal(l.as_bytes().to_vec())],
+                    ));
+                    ops.push(Operation::new("ET", vec![]));
+                }
+            }
+        }
+        let content = Content { operations: ops };
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+        });
+        kids.push(page_id.into());
+    }
+    let count = i64::try_from(kids.len()).unwrap();
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => kids,
+            "Count" => count,
+            "Resources" => dictionary! {
+                "Font" => dictionary! { "F1" => font_id },
+                "XObject" => dictionary! { "Im1" => image_id },
+            },
+            "MediaBox" => vec![0.into(), 0.into(), W.into(), H.into()],
+        }),
+    );
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    let info_id = doc.add_object(dictionary! {
+        "Title" => Object::string_literal(title),
+        "Producer" => Object::string_literal("quail test generator"),
+    });
+    doc.trailer.set("Root", catalog_id);
+    doc.trailer.set("Info", info_id);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
+/// Body lines of a contract-like page: identifiers, dates, amounts, a document number.
+pub const CONTRACT: &[&str] = &[
+    "SUPPLY AGREEMENT No. 114/23",
+    "This Agreement is made between Alpha Widgets LLC (the Supplier)",
+    "and Beta Components GmbH (the Customer).",
+    "Effective Date: March 1, 2021. The supplier shall deliver the services",
+    "described in this agreement within thirty days of the effective date,",
+    "and the customer shall pay every invoice within forty five days of receipt.",
+    "Payments go to IBAN DE89 3704 0044 0532 0130 00. Total: EUR 4,200.50.",
+];

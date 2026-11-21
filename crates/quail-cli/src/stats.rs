@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use quail_core::{Error, FileRecord, RecordSink, Result, Status};
 use quail_engine::RunStats;
+use quail_worker::IsolatedStats;
 
 /// Counters shared with the progress thread.
 #[derive(Debug, Default)]
@@ -213,11 +214,44 @@ pub fn spawn_progress(
 /// How many problem kinds the summary lists.
 pub const TOP: usize = 8;
 
-/// The human summary.
-pub fn summary(stats: &RunStats, tally: &Tally, threads: usize) -> String {
+/// The human summary. `isolated`: the worker stats of an `--isolate` run.
+pub fn summary(
+    stats: &RunStats,
+    tally: &Tally,
+    threads: usize,
+    isolated: Option<&IsolatedStats>,
+) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
-    let _ = writeln!(s, "quail: {stats} [{threads} threads]");
+    let unit = if isolated.is_some() {
+        "isolated workers"
+    } else {
+        "threads"
+    };
+    let _ = writeln!(s, "quail: {stats} [{threads} {unit}]");
+    if let Some(i) = isolated
+        && (i.crashes > 0 || i.spawn_failures > 0)
+    {
+        let kinds: Vec<String> = i
+            .crash_kinds
+            .iter()
+            .map(|(k, n)| format!("{n} {k}"))
+            .collect();
+        let _ = writeln!(
+            s,
+            "  worker crashes: {} ({}); {} retried ({} ok), {} poisoned, {} respawns, {} spawn failures",
+            i.crashes,
+            kinds.join(", "),
+            i.retries,
+            i.retried_ok,
+            i.poisoned,
+            i.respawns,
+            i.spawn_failures
+        );
+        if let Some(c) = &i.first_crash {
+            let _ = writeln!(s, "  first crash: {c}");
+        }
+    }
     if stats.source_errors > 0 {
         let _ = writeln!(
             s,
@@ -248,9 +282,15 @@ pub fn summary(stats: &RunStats, tally: &Tally, threads: usize) -> String {
     s
 }
 
-/// The machine summary (`--json-stats`), one JSON object.
-pub fn json(stats: &RunStats, tally: &Tally, threads: usize) -> serde_json::Value {
-    serde_json::json!({
+/// The machine summary (`--json-stats`), one JSON object. An `--isolate` run adds
+/// `"isolation"`: crashes (total and by kind), retries, poisoned files, respawns.
+pub fn json(
+    stats: &RunStats,
+    tally: &Tally,
+    threads: usize,
+    isolated: Option<&IsolatedStats>,
+) -> serde_json::Value {
+    let mut v = serde_json::json!({
         "files": stats.files,
         "bytes": stats.bytes,
         "ok": stats.ok,
@@ -274,7 +314,20 @@ pub fn json(stats: &RunStats, tally: &Tally, threads: usize) -> serde_json::Valu
         "top_problems": tally.top(TOP).into_iter()
             .map(|(problem, count)| serde_json::json!({"problem": problem, "count": count}))
             .collect::<Vec<_>>(),
-    })
+    });
+    if let Some(i) = isolated {
+        v["isolation"] = serde_json::json!({
+            "crashes": i.crashes,
+            "crash_kinds": i.crash_kinds,
+            "first_crash": i.first_crash,
+            "retries": i.retries,
+            "retried_ok": i.retried_ok,
+            "poisoned": i.poisoned,
+            "respawns": i.respawns,
+            "spawn_failures": i.spawn_failures,
+        });
+    }
+    v
 }
 
 #[cfg(test)]

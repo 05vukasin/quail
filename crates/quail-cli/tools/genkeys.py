@@ -13,6 +13,7 @@ SPECS = [
     ("ENGINE", "quail_engine::keys", "quail-engine/src/lib.rs", "keys", None),
     ("HASH", "quail_hash::keys", "quail-hash/src/lib.rs", "keys", None),
     ("DOCX", "quail_docx::keys", "quail-docx/src/keys.rs", None, "docx"),
+    ("PDF", "quail_pdf::keys", "quail-pdf/src/lib.rs", "keys", "pdf"),
     ("TEXT", "quail_text::keys", "quail-text/src/lib.rs", "keys", "text"),
     ("SIGNALS", "quail_signals::keys", "quail-signals/src/lib.rs", "keys", "signals"),
     ("REFS", "quail_refs::keys", "quail-refs/src/lib.rs", "keys", "refs"),

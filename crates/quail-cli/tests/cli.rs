@@ -3,7 +3,7 @@
 #![allow(clippy::many_single_char_names)]
 
 use std::fs;
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -14,8 +14,9 @@ use quail_core::{FileRecord, Format, Status};
 #[cfg(feature = "docx")]
 use quail_eval::inspect::{DocumentSource, Sidecar};
 use serde_json::Value as Json;
-use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter};
+
+mod common;
+use common::docx;
 
 fn quail() -> Command {
     Command::new(env!("CARGO_BIN_EXE_quail"))
@@ -31,40 +32,6 @@ fn stdout(o: &Output) -> String {
 
 fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
-}
-
-/// A minimal DOCX: one section with a title paragraph, a body paragraph and core properties.
-fn docx(title: &str, body: &str) -> Vec<u8> {
-    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-    let mut z = ZipWriter::new(Cursor::new(Vec::new()));
-    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-    let parts = [
-        (
-            "[Content_Types].xml",
-            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_owned(),
-        ),
-        (
-            "_rels/.rels",
-            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#.to_owned(),
-        ),
-        (
-            "word/document.xml",
-            format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W}"><w:body><w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:r><w:t>{title}</w:t></w:r></w:p><w:p><w:r><w:t>{body}</w:t></w:r></w:p></w:body></w:document>"#
-            ),
-        ),
-        (
-            "docProps/core.xml",
-            format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{title}</dc:title></cp:coreProperties>"#
-            ),
-        ),
-    ];
-    for (name, data) in parts {
-        z.start_file(name, opts).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
-    }
-    z.finish().unwrap().into_inner()
 }
 
 fn write(dir: &Path, rel: &str, data: &[u8]) -> PathBuf {
@@ -551,7 +518,12 @@ fn keys_and_version() {
         .iter()
         .map(|s| s["id"].as_str().unwrap().to_owned())
         .collect();
-    let mut expected = vec!["engine.sniff@1", "docx.extract@1", "hash.identity@1"];
+    // Extractors in format order (PDF before DOCX), then the analyzers in registration order.
+    let mut expected = vec!["engine.sniff@1"];
+    if cfg!(feature = "pdf") {
+        expected.push("pdf.extract@1");
+    }
+    expected.extend(["docx.extract@1", "hash.identity@1"]);
     if cfg!(feature = "text") {
         expected.extend(["text.stats@1", "text.lang@1"]);
     }
@@ -574,6 +546,9 @@ fn keys_and_version() {
             "sketch.text_key@1",
             "sketch.minhash_sada@1",
         ]);
+    }
+    if cfg!(all(feature = "sketch", feature = "pdf")) {
+        expected.push("sketch.page_phash@1");
     }
     assert_eq!(ids, expected);
     // Deterministic.
