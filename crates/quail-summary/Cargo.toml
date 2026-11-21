@@ -11,7 +11,8 @@ rust-version.workspace = true
 default = []
 # `summary.llm@1`: a local GGUF model through llama.cpp (`llama-cpp-2`). Builds llama.cpp with
 # CMake and a C++ compiler; `dynamic-backends` builds one CPU backend per microarchitecture and
-# picks one at load time (no `target-cpu=native`). Never in the default build.
+# picks one at load time (no `target-cpu=native`); `common` adds the JSON-schema-to-grammar
+# compiler (llama.cpp's `common` library is built either way). Never in the default build.
 llm = ["dep:llama-cpp-2", "dep:sha2"]
 # `fetch_models`: downloads the GGUF files of the manifest, checking SHA-256.
 fetch = ["dep:ureq", "dep:sha2"]
@@ -25,7 +26,7 @@ blake3 = { version = "1.8", default-features = false, features = ["std", "pure"]
 
 # Exact version: the research measured this release (llama.cpp with Qwen3.5 support), and the
 # wrapper's API still changes between patch releases.
-llama-cpp-2 = { version = "=0.1.161", default-features = false, features = ["dynamic-backends"], optional = true }
+llama-cpp-2 = { version = "=0.1.161", default-features = false, features = ["dynamic-backends", "common"], optional = true }
 sha2 = { version = "0.11", optional = true }
 ureq = { version = "3.1", optional = true }
 
@@ -38,3 +39,7 @@ workspace = true
 [[example]]
 name = "fetch_models"
 required-features = ["fetch"]
+
+[[example]]
+name = "llm_probe"
+required-features = ["llm"]

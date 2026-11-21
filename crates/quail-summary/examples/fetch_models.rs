@@ -19,13 +19,13 @@ fn main() -> ExitCode {
     let which = args.next().unwrap_or_else(|| "default".to_owned());
     let files: Vec<_> = match which.as_str() {
         "all" => MANIFEST.iter().collect(),
-        t => match Tier::parse(t) {
-            Some(t) => vec![models::file(t)],
-            None => {
+        t => {
+            let Some(t) = Tier::parse(t) else {
                 eprintln!("unknown tier `{t}`: small, default or all");
                 return ExitCode::FAILURE;
-            }
-        },
+            };
+            vec![models::file(t)]
+        }
     };
     let Some(dir) = args.next().map(PathBuf::from).or_else(models::model_dir) else {
         eprintln!("no model directory: pass one or set {}", models::MODELS_ENV);

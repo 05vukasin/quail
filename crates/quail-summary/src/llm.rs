@@ -71,7 +71,7 @@ impl Default for LlmConfig {
             head_tokens: 800,
             card_tokens: 300,
             max_output_tokens: 200,
-            timeout: Duration::from_secs(60),
+            timeout: Duration::from_mins(1),
             skip_kinds: vec!["invoice".to_owned(), "po".to_owned()],
         }
     }
@@ -192,12 +192,14 @@ impl LlmSummarizer {
         let t0 = Instant::now();
         let mut batch = LlamaBatch::new(n_batch as usize, 1);
         let mut pos: i32 = 0;
+        let mut done = 0usize;
         for chunk in toks.chunks(n_batch as usize) {
             if Instant::now() >= deadline {
                 return Err(Error::Timeout);
             }
             batch.clear();
-            let last_chunk = pos as usize + chunk.len() == toks.len();
+            done += chunk.len();
+            let last_chunk = done == toks.len();
             for (i, &t) in chunk.iter().enumerate() {
                 let is_last = last_chunk && i + 1 == chunk.len();
                 batch
@@ -247,7 +249,7 @@ impl LlmSummarizer {
         let deadline = input.deadline.map_or(deadline, |d| d.min(deadline));
         let (raw, stats) = self.generate(&p, deadline)?;
         let out = prompt::parse(&raw).map_err(|e| Error::Resource(format!("model output: {e}")))?;
-        let subject_src = input.subject.map(|s| s.text.as_str()).unwrap_or("");
+        let subject_src = input.subject.map_or("", |s| s.text.as_str());
         let sources = [input.card_text, input.text_head, subject_src];
         let mut fc = factcheck::check(&format!("{} {}", out.summary, out.subject), &sources, true);
         let title = factcheck::check(&out.title_en, &sources, false);
@@ -384,15 +386,14 @@ impl Analyzer for SummaryLlm {
         };
         let id = self.summarizer.id();
         let key = CacheKey::new(&card_text, text_head, &id);
-        let (summary, cached) = match self.cache.as_ref().and_then(|c| c.get(&key)) {
-            Some(s) => ((*s).clone(), true),
-            None => {
-                let s = checked_or_extractive(self.summarizer.as_ref(), &input);
-                if let Some(c) = &self.cache {
-                    c.put(key, Arc::new(s.clone()));
-                }
-                (s, false)
+        let (summary, cached) = if let Some(s) = self.cache.as_ref().and_then(|c| c.get(&key)) {
+            ((*s).clone(), true)
+        } else {
+            let s = checked_or_extractive(self.summarizer.as_ref(), &input);
+            if let Some(c) = &self.cache {
+                c.put(key, Arc::new(s.clone()));
             }
+            (s, false)
         };
         for w in &summary.warnings {
             out.warn(format!("{}: {w}", Self::ID));
