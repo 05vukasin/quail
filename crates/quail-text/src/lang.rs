@@ -21,7 +21,10 @@
 //! cache (thread-safe, read-only once loaded); [`LanguageDetector::new`] warms them up with
 //! two short texts so the cost is paid at construction. quail never asks Lingua to preload
 //! or unload models, because those calls run on rayon's global thread pool and would start
-//! it (one thread per core); detection itself runs on the caller's thread.
+//! it (one thread per core); detection itself runs on the caller's thread. The vendored
+//! Lingua (`vendor/lingua`) also builds, at construction, a hash table of every 1- to
+//! 3-gram probability of the 11 models (about 7 MB, 0.1 s), so a lookup is one probe for
+//! all languages instead of an fst walk per language; scores are unchanged.
 //!
 //! Text is sampled before detection ([`DetectorOptions::max_chars`], taken from the start,
 //! middle and end of the text) so cost per document is bounded: about 1 ms for the default
