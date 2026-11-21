@@ -177,6 +177,13 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "64-bit DCT pHash of each scanned page (embedded scan or 36 dpi render; needs `raster`).",
     },
+    #[cfg(feature = "ocr")]
+    StepDoc {
+        id: quail_ocr::OcrPages::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "OCR of pages that need it (PP-OCRv6 + Cyrillic re-read, Deep only); text replaces those pages for later steps.",
+    },
     #[cfg(feature = "items")]
     StepDoc {
         id: quail_items::ItemLines::ID,
@@ -238,6 +245,10 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     // Needs the `raster` artifact, which only the PDF extractor provides.
     #[cfg(all(feature = "sketch", feature = "pdf"))]
     let b = b.analyzer(Box::new(quail_sketch::PagePHash));
+    // OCR runs in `Profile::Deep` only. The backend (model check, SHA-256 of every file) is
+    // built only then; under other profiles the step is inactive and never loads anything.
+    #[cfg(feature = "ocr")]
+    let b = b.analyzer(Box::new(ocr_analyzer(profile)));
     // Builds its CPV index once; shared by every worker.
     #[cfg(feature = "items")]
     let b = b.analyzer(Box::new(quail_items::ItemLines::new()));
@@ -276,7 +287,48 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     v.push(("quail-items", keydocs::ITEMS));
     #[cfg(feature = "summary")]
     v.push(("quail-summary", keydocs::SUMMARY));
+    #[cfg(feature = "ocr")]
+    v.push(("quail-ocr", keydocs::OCR));
     v
+}
+
+/// The OCR step for `profile`: with the PP-OCRv6 backend under `Deep`, else a stand-in that
+/// is never planned.
+#[cfg(feature = "ocr")]
+fn ocr_analyzer(profile: Profile) -> quail_ocr::OcrPages {
+    if profile < Profile::Deep {
+        return quail_ocr::OcrPages::unavailable("ocr runs under --profile deep only");
+    }
+    let workers = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    quail_ocr::OcrPages::with_default_backend(workers)
+}
+
+/// Why OCR cannot run in this build, if it cannot: no `ocr` feature, no model directory, or
+/// missing models. `scan` and `inspect` print it once under `--profile deep`.
+pub fn ocr_unavailable() -> Option<String> {
+    #[cfg(feature = "ocr")]
+    {
+        let Some(dir) = quail_ocr::models::model_dir() else {
+            return Some(format!(
+                "no OCR model directory (set {})",
+                quail_ocr::models::MODELS_ENV
+            ));
+        };
+        let missing = quail_ocr::models::missing(&dir);
+        if missing.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "{} OCR model files missing in {} (run `quail models fetch`)",
+                missing.len(),
+                dir.display()
+            ))
+        }
+    }
+    #[cfg(not(feature = "ocr"))]
+    {
+        Some("built without the `ocr` feature".to_owned())
+    }
 }
 
 /// The documentation of a step, if it is registered here.
@@ -324,6 +376,19 @@ mod tests {
             );
         }
         assert!(fast.plan().any(|x| x == quail_sketch::MinHashAnalyzer::ID));
+    }
+
+    /// OCR is planned under Deep only (with or without models: without, it reports why).
+    #[test]
+    #[cfg(feature = "ocr")]
+    fn ocr_runs_only_under_deep() {
+        let id = quail_ocr::OcrPages::ID;
+        for p in [Profile::Fast, Profile::Standard] {
+            let e = builder(p, Limits::default()).build().unwrap();
+            assert!(e.inactive().contains(&id), "{id} active under {p:?}");
+        }
+        let deep = builder(Profile::Deep, Limits::default()).build().unwrap();
+        assert!(deep.plan().any(|x| x == id));
     }
 
     /// Every key the evaluation task map reads exists in this build, unless the task is
@@ -383,6 +448,8 @@ mod tests {
             ("quail-items", "quail-items/src/lib.rs"),
             #[cfg(feature = "summary")]
             ("quail-summary", "quail-summary/src/lib.rs"),
+            #[cfg(feature = "ocr")]
+            ("quail-ocr", "quail-ocr/src/lib.rs"),
         ];
         let tables = key_tables();
         for (krate, file) in sources {

@@ -8,6 +8,7 @@
 //! - [`info`]: `quail keys` and `quail version`.
 //! - [`dump`]: `--dump-documents`, fed by the engine's artifacts hook.
 //! - [`isolate`]: `quail scan --isolate`, files processed in worker child processes.
+//! - `models` (feature `ocr`): `quail models fetch|list`, the OCR model files.
 
 pub mod cli;
 pub mod dump;
@@ -15,6 +16,8 @@ pub mod info;
 pub mod inspect;
 pub mod isolate;
 pub mod keydocs;
+#[cfg(feature = "ocr")]
+pub mod models;
 pub mod registry;
 pub mod scan;
 pub mod stats;
@@ -36,6 +39,8 @@ pub fn main() -> ExitCode {
         Command::Inspect(a) => inspect::run(a).map(|(out, code)| print(&out).unwrap_or(code)),
         Command::Keys(a) => Ok(print(&info::keys(a)).unwrap_or(ExitCode::SUCCESS)),
         Command::Version(a) => info::version(a).map(|out| print(&out).unwrap_or(ExitCode::SUCCESS)),
+        #[cfg(feature = "ocr")]
+        Command::Models(a) => models::run(a).map(|out| print(&out).unwrap_or(ExitCode::SUCCESS)),
     };
     match result {
         Ok(code) => code,

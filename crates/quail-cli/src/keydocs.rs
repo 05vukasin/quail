@@ -759,3 +759,28 @@ pub const SUMMARY: &[KeyDoc] = &[
         doc: "The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`). Feature `llm`.",
     },
 ];
+
+/// Keys of `quail_ocr::keys`.
+#[cfg(feature = "ocr")]
+pub const OCR: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_ocr::keys::PAGES,
+        doc: "Pages OCR'd (Int).",
+    },
+    KeyDoc {
+        key: quail_ocr::keys::CHARS,
+        doc: "Characters read, spaces excluded (Int).",
+    },
+    KeyDoc {
+        key: quail_ocr::keys::MEAN_CONF,
+        doc: "Mean recognition confidence weighted by characters (Float).",
+    },
+    KeyDoc {
+        key: quail_ocr::keys::SCRIPT,
+        doc: "Dominant script of the OCR'd text (Text).",
+    },
+    KeyDoc {
+        key: quail_ocr::keys::PAGE,
+        doc: "One OCR'd page (Record: `page`, `script`, `mean_conf`, `chars`, `lines`, `dpi`, `source`, `rotation`).",
+    },
+];

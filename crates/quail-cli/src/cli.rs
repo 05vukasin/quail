@@ -27,6 +27,37 @@ pub enum Command {
     Keys(KeysArgs),
     /// Versions of every step: the pipeline fingerprint used for re-indexing decisions.
     Version(VersionArgs),
+    /// Download or check the OCR model files (`ocr` build feature).
+    #[cfg(feature = "ocr")]
+    Models(ModelsArgs),
+}
+
+/// `quail models`.
+#[cfg(feature = "ocr")]
+#[derive(Debug, Args)]
+pub struct ModelsArgs {
+    /// What to do.
+    #[command(subcommand)]
+    pub action: ModelsAction,
+}
+
+/// `quail models` actions. Without `--dir` the directory is `$QUAIL_OCR_MODELS`, else the user
+/// cache directory (`quail/ocr-models`).
+#[cfg(feature = "ocr")]
+#[derive(Debug, Subcommand)]
+pub enum ModelsAction {
+    /// Download the missing or corrupt model files, checking each SHA-256 (about 45 MiB).
+    Fetch {
+        /// Model directory.
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
+    /// Show each model file with its size, status and license.
+    List {
+        /// Model directory.
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
 }
 
 /// `--profile` values.
@@ -115,7 +146,8 @@ pub struct ScanArgs {
     /// zstd-compress the records (needs the `zstd` build feature).
     #[arg(long)]
     pub zstd: bool,
-    /// Work profile.
+    /// Work profile. `deep` adds OCR of pages that need it in a build with the `ocr` feature
+    /// (models from `quail models fetch`).
     #[arg(long, value_enum, default_value_t = ProfileArg::Standard)]
     pub profile: ProfileArg,
     /// Worker threads (default: CPUs - 1).
