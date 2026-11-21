@@ -120,6 +120,8 @@ pub struct Type3Glyph<'a> {
     pub(crate) xref: &'a XRef,
     pub(crate) settings: InterpreterSettings,
     pub(crate) nesting_depth: u32,
+    // quail: Type3 procedures enclosing this glyph, itself included.
+    pub(crate) type3_depth: u32,
 }
 
 /// A glyph defined by PDF drawing instructions.
@@ -189,6 +191,7 @@ pub(crate) fn get_glyph<'a>(
                 xref: ctx.xref,
                 settings: ctx.settings.clone(),
                 nesting_depth,
+                type3_depth: ctx.type3_depth.saturating_add(1),
             }))
         }
     }

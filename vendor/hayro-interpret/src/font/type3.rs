@@ -12,6 +12,9 @@ use hayro_syntax::object::dict::keys::RESOURCES;
 use hayro_syntax::page::Resources;
 use kurbo::{Affine, BezPath};
 
+/// quail: deepest Type3-in-Type3 nesting that is still drawn.
+pub(crate) const MAX_TYPE3_DEPTH: u32 = 4;
+
 pub(crate) fn render_glyph<'a>(
     glyph: &Type3Glyph<'a>,
     transform: Affine,
@@ -19,6 +22,13 @@ pub(crate) fn render_glyph<'a>(
     paint: &Paint<'a>,
     device: &mut impl Device<'a>,
 ) -> Option<()> {
+    // quail: a Type3 glyph procedure may show text in a Type3 font, itself included. This path
+    // never checked the nesting depth, so a self-referencing glyph recursed until the stack
+    // overflowed (a process abort). Glyphs nested deeper than MAX_TYPE3_DEPTH are not drawn;
+    // the cap is low because every level can fan out (a glyph showing "aa" doubles per level).
+    if glyph.type3_depth > MAX_TYPE3_DEPTH {
+        return None;
+    }
     let mut state = glyph.state.clone();
     let root_transform = transform
         * glyph_transform
@@ -63,6 +73,8 @@ pub(crate) fn render_glyph<'a>(
         state,
         glyph.nesting_depth,
     );
+    // quail: glyphs shown by this procedure are one Type3 level deeper.
+    context.type3_depth = glyph.type3_depth;
 
     let resources = program
         .dict()
@@ -97,6 +109,11 @@ impl<'a, 'b, T: Device<'a>> Type3ShapeGlyphDevice<'a, 'b, T> {
 
 // Only filling, stroking of paths and stencil masks are allowed.
 impl<'a, T: Device<'a>> Device<'a> for Type3ShapeGlyphDevice<'a, '_, T> {
+    // quail: forward the per-operator hook.
+    fn on_operator(&mut self) {
+        self.inner.on_operator();
+    }
+
     fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
         let props = DrawProps {
             paint: self.paint.clone(),

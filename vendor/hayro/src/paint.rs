@@ -49,6 +49,8 @@ impl Renderer<'_> {
                 match *p {
                     Pattern::Shading(s) => {
                         const NATIVE_GRADIENT_TOLERANCE: f32 = 0.01;
+                        // quail: a gradient's lookup table, or the sampled texture below.
+                        self.global.charge(crate::GRADIENT_BYTES);
 
                         clip_path = s.shading.clip_path.clone();
                         let encoded = s.encode();
@@ -94,6 +96,12 @@ impl Renderer<'_> {
                             PaintType::Gradient(gradient)
                         } else {
                             let (width, height) = texture_dimensions(bbox, 1.0);
+                            // quail: the sampled texture (4 bytes per pixel), before allocating.
+                            self.global.charge(
+                                u64::from(width)
+                                    .saturating_mul(u64::from(height))
+                                    .saturating_mul(4),
+                            );
                             let mut image = Vec::with_capacity(width as usize * height as usize);
                             let mut may_have_transparency = false;
                             let (width, height, transform) =

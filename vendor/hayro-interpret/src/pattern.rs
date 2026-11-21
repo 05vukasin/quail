@@ -297,6 +297,11 @@ impl<'a, 'b, T: Device<'a>> StencilPatternDevice<'a, 'b, T> {
 
 // Only filling, stroking of paths and stencil masks are allowed.
 impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
+    // quail: forward the per-operator hook.
+    fn on_operator(&mut self) {
+        self.inner.on_operator();
+    }
+
     fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
         let props = DrawProps {
             paint: self.paint.clone(),

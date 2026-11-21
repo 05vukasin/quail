@@ -295,7 +295,7 @@ impl<'a> Page<'a> {
                         });
                         let fits = budget.is_none_or(|b| b.charge(extra as u64))
                             && (budget.is_some()
-                                || (collected.len() + extra) as u64 <= room);
+                                || (collected.len().saturating_add(extra) as u64) <= room);
                         let cap = collected
                             .len()
                             .saturating_add(usize::try_from(room).unwrap_or(usize::MAX));

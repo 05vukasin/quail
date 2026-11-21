@@ -41,6 +41,9 @@ pub struct PdfRaster {
     state: Mutex<State>,
     /// Pages known to hold no single embedded scan (see [`PdfRaster::with_no_scan`]).
     no_scan: Vec<bool>,
+    /// The file's deadline: every call ends by it, whatever `limits.timeout` says, so
+    /// extraction, page hashing and OCR of one file share one time budget.
+    file_deadline: Option<Instant>,
 }
 
 struct State {
@@ -63,6 +66,21 @@ impl PdfRaster {
         Self::with_no_scan(blob, Vec::new())
     }
 
+    /// A raster whose calls all end by `deadline` (the file's), in addition to each call's
+    /// own `limits.timeout`.
+    pub fn with_deadline(blob: Blob, deadline: Option<Instant>) -> Self {
+        Self::new(blob).until(deadline)
+    }
+
+    /// Ends every call by `deadline` (the file's), in addition to each call's own
+    /// `limits.timeout`. The extractor builds its `Raster` this way, so extraction, page
+    /// hashing and OCR of one file share one time budget.
+    #[must_use]
+    pub fn until(mut self, deadline: Option<Instant>) -> Self {
+        self.file_deadline = deadline;
+        self
+    }
+
     /// Like [`PdfRaster::new`], told which pages hold no single embedded scan: `no_scan[i]`
     /// means page `i` was interpreted completely and drew zero or several images, so
     /// [`PageRaster::embedded_scan`] answers `None` for it without parsing or decoding
@@ -70,6 +88,7 @@ impl PdfRaster {
     /// discard it). Pages past the end of the vector are examined as usual.
     pub fn with_no_scan(blob: Blob, no_scan: Vec<bool>) -> Self {
         Self {
+            file_deadline: None,
             blob,
             state: Mutex::new(State {
                 budget: Arc::new(DecodeBudget::new(0, 0)),
@@ -134,7 +153,25 @@ impl PdfRaster {
 fn render_byte_budget(limits: &Limits) -> u64 {
     limits
         .max_decompressed
-        .saturating_add(limits.max_render_pixels.saturating_mul(8))
+        .saturating_add(limits.max_render_pixels.saturating_mul(4))
+}
+
+/// Pixel-composites vello may spend rasterizing one render: 256 full-canvas layers' worth.
+const RENDER_WORK_PER_CANVAS_PIXEL: u64 = 256;
+
+impl PdfRaster {
+    /// When a call starting now must end: its own timeout or the file's deadline, whichever
+    /// comes first. `Err(Timeout)` when the file's time is already spent.
+    fn call_deadline(&self, limits: &Limits) -> Result<Instant> {
+        let own = Instant::now()
+            .checked_add(limits.timeout)
+            .unwrap_or_else(Instant::now);
+        let d = self.file_deadline.map_or(own, |f| f.min(own));
+        if Instant::now() >= d {
+            return Err(Error::Timeout);
+        }
+        Ok(d)
+    }
 }
 
 /// Luma from premultiplied RGBA over an opaque white background.
@@ -187,7 +224,7 @@ impl PageRaster for PdfRaster {
         if !(dpi.is_finite() && dpi > 0.0 && dpi <= MAX_DPI) {
             return Err(Error::Other(format!("dpi {dpi} outside (0, {MAX_DPI}]")));
         }
-        let deadline = Instant::now() + limits.timeout;
+        let deadline = self.call_deadline(limits)?;
         self.with_page(page, limits, |p, budget| {
             let (w, h) = p.render_dimensions();
             let scale = dpi / 72.0;
@@ -212,6 +249,7 @@ impl PageRaster for PdfRaster {
                 Some(deadline),
                 render_byte_budget(limits),
                 MAX_CALLS_PER_PAGE,
+                pixels.saturating_mul(RENDER_WORK_PER_CANVAS_PIXEL),
             ));
             let pixmap = catch_unwind(AssertUnwindSafe(|| {
                 let cache = RenderCache::new();
@@ -232,6 +270,7 @@ impl PageRaster for PdfRaster {
                 Some(RenderAbort::Deadline) => Error::Timeout,
                 Some(RenderAbort::Memory) => Error::LimitExceeded("render memory"),
                 Some(RenderAbort::Calls) => Error::LimitExceeded("draw operations per page"),
+                Some(RenderAbort::Work) => Error::LimitExceeded("render work"),
                 None => unwind_error(&*e, "renderer"),
             })?;
             if budget.limit_hit() {
@@ -261,7 +300,10 @@ impl PageRaster for PdfRaster {
         {
             return None;
         }
-        let deadline = Instant::now() + limits.timeout;
+        let deadline = match self.call_deadline(limits) {
+            Ok(d) => d,
+            Err(e) => return Some(Err(e)),
+        };
         let found = self.with_page(page, limits, |p, budget| {
             let (w, h) = p.render_dimensions();
             let dev = catch_unwind(AssertUnwindSafe(|| {
@@ -305,6 +347,10 @@ struct ScanDevice<'e> {
 }
 
 impl<'a> Device<'a> for ScanDevice<'_> {
+    fn on_operator(&mut self) {
+        self.watchdog.op();
+    }
+
     fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {
         self.watchdog.tick();
     }

@@ -257,6 +257,8 @@ pub fn interpret<'a>(
     context.save_state();
 
     while let Some(op) = ops.next() {
+        // quail: let the device check its deadline between operators.
+        device.on_operator();
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
             TypedInstruction::StrokeColorDeviceRgb(s) => {

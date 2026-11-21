@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::time::Instant;
 
 use hayro_interpret::kurbo::Rect;
 use hayro_interpret::util::TransformExt;
@@ -88,6 +89,9 @@ fn int(n: usize) -> Value {
 }
 
 fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> {
+    // The file's time budget. The emitter's own deadline is not readable, and extraction is
+    // the file's first step, so the budget starts now; the raster's calls share it.
+    let file_deadline = Instant::now().checked_add(limits.timeout);
     let bytes = blob.as_bytes();
     if bytes.len() as u64 > limits.max_bytes {
         return Err(Error::LimitExceeded("max_bytes"));
@@ -132,10 +136,9 @@ fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> 
 
     let (doc, no_scan) = pages(pdf, blob, &budget, limits, out);
     // Later steps (OCR) get pixels through the core trait and never depend on this crate.
-    out.provide(Raster(Arc::new(PdfRaster::with_no_scan(
-        blob.clone(),
-        no_scan,
-    ))));
+    out.provide(Raster(Arc::new(
+        PdfRaster::with_no_scan(blob.clone(), no_scan).until(file_deadline),
+    )));
     Ok(doc)
 }
 

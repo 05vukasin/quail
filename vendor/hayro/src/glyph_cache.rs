@@ -71,9 +71,10 @@ impl Renderer<'_> {
         };
 
         let (width, height) = (cached.pixmap.width(), cached.pixmap.height());
+        // quail: in f64 (the i32 sums overflowed on huge text positions).
         self.ctx.set_transform(Affine::translate((
-            f64::from(x + cached.x),
-            f64::from(y + cached.y),
+            f64::from(x) + f64::from(cached.x),
+            f64::from(y) + f64::from(cached.y),
         )));
         self.ctx.set_paint_transform(Affine::IDENTITY);
         self.ctx.set_paint(Image {
