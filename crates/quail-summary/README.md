@@ -240,6 +240,30 @@ LLM, 30 English CUAD dev documents, 4 threads, one model at a time, ~1,000 promp
 real catch: a name rewritten, one false alarm); Qwen3.5-0.8B 14 s/doc p50, 1.1 GB, 30/30.
 The fact check verifies that values are grounded, not that relations between them are right.
 
+**Outline and digest** (no model; dev build at opt-level 2, one thread, best of 3; default
+2,000-token budget):
+
+| corpus | files | pages p50 / max | digest tokens p50 / max | sections with an excerpt p10 / p50 | excerpts verbatim | outline / digest ms p50 (p90) |
+|---|---|---|---|---|---|---|
+| long documents (12 Kleister-Charity reports, 11 longest CUAD contracts, one 613-page book) | 24 | 104 / 613 | 1,962 / 1,976 | 0.94 / 1.00 | 638 / 638 | 3.3 (4.2) / 3.0 (8.5) |
+| CUAD, part I | 198 | 12 / 111 | 1,919 / 1,982 | 0.93 / 1.00 | 4,433 / 4,433 | 0.29 (1.2) / 1.5 (3.5) |
+
+Outline + digest cost 6.3 ms per 100 pages p50 (p90 12.6) on the long documents; the digest
+reads at most 16 × 12 KiB, so its cost stops growing with length (the 613-page book: 11 ms
+outline, 14 ms digest). `map_parts` (8 parts): 4 ms p50, 17 ms max. In the CLI pipeline on all
+510 CUAD files (3 threads): `summary.outline` 0.6 ms p50, 2.5 ms p90; `summary.digest` 4.6 ms
+p50, 10 ms p90 and 6.9 KB per record, hence Standard and not in the CLI defaults. The book's
+outline finds its 3 parts, 12 chapters and their sections (227 headings, 64 kept).
+
+**Long documents with the model** (Qwen3.5-2B `Q4_K_M`, 4 threads, one model at a time; 3
+documents of 85, 112 and 613 pages): one call over the digest takes 32–35 s (~1,600 prompt
+tokens, ~23 s prefill); map-reduce (8 map + 1 reduce calls, 9–12.5 k prompt tokens) takes
+174–263 s. Peak RSS 2.07 GB either way. Fact check 6 / 6, no map fallback. Quality (1–5, own
+rating): single call 4 / 4 / 3, map-reduce 4 / 4 / 2.5. The map steps' part summaries are good
+and specific; the reduce step sometimes drifts to card details (producer, an adviser named in
+the card) or a garbled title. Default stays the single call; map-reduce is for callers who want
+per-part summaries and can spend ~3–4 min per long document.
+
 ## Limits
 
 - Reads the first 4 pages and at most 48 KiB of normalized text for the subject. The outline

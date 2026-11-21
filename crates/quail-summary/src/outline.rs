@@ -732,6 +732,13 @@ fn numbered(t: &str) -> Option<(u16, String, bool)> {
         if comps.len() == 1 && num.len() == core.len() {
             return None;
         }
+        // "225)." closes a parenthesis in prose; "339. Describing …" is an index or a
+        // reference list, not section 339.
+        if num.len() > core.len() + 1
+            || (comps.len() == 1 && core.parse::<u32>().is_ok_and(|n| n > 150))
+        {
+            return None;
+        }
         let depth = u16::try_from(comps.len()).unwrap_or(4);
         (NUMBERED_RANK + (depth - 1) * 10, true)
     } else if num.ends_with('.') && roman_value(core).is_some() {
