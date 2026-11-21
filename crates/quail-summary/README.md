@@ -122,6 +122,21 @@ tokenizer is loaded.
 - Opt-in: `SummaryLlm` applies only with `LlmConfig::enabled`; invoices and purchase orders are
   skipped (their card says everything); one generation at a time per model.
 
+## Measured
+
+Dev build (dependencies at opt-level 2), shared 16-core laptop. Aggregates only.
+
+| corpus | files | card tokens p10 / p50 / p90 / max | extractive fact check | card / extractive time p50 |
+|---|---|---|---|---|
+| CUAD dev | 407 | 114 / 140 / 178 / 248 | 407 / 407 | 62 µs / 1.7 ms |
+| private business files | 380 | 110 / 185 / 230 / 275 | 380 / 380 | 59 µs / 0.3 ms |
+| serbian-public | 362 | 34 / 147 / 253 / 299 | 361 / 362 (checker artefact on a copied date) | 63 µs / 0.6 ms |
+
+LLM, 30 English CUAD dev documents, 4 threads, one model at a time, ~1,000 prompt tokens,
+~70 output tokens: Qwen3.5-2B 25 s/doc p50 (max 33 s), 2.1 GB peak RSS, fact check 28/30 (one
+real catch: a name rewritten, one false alarm); Qwen3.5-0.8B 14 s/doc p50, 1.1 GB, 30/30.
+The fact check verifies that values are grounded, not that relations between them are right.
+
 ## Limits
 
 - Reads the first 4 pages and at most 48 KiB of normalized text for the subject; the LLM sees at
