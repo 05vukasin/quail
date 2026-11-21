@@ -19,8 +19,8 @@ use hayro_syntax::budget::DecodeBudget;
 use hayro_syntax::page::Page as HPage;
 use hayro_syntax::{Pdf, PdfVersion};
 use quail_core::{
-    AnalyzerId, Blob, Block, BlockKind, Document, Emitter, Error, Extractor, Format, Limits, Page,
-    PageKind, Raster, Result, Span, TextSource, Value, Zone,
+    AnalyzerId, Blob, Block, BlockKind, Document, Emitter, Error, Extractor, Format, Limits,
+    LineBox, Page, PageKind, Raster, Result, Span, TextSource, Value, Zone,
 };
 
 use crate::device::{
@@ -465,6 +465,7 @@ impl Walk<'_> {
 
         let mut text = String::new();
         let mut kept: Vec<(Span, quail_core::BBox)> = Vec::with_capacity(blocks.len());
+        let mut kept_lines: Vec<Vec<LineBox>> = Vec::with_capacity(blocks.len());
         let mut truncated_text = false;
         let text_left_before = self.text_left;
         for b in &blocks {
@@ -484,6 +485,22 @@ impl Walk<'_> {
                 end: u32::try_from(text.len()).unwrap_or(u32::MAX),
             };
             kept.push((span, b.bbox));
+            // The block text is its lines joined by `\n`: each line's span follows from the
+            // line lengths, and its box is the one the layout measured.
+            let mut at = start;
+            let mut lines = Vec::with_capacity(b.lines.len());
+            for l in &b.lines {
+                let end = at.saturating_add(l.text.len());
+                lines.push(LineBox {
+                    span: Span {
+                        start: u32::try_from(at).unwrap_or(u32::MAX),
+                        end: u32::try_from(end).unwrap_or(u32::MAX),
+                    },
+                    bbox: l.bbox,
+                });
+                at = end.saturating_add(1);
+            }
+            kept_lines.push(lines);
         }
         if truncated_text {
             self.out.problem(format!(
@@ -505,6 +522,7 @@ impl Walk<'_> {
                 .warn(format!("page {index}: text layer rejected as garbage"));
             text.clear();
             kept.clear();
+            kept_lines.clear();
             // Rejected text does not count against max_text_bytes.
             self.text_left = text_left_before;
         }
@@ -515,7 +533,12 @@ impl Walk<'_> {
         };
         let blocks_out = kept
             .iter()
-            .map(|(span, bbox)| Block::new(*span, BlockKind::Paragraph, Zone::Unknown, Some(*bbox)))
+            .zip(kept_lines)
+            .map(|((span, bbox), lines)| {
+                let mut b = Block::new(*span, BlockKind::Paragraph, Zone::Unknown, Some(*bbox));
+                b.lines = lines;
+                b
+            })
             .collect();
         self.pending.push(Pending {
             page: Page {

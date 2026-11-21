@@ -138,6 +138,40 @@ fn multi_page_text_with_positions() {
 }
 
 #[test]
+fn blocks_carry_their_measured_lines() {
+    let r = run(pdf(&[text_page(1, 5), text_page(2, 5)], &Extras::default()));
+    let doc = r.doc.as_ref().expect("doc");
+    let mut lines = 0;
+    for p in &doc.pages {
+        for b in &p.blocks {
+            let bb = b.bbox.expect("bbox");
+            assert!(!b.lines.is_empty());
+            // The lines tile the block's text: joined by `\n` they are exactly its span.
+            assert_eq!(b.lines.first().expect("line").span.start, b.span.start);
+            assert_eq!(b.lines.last().expect("line").span.end, b.span.end);
+            let joined: Vec<&str> = b.lines.iter().map(|l| l.span.slice(&p.text)).collect();
+            assert_eq!(joined.join("\n"), b.span.slice(&p.text));
+            // Each line sits inside its block, top to bottom.
+            for l in &b.lines {
+                let lb = l.bbox;
+                assert!(
+                    lb.x0 >= bb.x0 - 0.01 && lb.x1 <= bb.x1 + 0.01,
+                    "{lb:?} in {bb:?}"
+                );
+                assert!(
+                    lb.y0 >= bb.y0 - 0.01 && lb.y1 <= bb.y1 + 0.01,
+                    "{lb:?} in {bb:?}"
+                );
+                assert!(lb.y1 - lb.y0 < 20.0, "one line, not the paragraph: {lb:?}");
+            }
+            assert!(b.lines.windows(2).all(|w| w[0].bbox.y0 < w[1].bbox.y0));
+            lines += b.lines.len();
+        }
+    }
+    assert_eq!(lines, 10, "every text line of both pages, once");
+}
+
+#[test]
 fn header_and_footer_by_repetition_and_geometry() {
     let pages: Vec<PageSpec> = (1..=4)
         .map(|n| {
