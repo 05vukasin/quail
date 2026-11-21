@@ -228,6 +228,16 @@ const STOP: &[&str] = &[
 fn head_phrase(card: &FileCard) -> String {
     if let Some(kind) = card.kind.as_deref() {
         let mut s = kind_name(kind).to_owned();
+        // The title names the real type under the generic `contract`, or when nothing else
+        // (ordinal, number, parent) identifies the document.
+        let bare = card.ordinal.is_none() && card.number.is_none() && card.parent().is_none();
+        if let Some(t) = card
+            .title
+            .as_deref()
+            .filter(|t| (kind == "contract" || bare) && title_adds(t, kind))
+        {
+            let _ = write!(s, " \"{}\"", clip(t, 80));
+        }
         let ordinal = card.ordinal.filter(|&o| o > 0);
         if let Some(o) = ordinal {
             let _ = write!(s, " No. {o}");
@@ -256,6 +266,17 @@ fn head_phrase(card: &FileCard) -> String {
         }
         s
     }
+}
+
+/// Whether a title says more than the kind name ("SERVICES AGREEMENT" does under `contract`,
+/// "Invoice" does not under `invoice`).
+fn title_adds(title: &str, kind: &str) -> bool {
+    let t = words_of(title);
+    let k = words_of(kind_name(kind));
+    t.len() > 1
+        && !t
+            .iter()
+            .all(|w| k.contains(w) || w.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// The template sentence of the card, in English, ending with a period.
@@ -296,13 +317,10 @@ pub fn template_sentence(card: &FileCard) -> String {
             let (last, head) = all.split_last().unwrap_or((&all[0], &[]));
             let _ = write!(s, " between {} and {last}", head.join(", "));
         }
-        (all, n) => {
-            let _ = write!(
-                s,
-                " between {} and {n} other{}",
-                all.join(", "),
-                if n == 1 { "" } else { "s" }
-            );
+        (all, _) => {
+            // No count: the card has the exact one, and a number the card does not show
+            // would be a claim of its own.
+            let _ = write!(s, " between {} and others", all.join(", "));
         }
     }
     let mut tail: Vec<String> = Vec::new();
@@ -400,11 +418,19 @@ pub fn subject(pages: &[(u32, String)]) -> Option<Subject> {
     clause(pages).or_else(|| textrank(pages))
 }
 
+/// Kinds whose summary is the template sentence alone.
+pub const NO_SUBJECT_KINDS: &[&str] = &["invoice", "po", "order", "quote", "price_list"];
+
 /// The summary: template sentence plus the subject sentence. `lang` is the document language
 /// (ISO 639-1); a non-English subject is quoted and marked.
 pub fn summary(card: &FileCard, subject: Option<&Subject>) -> String {
     let mut s = template_sentence(card);
-    if let Some(sub) = subject {
+    // On invoices and orders the card says it all; their prose is terms and conditions.
+    let transactional = card
+        .kind
+        .as_deref()
+        .is_some_and(|k| NO_SUBJECT_KINDS.contains(&k));
+    if let Some(sub) = subject.filter(|_| !transactional) {
         match card.lang.as_deref() {
             Some(l) if l != "en" => {
                 let _ = write!(s, " Subject ({l}, original): \"{}\"", sub.text);
@@ -558,6 +584,10 @@ fn clause(pages: &[(u32, String)]) -> Option<Subject> {
 /// [`MAX_SUBJECT_WORDS`] words.
 fn first_sentence(text: &str) -> Option<String> {
     for s in sentences(text) {
+        let s = strip_enumerator(&s);
+        if is_definition(&s) {
+            return None;
+        }
         let n = s.split_whitespace().count();
         if n >= 4 && s.len() >= 20 {
             return Some(limit_words(&s, MAX_SUBJECT_WORDS));
@@ -638,8 +668,97 @@ fn rankable(s: &str) -> bool {
     if total == 0 || letters * 10 < total * 7 || upper * 2 > letters {
         return false;
     }
+    if s.contains("/s/") || s.contains("By:") || s.contains("Name:") || is_definition(s) {
+        return false;
+    }
     let f = format!(" {} ", words_of(s).join(" "));
     !BOILERPLATE.iter().any(|b| f.contains(&format!(" {b} ")))
+}
+
+/// A definition ("\"Affiliate\" shall mean ...") says nothing about the subject.
+fn is_definition(s: &str) -> bool {
+    let f = format!(" {} ", words_of(s).join(" "));
+    [
+        " shall mean ",
+        " means ",
+        " shall have the meaning",
+        " respective meanings ",
+        " have the meanings ",
+        " is defined ",
+        " are defined ",
+        " terms defined ",
+        " for the purposes of this ",
+        " for purposes of this ",
+    ]
+    .iter()
+    .any(|d| f.contains(d))
+}
+
+/// Folded phrases of sentences that state what a document does: who provides what to whom.
+const CUES: &[&str] = &[
+    "agrees to",
+    "agree to",
+    "shall provide",
+    "will provide",
+    "to provide",
+    "shall perform",
+    "hereby",
+    "engage",
+    "engages",
+    "appoint",
+    "appoints",
+    "grants",
+    "purpose",
+    "desires to",
+    "wishes to",
+    "whereas",
+    "set forth the terms",
+    "sets forth the terms",
+    "pruza usluge",
+    "obavezuje se",
+    "isporuc",
+];
+
+fn has_cue(s: &str) -> bool {
+    let f = format!(" {} ", words_of(s).join(" "));
+    CUES.iter().any(|c| f.contains(&format!(" {c}")))
+}
+
+/// Drops leading clause numbers and labels: "1.1 ", "12.2.3 ", "(v) ", "Exhibit 10.39 ",
+/// "Section 2. ", "ARTICLE I ".
+fn strip_enumerator(s: &str) -> String {
+    let mut ws: Vec<&str> = s.split_whitespace().collect();
+    let mut i = 0;
+    while i < ws.len().min(4) {
+        let w = ws[i];
+        let bare = w.trim_matches(|c: char| matches!(c, '(' | ')' | '.' | ':' | '-'));
+        let lower = bare.to_lowercase();
+        let numbering = !bare.is_empty()
+            && (bare.chars().all(|c| c.is_ascii_digit() || c == '.')
+                || (w.starts_with('(') && w.ends_with(')') && bare.len() <= 4)
+                || (bare.len() <= 4
+                    && bare
+                        .chars()
+                        .all(|c| matches!(c, 'i' | 'v' | 'x' | 'I' | 'V' | 'X'))
+                    && i > 0));
+        let label = matches!(
+            lower.as_str(),
+            "exhibit" | "section" | "article" | "clause" | "schedule" | "annex" | "član" | "clan"
+        ) && ws.get(i + 1).is_some_and(|n| {
+            n.chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit() || c.is_uppercase())
+        });
+        if numbering {
+            i += 1;
+        } else if label {
+            i += 2;
+        } else {
+            break;
+        }
+    }
+    ws.drain(..i.min(ws.len()));
+    ws.join(" ")
 }
 
 fn textrank(pages: &[(u32, String)]) -> Option<Subject> {
@@ -647,6 +766,7 @@ fn textrank(pages: &[(u32, String)]) -> Option<Subject> {
     'pages: for (page, text) in pages {
         // Paragraphs: lines joined until a blank-ish break; sentences within.
         for s in sentences(&text.replace('\n', " ")) {
+            let s = strip_enumerator(&s);
             if !rankable(&s) {
                 continue;
             }
@@ -692,7 +812,12 @@ fn textrank(pages: &[(u32, String)]) -> Option<Subject> {
     // what the document is about.
     #[allow(clippy::cast_precision_loss)]
     let prior: Vec<f64> = {
-        let raw: Vec<f64> = (0..n).map(|i| 1.0 / (1.0 + i as f64 / 8.0)).collect();
+        let raw: Vec<f64> = (0..n)
+            .map(|i| {
+                let cue = if has_cue(&cands[i].1) { 3.0 } else { 1.0 };
+                cue / (1.0 + i as f64 / 8.0)
+            })
+            .collect();
         let s: f64 = raw.iter().sum();
         raw.into_iter().map(|x| x / s).collect()
     };
@@ -792,6 +917,33 @@ mod tests {
             "{}",
             s.text
         );
+    }
+
+    #[test]
+    fn strips_clause_numbers_and_skips_definitions() {
+        assert_eq!(
+            strip_enumerator("1.1 Cargill agrees to perform"),
+            "Cargill agrees to perform"
+        );
+        assert_eq!(
+            strip_enumerator("(v) The provisions apply"),
+            "The provisions apply"
+        );
+        assert_eq!(
+            strip_enumerator("Exhibit 10.39 12.2.3 Distributor shall"),
+            "Distributor shall"
+        );
+        assert_eq!(
+            strip_enumerator("Section 2. Term of the lease"),
+            "Term of the lease"
+        );
+        assert_eq!(strip_enumerator("The Supplier shall"), "The Supplier shall");
+        assert!(is_definition(
+            "\"Affiliate\" shall mean any entity controlling a party."
+        ));
+        assert!(!is_definition(
+            "The Supplier shall deliver the goods to the Buyer."
+        ));
     }
 
     #[test]

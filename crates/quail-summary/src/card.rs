@@ -33,6 +33,12 @@ pub const MAX_AMOUNTS: usize = 4;
 pub const MAX_ID_VALUES: usize = 2;
 /// Item categories kept in the card.
 pub const MAX_CATEGORIES: usize = 3;
+/// Item categories whose top-candidate score is below this are left out (CPV matches of
+/// generic descriptions such as "Phase II" score low).
+pub const MIN_CATEGORY_SCORE: f64 = 0.3;
+/// A largest amount without a role is shown only from this value up (small numbers next to a
+/// currency are usually rates, fees per unit or noise).
+pub const MIN_MAX_AMOUNT: f64 = 100.0;
 /// Default hard budget of the rendered card, in estimated tokens (see [`crate::tokens`]).
 pub const DEFAULT_MAX_TOKENS: usize = 300;
 
@@ -353,6 +359,20 @@ impl FileCard {
                 }
             }
         }
+        // "Cisco" after "Cisco Systems, Inc.": a shorter name inside a stronger one is the same
+        // party.
+        let mut kept: Vec<Party> = Vec::new();
+        for p in parties {
+            let words = name_words(&p.name);
+            let dup = kept.iter().any(|q| {
+                let qw = name_words(&q.name);
+                !words.is_empty() && words.iter().all(|w| qw.contains(w))
+            });
+            if !dup {
+                kept.push(p);
+            }
+        }
+        let mut parties = kept;
         self.parties_total = parties.len();
         parties.truncate(MAX_PARTIES);
         self.parties = parties;
@@ -412,7 +432,7 @@ impl FileCard {
                 .into_iter()
                 .filter(|m| main.is_none() || m.currency == main)
                 .max_by(|a, b| format::money_value(*a).total_cmp(&format::money_value(*b)));
-            if let Some(m) = max {
+            if let Some(m) = max.filter(|m| format::money_value(*m) >= MIN_MAX_AMOUNT) {
                 self.amounts.push(("max", m));
             }
         }
@@ -461,6 +481,13 @@ impl FileCard {
                 continue;
             };
             let Some(top) = cands.first() else { continue };
+            let score = match top.field("score") {
+                Some(Value::Float(x)) => *x,
+                _ => 0.0,
+            };
+            if score < MIN_CATEGORY_SCORE {
+                continue;
+            }
             let (Some(code), Some(label)) = (field_text(top, "code"), field_text(top, "label"))
             else {
                 continue;
@@ -922,6 +949,42 @@ fn more(parts: &mut Vec<String>, total: usize, shown: usize) {
     }
 }
 
+/// Folded words of a name, legal forms and punctuation dropped (for duplicate checks).
+fn name_words(name: &str) -> Vec<String> {
+    const FORMS: &[&str] = &[
+        "inc",
+        "llc",
+        "ltd",
+        "limited",
+        "corp",
+        "corporation",
+        "co",
+        "company",
+        "plc",
+        "gmbh",
+        "ag",
+        "sa",
+        "s",
+        "a",
+        "l",
+        "p",
+        "lp",
+        "llp",
+        "doo",
+        "d",
+        "o",
+        "ad",
+        "bv",
+        "nv",
+        "the",
+    ];
+    let f = quail_text::fold::fold(name, &quail_text::fold::FoldOptions::KEY);
+    f.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty() && !FORMS.contains(w))
+        .map(str::to_owned)
+        .collect()
+}
+
 fn best_role(roles: &[&str]) -> Option<String> {
     ROLE_ORDER
         .iter()
@@ -958,6 +1021,15 @@ mod tests {
         assert_eq!(clean_meta_title("Microsoft Word - Aneks 2.docx"), "Aneks 2");
         assert_eq!(clean_meta_title("Untitled"), "");
         assert_eq!(clean_meta_title("  Ugovor  o zakupu "), "Ugovor o zakupu");
+    }
+
+    #[test]
+    fn shorter_names_inside_stronger_ones_are_one_party() {
+        assert_eq!(name_words("Cisco Systems, Inc."), vec!["cisco", "systems"]);
+        assert_eq!(
+            name_words("Балкан Логистик д.о.о."),
+            vec!["balkan", "logistik"]
+        );
     }
 
     #[test]

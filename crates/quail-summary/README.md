@@ -83,16 +83,23 @@ tokenizer is loaded.
 
 ## Extractive summary
 
-- Template sentence from the card: kind (+ No. ordinal, own number), parent document
-  ("to the master services agreement 114/23"), parties with roles, dates by role, up to two
-  amounts, `scanned`.
+- Template sentence from the card: kind (+ No. ordinal, own number; the title under the generic
+  `contract` or when nothing else identifies the document), parent document ("to the master
+  services agreement 114/23"), up to three parties with roles ("and others" beyond), dates by
+  role, up to two amounts, `scanned`. It adds no number the card does not hold.
 - Subject sentence: the first sentence under a subject heading or label (`Subject of the
   Agreement`, `Subject matter`, `Purpose`, `Scope of Work`, `Description of Services`,
   `Article 1` + title line, `Predmet ugovora`, `Predmet`, `Svrha`, `Član 1`, in Latin or Cyrillic,
   folded), at most 40 words; else the top sentence of a `TextRank` over the first 4 pages
-  (≤ 150 sentences of 8–60 words, parties blocks, addresses and signature lines filtered out, a
-  position prior).
+  (≤ 150 sentences of 8–60 words; definitions, parties blocks, addresses and signature lines
+  filtered out; clause numbers stripped; a position prior, tripled for sentences that say who
+  provides what: "agrees to", "shall provide", "hereby", "grants", "whereas", ...).
 - English documents: `… Subject: <sentence>`; others: `… Subject (sr, original): "<sentence>"`.
+  Invoices, orders, quotes and price lists get the template sentence alone (their prose is terms
+  and conditions); `summary.subject` is still emitted.
+- Card tweaks that keep it useful: parties whose name words are all inside a stronger party's
+  name are merged ("Cisco" into "Cisco Systems, Inc."); item categories need a top score ≥ 0.3;
+  a role-less largest amount needs ≥ 100.
 
 ## LLM summary (feature `llm`)
 

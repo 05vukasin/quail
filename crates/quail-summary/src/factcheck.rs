@@ -143,7 +143,11 @@ impl Index {
                     ix.numbers.insert(trim_zeros(run).to_owned());
                 }
             }
-            let folded = fold(s, &FoldOptions::KEY);
+            let norm = quail_text::normalize::normalize(
+                s,
+                &quail_text::normalize::NormalizeOptions::default(),
+            );
+            let folded = fold(&norm, &FoldOptions::KEY);
             for w in folded.split(|c: char| !c.is_alphanumeric()) {
                 if !w.is_empty() {
                     ix.words.insert(w.to_owned());
@@ -473,8 +477,11 @@ fn claims_all(text: &str) -> Vec<Claim> {
 }
 
 fn extract(text: &str, with_names: bool) -> Vec<Claim> {
-    // Card lines are `role=value; role=value`.
-    let text = text.replace(['=', ';'], " ");
+    // NFKC and typography as everywhere else (`™` → `TM`); card lines are
+    // `role=value; role=value`.
+    let text =
+        quail_text::normalize::normalize(text, &quail_text::normalize::NormalizeOptions::default())
+            .replace(['=', ';'], " ");
     let raw: Vec<&str> = text.split_whitespace().collect();
     let toks: Vec<String> = raw.iter().map(|t| strip(t).to_owned()).collect();
     let folded: Vec<String> = toks

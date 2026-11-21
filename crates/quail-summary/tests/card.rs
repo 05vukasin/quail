@@ -293,7 +293,7 @@ fn serbian_cyrillic_lease_keeps_names_and_quotes_the_subject() {
     let s = get(&out, &keys::EXTRACTIVE).as_text().unwrap();
     assert_eq!(
         s,
-        "Contract between Дунав Некретнине а.д. (party) and Балкан Логистик д.о.о. (customer), \
+        "Contract \"УГОВОР О ЗАКУПУ ПОСЛОВНОГ ПРОСТОРА\" between Дунав Некретнине а.д. (party) and Балкан Логистик д.о.о. (customer), \
          signed 2023-09-12. Subject (sr, original): \"Закуподавац даје у закуп Закупцу \
          магацински простор у Новом Саду, површине 1.200 м2.\""
     );
