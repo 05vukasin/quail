@@ -1,0 +1,33 @@
+[package]
+name = "quail-worker"
+description = "Process isolation for quail: a supervisor of worker child processes with rlimits, a watchdog and crash recovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "quail-worker-demo"
+path = "src/bin/demo.rs"
+
+[dependencies]
+quail-core.workspace = true
+quail-engine = { path = "../quail-engine" }
+serde.workspace = true
+serde_json.workspace = true
+crossbeam-channel = "0.5.15"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.32", default-features = false, features = ["resource", "signal", "fs"] }
+
+[[test]]
+name = "isolation"
+harness = false
+
+[[bench]]
+name = "overhead"
+harness = false
+
+[lints]
+workspace = true

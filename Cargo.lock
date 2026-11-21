@@ -1125,6 +1125,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "quail-worker"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "nix",
+ "quail-core",
+ "quail-engine",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
