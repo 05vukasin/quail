@@ -60,7 +60,7 @@ same either way, so no output depends on whether `text.stats` is active. `text.l
 pages it reads whole.
 
 Built eagerly (tokens and keys included): `text.stats` tokenized every page already to count words,
-so the extra cost is folding the keys, about +5 % of `text.stats` (one fold per token instead of one
+so the extra cost is folding the keys, +10–25 % of `text.stats` time (one fold per token instead of one
 per token in each consumer). Heap: 16 bytes per token, the normalized text, the keys that differ from
 their token, 16 bytes per offset-map checkpoint: median 4.4–4.5 bytes per byte of page text, 63 KB per
 file on average on 363 private PDFs/DOCX (max 1.0 MB), 259 KB on CUAD's 510 contracts (max 1.6 MB).
