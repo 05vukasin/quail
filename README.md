@@ -62,6 +62,9 @@ cargo build --release -p quail-cli        # Rust 1.97+, pure Rust, no system lib
 export PATH="$PWD/target/release:$PATH"
 ```
 
+Prebuilt binaries (default features) for Linux, macOS and Windows on x86_64 and ARM are
+attached to each [release](https://github.com/05vukasin/quail/releases), with SHA-256 sums.
+
 With OCR: `cargo build --release -p quail-cli --features ocr`, then `quail models fetch` (about
 45 MiB) and `quail scan --profile deep` ([quickstart](docs/quickstart.md#7-ocr)).
 
