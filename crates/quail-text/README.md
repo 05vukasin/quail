@@ -12,7 +12,7 @@ Text utilities every text analyzer builds on, plus two text-level analyzers. Nam
 | `script` | Latin / Cyrillic / Greek / other letter counts and ratios |
 | `token` | UAX #29 tokens with byte spans, linear time; kinds `Word Number Alnum Url Email Punct Symbol`; `114/23`, `2023-05-12`, `1.200,50`, `1 200 000,00`, spaced IBANs, `+381`, `C++`, URLs and e-mail addresses kept whole; `keyed_tokens` adds a folded key per token from one reused buffer |
 | `shingle` | word shingles and char n-grams as **stable** XXH3-64 hashes (fixed seed, pinned by tests) |
-| `garbage` | `garbage_report` / `garbage_ratio`: share of broken-text-layer characters; `verdict()` → `Clean`, `Garbage` (ratio > `NEEDS_OCR_RATIO` = 0.10) or `TooShort` (< 20 characters, never an OCR reason by itself) |
+| `garbage` | `garbage_report` / `garbage_ratio`: share of broken-text-layer characters, including Cyrillic read as Latin look-alikes (`OKBMPHM CnOPA3YM`, whole page judged; `is_lookalike()`, `broken_ratio()` without that class); `verdict()` → `Clean`, `Garbage` (ratio > `NEEDS_OCR_RATIO` = 0.10) or `TooShort` (< 20 characters, never an OCR reason by itself) |
 | `money` | exact-decimal numbers and amounts: `parse_number` with a `NumberFormat` (`MONEY`: two decimals, no sign; `QUANTITY`: four decimals, sign, `1'200`) and a `DecimalHint` for `1,500`; `parse_money` with currency (symbol, word in any case incl. Cyrillic `дин.`, ISO code in capitals), multiplier (`5 million`, `2 miliona`) and sign (`-1,200.00`, `1.200,00-`, `(1,200.00)`); `Decimal` with `Display`; the currency and multiplier tables. Shared by `quail-signals` and `quail-items` |
 | `lang` | `LanguageDetector`: Lingua (high accuracy, 11 languages) + an sr/hr/bs marker layer, scored candidates |
 | `normalized` | the `normalized_text` artifact (`NormalizedText`): per page the default-normalized text, its `OffsetMap`, every token (`tokens_with_symbols`) with its `FoldOptions::KEY` key, and the source length |
@@ -37,7 +37,7 @@ threads (measured: 1 thread in the process after construction and detection). Th
 
 Both require the `document` artifact and run in `Fast`.
 
-- `text.stats@2`: `text.chars`, `text.words`, `text.pages_with_text`, `text.script`
+- `text.stats@3`: `text.chars`, `text.words`, `text.pages_with_text`, `text.script`
   (`latin|cyrillic|greek|other|mixed`), `text.script.{latin,cyrillic,greek,other}`,
   `text.garbage_ratio`, `text.garbage_pages`. Characters, scripts and garbage are measured on the text
   as extracted, words on the normalized (de-hyphenated) text; a garbage page is one whose own verdict is
@@ -99,6 +99,23 @@ Garbage ratio on the text layers of 369 private business PDFs (pdftotext, 2 582 
 characters): clean pages max 0.039 (p99 0.017), 0 pages above 0.10. Broken layers simulated from the same
 pages, detected at 0.10: private-use glyphs 100 %, control glyphs 100 %, letter substitution 97 %, glyph
 ids shifted by 29 93 %, Latin-1-shifted 95 % (misses are pages with < 100 letters).
+
+Look-alike class (Cyrillic shown as Latin), on the text layers quail-pdf extracts (pages with ≥ 20
+characters):
+
+| corpus | pages | look-alike pages | `Garbage` pages before → after |
+|---|---:|---:|---:|
+| serbian-public (332 PDFs) | 2 937 | 217 (28 files) | 177 → 242 |
+| CUAD (510 PDFs) | 9 286 | 0 | 2 → 0 |
+| private (369 PDFs) | 2 582 | 0 | 0 → 0 |
+
+Of the 20 serbian-public silver-gold documents whose notes say the layer is garbled, 15 are found;
+the 5 misses are a Latin layer turned Cyrillic look-alike (the other direction), two low-quality Latin
+OCR layers and a garbled stamp or field labels on an otherwise clean page. On clean pages the suspect
+share stays at or below 0.10 (0.08 with four or more suspects); look-alike pages sit at 0.3–0.6.
+The two CUAD pages that were `Garbage` before (a camel-case brand line, a part-number table) are clean
+now: camel case is not case chaos, and chunks with digits are left out of the vowel share. The highest
+non-look-alike ratio on CUAD is 0.058, on the private corpus 0.039.
 
 Throughput (`cargo bench -p quail-text --bench throughput`, thin LTO, shared 16-core laptop, MiB/s on
 256 KiB of generated text, Serbian Latin / Serbian Cyrillic / English):
