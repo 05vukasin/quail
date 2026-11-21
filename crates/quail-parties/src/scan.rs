@@ -250,6 +250,32 @@ impl<'a> Scanner<'a> {
         c0.is_lowercase() && t.chars().skip(1).any(char::is_uppercase)
     }
 
+    /// Does the line ending at token `k` run on into the next one: a line of running text
+    /// (eight tokens or more) that ends in a name word, not in punctuation?
+    fn wraps_into(&self, k: usize) -> bool {
+        if !self.w.is_word(k) || !self.namey(k) {
+            return false;
+        }
+        let line = self.w.toks[k].line;
+        let mut n = 0;
+        let mut a = k;
+        while a > 0 && self.w.toks[a - 1].line == line && n < 8 {
+            a -= 1;
+            n += 1;
+        }
+        n >= 7
+    }
+
+    /// A word of four letters or more, all of them capitals ("NIKE", "COMMUNICATIONS").
+    fn all_caps(&self, i: usize) -> bool {
+        let t = self.w.text(i);
+        let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+        letters >= 4
+            && t.chars()
+                .filter(|c| c.is_alphabetic())
+                .all(char::is_uppercase)
+    }
+
     fn connector(&self, i: usize) -> bool {
         self.w.is_word(i) && has(NAME_CONNECTORS, self.key(i))
     }
@@ -419,6 +445,16 @@ impl<'a> Scanner<'a> {
         if form.weak && (a..i).any(|k| self.number(k)) {
             return None;
         }
+        // A weak form in a heading or a phrase is a common noun: "Return of Company",
+        // "HOLDING CO.", "Parent Company".
+        if form.weak {
+            let words: Vec<usize> = (a..i).filter(|&k| self.w.is_word(k)).collect();
+            let of_before = words.last().is_some_and(|&k| self.key(k) == "of");
+            let generic = words.iter().all(|&k| has(WEAK_FORM_NOUNS, self.key(k)));
+            if of_before || generic {
+                return None;
+            }
+        }
         let (b, seat) = self.close_form(end);
         self.accept(a, b, Some(form), seat)
     }
@@ -503,20 +539,42 @@ impl<'a> Scanner<'a> {
         }
         let mut words = 0;
         let mut comma = false;
+        // The leftmost name word so far is set in capitals ("NIKE"): a Titlecase word before
+        // it is another name, usually the signatory's ("Mark G. Parker NIKE, Inc.").
+        let mut caps_run = false;
+        // The line the name may still take words from: the form's, or once the line above
+        // when the name starts its line inside a wrapped paragraph ("between Vertex" /
+        // "Pharmaceuticals Incorporated").
+        let mut anchor = i;
         while j > floor {
             let k = j - 1;
-            if !self.same_line(k, i) {
-                break;
+            if !self.same_line(k, anchor) {
+                if anchor != i || words == 0 || !self.wraps_into(k) {
+                    break;
+                }
+                anchor = k;
             }
             if self.w.is_word(k) {
                 // Inside a hyphenated compound a stop word is part of the name ("Build-A-Bear").
                 let hyphened =
                     self.w.is_punct(k + 1, '-') && self.attached(k + 1) && self.attached(k + 2);
-                if self.is_stop(k) && !hyphened && !self.connector(k) || self.form_word(k) {
+                if self.is_stop(k) && !hyphened && !self.connector(k)
+                    || self.form_word(k)
+                    || has(EXTRA_STOP, self.bare(k))
+                {
                     break;
                 }
                 if !(self.namey(k) || self.connector(k)) {
                     break;
+                }
+                let lower = self.w.text(k).chars().any(char::is_lowercase);
+                if caps_run && lower && !self.connector(k) {
+                    break;
+                }
+                if lower {
+                    caps_run = false;
+                } else if self.all_caps(k) {
+                    caps_run = true;
                 }
                 words += 1;
                 if words > MAX_WALK_WORDS {
@@ -593,8 +651,12 @@ impl<'a> Scanner<'a> {
     /// name is left.
     fn trim(&self, mut a: usize, mut b: usize) -> Option<(usize, usize)> {
         // A leading connector goes only when written in lowercase: "I" opens "I-ESCROW".
-        let lower_connector =
-            |k: usize| self.connector(k) && self.w.text(k).starts_with(char::is_lowercase);
+        // ... or as a word of its own in capitals ("JOINDER OF X, INC.").
+        let lower_connector = |k: usize| {
+            self.connector(k)
+                && (self.w.text(k).starts_with(char::is_lowercase)
+                    || self.w.text(k).chars().count() > 1 && !self.attached(k + 1))
+        };
         while a < b
             && (!self.w.is_word(a) && !self.w.is_punct(a, '"')
                 || lower_connector(a)
@@ -632,7 +694,8 @@ impl<'a> Scanner<'a> {
         form: Option<&'static Form>,
         seat: Option<(&'static str, usize)>,
     ) -> Option<Mention> {
-        let surface = self.w.slice(a, b);
+        let joined = self.w.slice(a, b).replace('\n', " ");
+        let surface = joined.as_str();
         let q = quality::verdict(surface).ok()?;
         // A formless name must not have a person's shape in any letter case.
         if form.is_none() && (q != Quality::Ok || quality::is_person_shaped(surface)) {
@@ -1421,6 +1484,56 @@ const EXTRA_STOP: &[&str] = &[
     "telefon",
     "mobile",
     "mob",
+    // Recitals, headings and signature-block titles before a name: "WHEREAS, X Corp.",
+    // "JOINDER OF X, INC.", "Vice President X Inc.", "Board of Directors of X Corporation".
+    "whereas",
+    "joinder",
+    "confidential",
+    "president",
+    "ceo",
+    "cfo",
+    "coo",
+    "cto",
+    "vp",
+    "svp",
+    "evp",
+    "gc",
+    "employee",
+    "employer",
+    "director",
+    "directors",
+    "board",
+    "officer",
+    "chairman",
+    "secretary",
+    "treasurer",
+    "manager",
+    "title",
+    "contact",
+    "stockholder",
+    "stockholders",
+    "shareholder",
+    "shareholders",
+    "disclosing",
+    "receiving",
+];
+
+/// Words that make no company of a weak legal form on their own ("HOLDING CO.").
+const WEAK_FORM_NOUNS: &[&str] = &[
+    "holding",
+    "holdings",
+    "parent",
+    "operating",
+    "the",
+    "a",
+    "such",
+    "our",
+    "your",
+    "its",
+    "insurance",
+    "trust",
+    "investment",
+    "management",
 ];
 
 /// Role words that may still be part of a name ("Service", "Services", "Company" is a form).
@@ -1467,6 +1580,12 @@ const CLAUSE_DETAILS: &[&str] = &[
     "registration",
     "registracioni",
     "mb",
+    // A Serbian street address right after the name ("X d.o.o., ul. Y 3").
+    "ul",
+    "ulica",
+    "ulici",
+    "bulevar",
+    "bb",
 ];
 
 /// Words skipped before a defined term.

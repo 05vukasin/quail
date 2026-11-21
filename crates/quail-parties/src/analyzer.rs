@@ -242,6 +242,25 @@ pub const BASE_STATEMENT: f32 = 0.6;
 /// Base confidence of a formless name after a role label.
 pub const BASE_LABEL: f32 = 0.55;
 
+/// Factor on the confidence of a mention whose only role is `mentioned` (an affiliate,
+/// adviser or third party named in the body), by where it is. Measured precision of such
+/// mentions on the Kleister-NDA / CUAD dev splits: page 1 with a defined term about 50 %,
+/// page 1 without one about 25 %, later pages about 10 % (any other role: about 60–85 %).
+pub fn mentioned_only(page: u32, defined_term: bool) -> f32 {
+    match (page, defined_term) {
+        (0, true) => MENTIONED_FIRST_PAGE_TERM,
+        (0, false) => MENTIONED_FIRST_PAGE,
+        _ => MENTIONED_LATER,
+    }
+}
+
+/// [`mentioned_only`] on page 1 with a defined term (`X Corp. (the "Company")`).
+pub const MENTIONED_FIRST_PAGE_TERM: f32 = 0.7;
+/// [`mentioned_only`] on page 1 without a defined term.
+pub const MENTIONED_FIRST_PAGE: f32 = 0.45;
+/// [`mentioned_only`] on later pages.
+pub const MENTIONED_LATER: f32 = 0.25;
+
 /// Confidence of a mention: see the crate documentation's table.
 pub fn mention_conf(m: &Mention) -> f32 {
     let mut c: f32 = match m.form {
@@ -324,13 +343,16 @@ fn jurisdiction(m: &Mention, surface: &str, tokens: &[String]) -> Option<(String
 }
 
 fn candidate(w: &PageWords, m: &Mention, page: u32) -> Option<Candidate> {
-    let surface = w.slice(m.a, m.b).trim().to_owned();
+    let surface = w.slice(m.a, m.b).trim().replace('\n', " ");
     let key = core_key(w.slice(m.a, m.name_end));
     if key.is_empty() {
         return None;
     }
     let q = quality::verdict(&surface).ok()?;
-    let conf = mention_conf(m);
+    let mut conf = mention_conf(m);
+    if m.roles.iter().all(|&r| r == Role::Mentioned) {
+        conf *= mentioned_only(page, m.term.is_some());
+    }
     let tokens = key_tokens(&surface);
     let roles = m
         .roles
@@ -351,21 +373,29 @@ fn candidate(w: &PageWords, m: &Mention, page: u32) -> Option<Candidate> {
     })
 }
 
-/// Per key: its mentions (indices into `candidates`, strongest first) and its score
-/// (noisy-or of every mention's confidence).
+/// Per key: its mentions (indices into `candidates`, strongest first) and its score: the
+/// noisy-or of the confidences of its mentions with a role, and of its strongest
+/// mentioned-only mention (a company named twenty times in the body is no more a party
+/// than one named once).
 pub fn rank(candidates: &[Candidate]) -> Vec<(String, Vec<usize>, f32)> {
     let mut groups: Vec<(String, Vec<usize>, f32)> = Vec::new();
+    let mut best_mentioned: Vec<f32> = Vec::new();
     let mut at: HashMap<&str, usize> = HashMap::new();
     for (i, c) in candidates.iter().enumerate() {
         let g = *at.entry(c.key.as_str()).or_insert_with(|| {
             groups.push((c.key.clone(), Vec::new(), 1.0));
+            best_mentioned.push(0.0);
             groups.len() - 1
         });
         groups[g].1.push(i);
-        groups[g].2 *= 1.0 - c.conf;
+        if c.roles.iter().all(|(r, _)| *r == Role::Mentioned) {
+            best_mentioned[g] = best_mentioned[g].max(c.conf);
+        } else {
+            groups[g].2 *= 1.0 - c.conf;
+        }
     }
-    for g in &mut groups {
-        g.2 = (1.0 - g.2).min(0.99);
+    for (g, m) in groups.iter_mut().zip(best_mentioned) {
+        g.2 = (1.0 - g.2 * (1.0 - m)).min(0.99);
         g.1.sort_by(|&x, &y| candidates[y].conf.total_cmp(&candidates[x].conf));
     }
     groups.sort_by(|x, y| y.2.total_cmp(&x.2));

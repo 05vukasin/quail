@@ -72,6 +72,9 @@ const SUPPLIER_STEMS: &[&str] = &[
     "davalac",
     "davaoc",
     "konsultant",
+    // Award decisions and notices: "ugovor se dodeljuje ponuđaču / privrednom subjektu".
+    "ponudjac",
+    "subjekt",
 ];
 const CUSTOMER_WORDS: &[&str] = &[
     "customer",
