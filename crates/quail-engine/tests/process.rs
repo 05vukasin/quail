@@ -194,8 +194,14 @@ fn extractor_failure_and_panic_fail_the_file_but_keep_facts() {
     for mode in [ExtractMode::Fail, ExtractMode::Panic, ExtractMode::Timeout] {
         let engine = EngineBuilder::new()
             .quiet_panics(true)
+            // Only the timeout case needs a short budget; the others must not race the
+            // deadline on slow CI runners (the first panic/unwind can take tens of ms).
             .limits(Limits {
-                timeout: Duration::from_millis(20),
+                timeout: if matches!(mode, ExtractMode::Timeout) {
+                    Duration::from_millis(20)
+                } else {
+                    Duration::from_secs(30)
+                },
                 ..Limits::default()
             })
             .extractor(MockExtractor::text(mode))
