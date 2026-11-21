@@ -504,3 +504,61 @@ fn ranked_candidates() {
     let json = serde_json::to_string(&ranked.value).unwrap();
     assert!(json.contains("alfatek") && json.contains("betasoft"));
 }
+
+#[test]
+fn mentioned_only_mentions_are_less_sure() {
+    let p1 = "x\nx\nx\nx\nx\nx\nx\n\
+This Agreement is entered into by and between Northwind Analytics Inc. (the \"Customer\") and Bluefin Data Ltd (the \"Supplier\").";
+    let p2 = "x\nx\nx\nx\nx\nx\nx\n\
+The Supplier may use the services of Kestrel Hosting LLC for storage.\nx\nx\nx\nx\nx\nx\nx\nx";
+    let ms = mentions(&run(plain(&[p1, p2])));
+    let party = by_key(&ms, "northwind analytics")[0].conf;
+    let other = by_key(&ms, "kestrel hosting")[0];
+    assert_eq!(other.roles, ["mentioned"]);
+    assert!(other.conf < 0.3, "{}", other.conf);
+    assert!(party > other.conf + 0.4, "{party} vs {}", other.conf);
+}
+
+#[test]
+fn name_walk_stops_at_recitals_titles_and_signatories() {
+    let t = "x\nx\nx\nx\nx\nx\nx\n\
+WHEREAS, Tarasample Acquisition Corp. wishes to proceed.\n\
+JOINDER OF NORTHSAMPLE HOLDINGS, INC.\n\
+Board of Directors of Westsample Corporation\n\
+Vice President ARCSAMPLE COMMUNICATIONS, INC.\n\
+Mark G. Parker NIKESAMPLE, Inc.\n\
+Return of Company\n\
+HOLDING CO.";
+    let ms = mentions(&run(plain(&[t])));
+    let mut surfaces: Vec<&str> = ms.iter().map(|m| m.surface.as_str()).collect();
+    surfaces.sort_unstable();
+    surfaces.dedup();
+    assert_eq!(
+        surfaces,
+        [
+            "ARCSAMPLE COMMUNICATIONS, INC.",
+            "NIKESAMPLE, Inc.",
+            "NORTHSAMPLE HOLDINGS, INC.",
+            "Tarasample Acquisition Corp.",
+            "Westsample Corporation",
+        ],
+        "{ms:#?}"
+    );
+}
+
+#[test]
+fn names_wrapped_over_a_paragraph_line() {
+    let t = "x\nx\nx\nx\nx\nx\nx\n\
+This Confidentiality Agreement is made by and between Vertexsample\n\
+Pharmaceuticals Incorporated, a Massachusetts corporation, and you.\n\
+CONFIDENTIAL\n\
+Acme Sample Inc.";
+    let ms = mentions(&run(plain(&[t])));
+    assert_eq!(
+        keys_of(&ms),
+        ["acme sample", "vertexsample pharmaceuticals"],
+        "{ms:#?}"
+    );
+    let v = by_key(&ms, "vertexsample pharmaceuticals")[0];
+    assert!(!v.surface.contains('\n'), "{}", v.surface);
+}

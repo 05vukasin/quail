@@ -30,7 +30,13 @@ text), tokens with folded keys (`quail_text` fold: Serbian Cyrillic → Latin, n
    of capitalised words on the same line before (suffix forms) or after (prefix forms) the form,
    at most 8 words, one interior comma allowed ("Brenwick, Dalton and Company"); it stops at
    document words, prepositions, labels, role words, clause references ("Article 12") and
-   lowercase prose. A seat city after the form ("ACME d.o.o. Beograd") stays in the surface and
+   lowercase prose. It also stops at recital and heading words (`WHEREAS`, `JOINDER OF`), signature-block
+   titles (`President`, `CEO`, `VP`, `Director(s)`, `Board`, `Employee`, ...), and where a
+   Titlecase word precedes a name set in capitals (`Mark G. Parker NIKE, Inc.` → `NIKE, Inc.`). A
+   name that starts its line inside a wrapped paragraph (a line above of eight tokens or more ending
+   in a name word) takes the words at the end of that line (`between Vertex` / `Pharmaceuticals
+   Incorporated`). A weak form after `of` or after only generic nouns (`Return of Company`, `HOLDING
+   CO.`, `Parent Company`) is no name. A seat city after the form ("ACME d.o.o. Beograd") stays in the surface and
    leaves the key. A sole trader (`PR`) needs a two- or three-word personal name before the form
    and no digits.
 2. **Role labels** (`Dobavljač:`, `Izvršilac:`, `Naručilac:`, `Kupac:`, `Supplier:`, `Vendor:`,
@@ -99,6 +105,14 @@ issuer of, the document:
 | heading | +0.05 |
 | bank in payment details | −0.30 |
 | clamp | 0.05 … 0.97 |
+| then, when the only role is `mentioned`: × 0.7 on page 1 with a defined term, × 0.45 on page 1 without one, × 0.25 on later pages | |
+
+The `mentioned` factors are the measured precision of such mentions on the Kleister-NDA and CUAD
+dev splits (about 50 %, 25 % and 10 % against about 60–85 % for mentions with any other role), so a
+`min_conf` of 0.3 keeps the parties and drops most affiliates, advisers and third parties named in
+the body. In `party.candidates`, a key's score is the noisy-or of its mentions that have a role and
+of its single strongest mentioned-only mention: a company named twenty times in the body is no more
+a party than one named once.
 
 Role confidences (`role_conf`) are `conf × weight` (0.95 for a defined term or a Bill/Ship-to label, 0.9 supplier /
 customer / party, 0.85 signatory, 0.8 issuer from a letterhead, 0.6 issuer from a footer).
