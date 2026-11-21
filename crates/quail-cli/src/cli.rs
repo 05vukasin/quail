@@ -157,6 +157,21 @@ pub struct ScanArgs {
     /// Print the final stats as one JSON object on stderr instead of the summary.
     #[arg(long)]
     pub json_stats: bool,
+    /// Process every file in a worker child process: an abort, an out-of-memory, a stack
+    /// overflow or a hang costs that file a `failed` record ("worker crashed: ..."), not the
+    /// run. Workers read the files themselves (`-j` workers, each loads its own models).
+    #[arg(long)]
+    pub isolate: bool,
+    /// Address space per worker (`RLIMIT_AS`, e.g. `2G`; default 1G). Budget about the models
+    /// plus 4x the largest file accepted.
+    #[arg(long, value_name = "SIZE", value_parser = parse_size, requires = "isolate")]
+    pub worker_mem: Option<u64>,
+    /// Retry a file whose worker crashed once, in a fresh worker (the default).
+    #[arg(long, overrides_with = "no_retry", requires = "isolate")]
+    pub retry_crashed: bool,
+    /// Record a worker crash as final, without a retry.
+    #[arg(long, overrides_with = "retry_crashed", requires = "isolate")]
+    pub no_retry: bool,
 }
 
 /// `quail inspect`.

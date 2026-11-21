@@ -24,6 +24,9 @@ quail scan --manifest split.tsv -o recs.jsonl --dump-documents docs.jsonl
 # Tighter limits, 4 workers, machine-readable stats.
 quail scan /data -j 4 --max-bytes 64M --max-pages 200 --timeout 30s --json-stats -q
 
+# Every file in a worker child process: a crash, OOM or hang costs one record.
+quail scan /data -j 4 --isolate --worker-mem 1G -o records.jsonl
+
 # First records only: exits quietly as soon as `head` closes the pipe.
 quail scan /data | head -3
 ```
@@ -41,6 +44,9 @@ quail scan /data | head -3
 | `--include GLOB`, `--exclude GLOB`, `--ext a,b`, `--skip-hidden`, `--sorted`, `--follow-symlinks` | walk filters (`quail-io`'s `FsSource`) |
 | `--max-bytes SIZE`, `--max-decompressed SIZE`, `--max-pages N`, `--timeout DUR` | per-file `Limits` overrides |
 | `-q, --quiet` / `--json-stats` | no stderr output / final stats as one JSON object |
+| `--isolate` | process each file in a worker child process (`quail-worker`), see below |
+| `--worker-mem SIZE` | address space per worker (`RLIMIT_AS`, default 1G) |
+| `--retry-crashed` / `--no-retry` | retry a file whose worker crashed once in a fresh worker (default) / record the first crash |
 
 Behaviour:
 
@@ -63,6 +69,30 @@ Behaviour:
 are byte-for-byte what a run without it writes (no extra step). Files without a document get
 no line. A failed write or a panic while dumping is reported in the summary
 (`hook_panics` in `--json-stats`) and makes the exit code 1.
+
+### --isolate
+
+In-process, a panic costs one file (the engine's `catch_unwind`), but an abort, a failed
+allocation, a stack overflow or a parser that never checks its deadline ends the run. With
+`--isolate` the `quail` binary re-runs itself as `-j` worker processes
+(`quail_worker::IsolatedRunner`); each builds its own engine (same profile and limits) and
+reads the files itself, so file bytes never pass through the supervisor. Records, the order
+(`--ordered`), `--dump-documents` (the worker sends the document back), Ctrl-C, broken pipe
+and exit codes are the same as in process; records are identical apart from timings.
+
+- A dead worker gives its file a `failed` record, `worker crashed: <reason>` (aborted, out of
+  memory, stack overflow, timed out, killed...), with the size and the sniffed format. The
+  file is retried once in a fresh worker unless `--no-retry`; a second crash records it as
+  poisoned. Hangs are killed after `2 x --timeout + 5 s` and not retried.
+- `--worker-mem` is `RLIMIT_AS` per worker (Linux enforces it). It covers the models (the
+  language models are the largest part), the file and its document: budget about 4x the
+  largest file accepted on top of the models. Total memory is about `-j x` that.
+- Size cap and unreadable files are checked in the supervisor, with the same records as in
+  process.
+- Stats gain an `isolation` object (`--json-stats`): `crashes`, `crash_kinds` (by kind:
+  `abort`, `oom`, `stack_overflow`, `cpu_limit`, `timeout`, `exit`, `killed`, `signal`,
+  `protocol`), `retries`, `retried_ok`, `poisoned`, `respawns`, `spawn_failures`; the human
+  summary prints a `worker crashes:` line when there were any.
 
 ## inspect
 
@@ -108,13 +138,14 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 |---|---|---|
 | (always) | quail-engine, quail-hash | `engine.sniff@1`, `hash.identity@1` |
 | `docx` (default) | quail-docx | `docx.extract@1` |
-| `pdf` | quail-pdf | `pdf.extract@1` — to wire in when #7 merges |
+| `pdf` (default) | quail-pdf | `pdf.extract@1` (provides the `raster` artifact) |
 | `text` (default) | quail-text | `text.stats@1`, `text.lang@1` |
 | `signals` (default) | quail-signals | `signal.scan@1` |
 | `refs` (default) | quail-refs | `ref.references@1` |
 | `parties` (default) | quail-parties | `party.candidates@1` |
-| `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); `sketch.page_phash@1` not wired: needs the `raster` artifact, which the engine cannot see an extractor provide yet |
+| `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@1` (Standard, runs only on documents with a scanned page or a page needing OCR) |
 | `zstd` | (quail-io) | `--zstd` output |
+| `test-hooks` | - | test-only: `QUAIL_TEST_CRASH_ON=<substring>` makes `--isolate` workers abort on matching locators. Never ship it |
 
 Key docs (`src/keydocs.rs`) are generated from each crate's `keys` module by
 `tools/genkeys.py`; a unit test fails when a crate declares a key that is not in the table.

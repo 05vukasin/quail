@@ -271,6 +271,107 @@ pub const DOCX: &[KeyDoc] = &[
     },
 ];
 
+/// Keys of `quail_pdf::keys`.
+#[cfg(feature = "pdf")]
+pub const PDF: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_pdf::keys::VERSION,
+        doc: "PDF version, e.g. `\"1.7\"` (catalog `Version` wins over the header). Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::PAGE_COUNT,
+        doc: "Number of pages in the document (not only the extracted ones). Int.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::ENCRYPTED,
+        doc: "The file has an `/Encrypt` dictionary (owner- or user-password protected). Bool.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::PRODUCER,
+        doc: "Info `Producer`. Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::CREATOR,
+        doc: "Info `Creator`. Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::AUTHOR,
+        doc: "Info `Author`. Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::TITLE,
+        doc: "Info `Title`. Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::SUBJECT,
+        doc: "Info `Subject`. Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::KEYWORDS,
+        doc: "Info `Keywords`. Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::CREATED,
+        doc: "Info `CreationDate`. Date.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::MODIFIED,
+        doc: "Info `ModDate`. Date.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::CREATED_UTC_OFFSET,
+        doc: "UTC offset of `CreationDate`, e.g. `+02:00`, when it has a non-zero one. Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::MODIFIED_UTC_OFFSET,
+        doc: "UTC offset of `ModDate`, e.g. `-05:00`, when it has a non-zero one. Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::INCREMENTAL_UPDATES,
+        doc: "Incremental updates appended after the first revision (`%%EOF` sections minus one, minus the extra section of a linearized file). Int.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::LINEARIZED,
+        doc: "The file is linearized (\"fast web view\"). Bool.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::HAS_XMP,
+        doc: "The catalog has an XMP metadata stream. Bool.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::SIGNATURE_FIELDS,
+        doc: "Signature form fields. Int.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::SIGNED,
+        doc: "At least one signature field carries a signature value. Bool.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::FORM_FIELDS,
+        doc: "Terminal `AcroForm` fields (signatures included). Int.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::HAS_JAVASCRIPT,
+        doc: "The document contains JavaScript actions. Bool.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::EMBEDDED_FILES,
+        doc: "Files in the `EmbeddedFiles` name tree. Int.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::FONTS,
+        doc: "Font names used by the extracted pages, subset tag stripped, deduplicated, sorted. List of Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::IMAGE_ONLY_PAGES,
+        doc: "Extracted pages that are an image with (almost) no text. Int.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::PAGES_NEEDING_OCR,
+        doc: "Extracted pages flagged `needs_ocr`. Int.",
+    },
+];
+
 /// Keys of `quail_text::keys`.
 #[cfg(feature = "text")]
 pub const TEXT: &[KeyDoc] = &[

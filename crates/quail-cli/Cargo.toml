@@ -12,10 +12,10 @@ name = "quail"
 path = "src/main.rs"
 
 [features]
-default = ["docx", "text", "signals", "refs", "parties", "sketch"]
+default = ["docx", "pdf", "text", "signals", "refs", "parties", "sketch"]
 # Extractors and analyzers wired in by `registry.rs`, one feature per crate.
 docx = ["dep:quail-docx"]
-# TODO(quail-pdf #7): pdf = ["dep:quail-pdf"]
+pdf = ["dep:quail-pdf"]
 text = ["dep:quail-text"]
 signals = ["dep:quail-signals"]
 refs = ["dep:quail-refs"]
@@ -23,29 +23,39 @@ parties = ["dep:quail-parties"]
 sketch = ["dep:quail-sketch"]
 # zstd-compressed output (`--zstd`). Links the C zstd library, so it is not in the default build.
 zstd = ["quail-io/zstd"]
+# Test-only crash injection in `--isolate` workers (`QUAIL_TEST_CRASH_ON`). Never ship it.
+test-hooks = []
 
 [dependencies]
 quail-core.workspace = true
 quail-engine = { path = "../quail-engine" }
 quail-io = { path = "../quail-io" }
 quail-hash = { path = "../quail-hash" }
+quail-worker = { path = "../quail-worker" }
 quail-docx = { path = "../quail-docx", optional = true }
+quail-pdf = { path = "../quail-pdf", optional = true }
 quail-text = { path = "../quail-text", optional = true }
 quail-signals = { path = "../quail-signals", optional = true }
 quail-refs = { path = "../quail-refs", optional = true }
 quail-parties = { path = "../quail-parties", optional = true }
 quail-sketch = { path = "../quail-sketch", optional = true }
 serde.workspace = true
-serde_json.workspace = true
+# `float_roundtrip`: `--isolate` records cross the worker pipe as JSON and are parsed back;
+# without exact float parsing a value can come back one ULP off and differ from in-process.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 clap = { version = "4.6", features = ["derive"] }
 ctrlc = "3.5"
 
 [dev-dependencies]
+# Itself with the crash hook, so the tests' `quail` binary can be made to crash on purpose.
+quail-cli = { path = ".", default-features = false, features = ["test-hooks"] }
 tempfile = "3.27"
 # The dump format is the one quail-eval reads: tested against its own reader.
 quail-eval = { path = "../quail-eval" }
 # Writes the generated DOCX fixtures (stored entries only, no compressor needed).
 zip = { version = "9.0.5", default-features = false }
+# Writes the generated PDF fixtures.
+lopdf = { version = "0.47.0", default-features = false }
 
 [lints]
 workspace = true
