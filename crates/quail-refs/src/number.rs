@@ -172,10 +172,35 @@ pub fn is_code_prefixed_number(value: &str) -> bool {
 /// The matching key of a contract number: alphanumerics, zero padding inside the code
 /// folded, lower-cased. `""` for a label without an identifying code ("Amendment No. 3").
 pub fn normalize_contract_number(value: &str) -> String {
-    if !is_identifying_contract_key(value) && !is_code_prefixed_number(value) {
+    if !is_identifying_contract_key(value)
+        && !is_code_prefixed_number(value)
+        && !is_serbian_registry_shape(value)
+    {
         return String::new();
     }
     fold_zero_padding(&alnum_upper(value)).to_lowercase()
+}
+
+/// The short Serbian registry / agreement shape `N-M/YY` (`97-4/17`, `3-1/25`,
+/// `116-21/2025`, `23-5/20-1`): two or more dash-joined digit groups, a slash, a two- or
+/// four-digit year, an optional `-N` tail; four digits or more in all. Such numbers name one
+/// agreement although no digit run reaches three digits.
+pub fn is_serbian_registry_shape(value: &str) -> bool {
+    let Some((left, right)) = value.split_once('/') else {
+        return false;
+    };
+    let groups: Vec<&str> = left.split('-').collect();
+    let num = |s: &str, max: usize| {
+        !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_digit())
+    };
+    if groups.len() < 2 || !groups.iter().all(|g| num(g, 5)) {
+        return false;
+    }
+    let (year, tail) = right.split_once('-').unwrap_or((right, ""));
+    if !(num(year, 4) && matches!(year.len(), 2 | 4)) || !(tail.is_empty() || num(tail, 4)) {
+        return false;
+    }
+    value.bytes().filter(u8::is_ascii_digit).count() >= 4
 }
 
 /// Letters and digits upper-cased; `""` without a digit or with fewer than

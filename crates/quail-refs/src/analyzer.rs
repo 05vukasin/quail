@@ -219,7 +219,7 @@ fn inferable(m: &Mention) -> bool {
     m.head
         && m.trigger.is_none()
         && !m.self_ref
-        && m.kind != Kind::Annex
+        && !matches!(m.kind, Kind::Annex | Kind::Procurement | Kind::Registry)
         && m.number.as_ref().is_some_and(|n| !n.key.is_empty())
 }
 
@@ -239,7 +239,7 @@ fn page_pass(
     for m in ms {
         classify(pp, m, c, acc);
     }
-    for n in generic_numbers(p, pp) {
+    for (n, registry) in generic_numbers(p, pp) {
         if acc.own.iter().any(|o| o.number.key == n.key)
             || ms
                 .iter()
@@ -251,10 +251,14 @@ fn page_pass(
         add_own(
             acc,
             Own {
-                kind: c.doc_kind,
+                kind: if registry {
+                    Some(Kind::Registry)
+                } else {
+                    c.doc_kind
+                },
                 number: n,
                 date: None,
-                conf: 0.45,
+                conf: if registry { 0.6 } else { 0.45 },
                 ev,
             },
         );
@@ -350,7 +354,12 @@ fn classify(pp: &Prepared<'_>, m: &Mention, c: &Classify, acc: &mut Acc) {
         let explicit = rel != Relation::References;
         let parentish = matches!(
             kind,
-            Kind::Msa | Kind::Sow | Kind::Po | Kind::Nda | Kind::AmendedRestated
+            Kind::Msa
+                | Kind::Sow
+                | Kind::Po
+                | Kind::Nda
+                | Kind::AmendedRestated
+                | Kind::FrameworkAgreement
         );
         let base = if has_key {
             0.8
@@ -440,6 +449,7 @@ fn classify(pp: &Prepared<'_>, m: &Mention, c: &Classify, acc: &mut Acc) {
             | Kind::Po
             | Kind::Order
             | Kind::AmendedRestated
+            | Kind::FrameworkAgreement
     );
     let child_doc = matches!(
         c.doc_kind,

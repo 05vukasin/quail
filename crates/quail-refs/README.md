@@ -18,7 +18,7 @@ roles (`quail-parties`).
 | `ref.doc_number` | record `kind raw key base date` | an own number of this document |
 | `ref.cites` | record `kind relation raw key base ordinal date` | a document this one cites |
 | `ref.title` | Text | title: heading/title-zone block, else a title line, else the largest line |
-| `ref.instrument_kind` | Text | `msa contract nda sow amendment amended_restated annex change_order side_letter po order invoice quote` |
+| `ref.instrument_kind` | Text | `msa contract nda sow amendment amended_restated annex change_order side_letter po order invoice quote framework_agreement award_decision decision price_list notice tender_documentation` |
 | `ref.ordinal` | Int | Amendment No. 3 → 3, Third Amendment → 3, Aneks II → 2, AM9 → 9 |
 | `ref.page_marker` | record `n of` | "Strana 2 od 5", "Page 2 of 5", "Стр. 2 од 5"; one per page |
 | `ref.version_hint` | record `kind n` | `version revision draft final execution redline clean` |
@@ -49,6 +49,8 @@ Python lookarounds written out by hand):
   and run padding folded for identity. Invoice numbers use the identity key, every other kind the
   contract key.
 - `without_version_tail`, `unpadded`, `study_codes`, `clm_record_ids`.
+- `is_serbian_registry_shape`: the short Serbian shape `N-M/YY` (`97-4/17`, `116-21/2025`,
+  `23-5/20-1`) names one agreement too, although no digit run reaches three digits.
 
 ## Own or cited
 
@@ -62,6 +64,26 @@ it is its own. A trigger before the kind ("pursuant to", "under", "to the", "uz"
 takes the kind its type code names (`AMD`, `CR`, `SOW`, `PO`, `INV`, `MSA`). Serbian *aneks* is an
 amendment, *prilog* an annex. Bank accounts ("tekući račun"), "P.O. Box", "Executive Order",
 "NDA No." (drug applications) and securities-filing exhibit indexes ("EXHIBIT 10.12") are skipped.
+
+## Serbian public-procurement documents
+
+- **Kinds**: *okvirni sporazum* → `framework_agreement` (a private *okvirni ugovor* stays `msa`);
+  *odluka o dodeli ugovora / okvirnog sporazuma*, *odluka o izboru najpovoljnije ponude* →
+  `award_decision`; any other *odluka* / *rešenje* → `decision`; *cenovnik*, "price list" →
+  `price_list`; *obaveštenje*, *javni poziv*, *poziv za podnošenje ponuda*, *oglas*, "award notice" →
+  `notice`; *konkursna / tenderska dokumentacija*, *model ugovora* → `tender_documentation` (also a
+  title that names only the procurement, "JAVNA NABAVKA MALE VREDNOSTI ...").
+- **Procurement numbers**: *javna nabavka*, *JN* is a kind that is only ever cited
+  (`ref.cites` with `kind = procurement`, e.g. "u postupku javne nabavke br. 404-1-110/17").
+  "Ugovor o javnoj nabavci br. X" is one contract mention, not a procurement.
+- **Registry numbers**: a head line "Broj:", "Br.:" (with the colon), "Delov. br.", "Број акта"
+  gives an own `ref.doc_number` with `kind = registry` (the document's filing number, not a
+  contract number), conf 0.6; short registry numbers ("92/16") count from three digits. A bare
+  "br. 114/23" under a contract title stays the contract's number.
+- **Titles**: an upper-case kind line in the header zone of page 1 can be the title (portal forms
+  print "ОДЛУКА О ИЗМЕНИ УГОВОРА" there); a field label naming a contract in an oblique case
+  ("Prvobitna vrednost ugovora") is not; a title does not run on into "ЗА ЈАВНУ НАБАВКУ ...".
+  *ugovor* / *sporazum* match only as nouns (`ugovorne strane` is no mention).
 
 ## How
 
