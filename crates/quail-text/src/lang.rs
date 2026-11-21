@@ -21,7 +21,10 @@
 //! cache (thread-safe, read-only once loaded); [`LanguageDetector::new`] warms them up with
 //! two short texts so the cost is paid at construction. quail never asks Lingua to preload
 //! or unload models, because those calls run on rayon's global thread pool and would start
-//! it (one thread per core); detection itself runs on the caller's thread.
+//! it (one thread per core); detection itself runs on the caller's thread. The vendored
+//! Lingua (`vendor/lingua`) also builds, at construction, a hash table of every 1- to
+//! 3-gram probability of the 11 models (about 7 MB, 0.1 s), so a lookup is one probe for
+//! all languages instead of an fst walk per language; scores are unchanged.
 //!
 //! Text is sampled before detection ([`DetectorOptions::max_chars`], taken from the start,
 //! middle and end of the text) so cost per document is bounded: about 1 ms for the default
@@ -956,6 +959,23 @@ mod tests {
         for h in handles {
             for r in h.join().unwrap() {
                 assert_eq!(r, expected);
+            }
+        }
+    }
+
+    /// The vendored Lingua sums in a fixed order (upstream iterated a randomly seeded
+    /// `HashSet`), so even the `f64` scores repeat exactly, for long texts (trigrams only)
+    /// and short ones (1- to 5-grams, the fst path).
+    #[test]
+    fn backend_scores_are_deterministic() {
+        let long = "Zakupac je dužan da plaća zakupninu do petog u mesecu. The tenant shall \
+                    pay the rent. Der Mieter zahlt die Miete. Уговор о закупу пословног \
+                    простора. Le locataire paie le loyer. "
+            .repeat(20);
+        for text in [long.as_str(), "plaća zakupninu", "the rent is due"] {
+            let first = DET.inner.compute_language_confidence_values(text);
+            for _ in 0..20 {
+                assert_eq!(DET.inner.compute_language_confidence_values(text), first);
             }
         }
     }

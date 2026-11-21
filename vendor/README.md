@@ -1,6 +1,7 @@
 # Vendored, patched crates
 
-These are copies of published crates with small hardening patches for hostile PDFs. The root
+These are copies of published crates with small patches: hardening for hostile PDFs (hayro)
+and speed (lingua). The root
 `Cargo.toml` routes the crates.io versions here through `[patch.crates-io]`. They are not
 workspace members (`exclude = ["vendor"]`), so workspace lints and `cargo fmt` do not touch
 them.
@@ -14,9 +15,14 @@ pristine sources in `~/.cargo/registry/src/*/<crate>-<version>/`.
 | `hayro-interpret` | 0.9.0 | https://github.com/LaurenzV/hayro |
 | `hayro-jbig2` | 0.4.0 | https://github.com/LaurenzV/hayro |
 | `hayro` | 0.9.0 | https://github.com/LaurenzV/hayro |
+| `lingua` | 1.8.0 | https://github.com/pemistahl/lingua-rs |
 
-`quail-pdf` pins `hayro`, `hayro-syntax` and `hayro-interpret` at `=0.9.0` so that the patches
-always apply to the version they were written for.
+`quail-pdf` pins `hayro`, `hayro-syntax` and `hayro-interpret` at `=0.9.0`, and `quail-text`
+pins `lingua` at `=1.8.0`, so that the patches always apply to the version they were written
+for.
+
+`lingua` is trimmed to the library: no accuracy reports, images, tests, benchmarks or binding
+metadata (`Cargo.toml` builds an `rlib` only).
 
 ## Why
 
@@ -124,9 +130,46 @@ The crate using them (`quail-pdf`) cannot do that from outside.
 - **`paint.rs`:** gradient and sampled-shading charges.
 - **`glyph_cache.rs`:** glyph positions are summed in `f64` (the `i32` sum overflowed).
 
+### lingua 1.8.0 (speed; output unchanged)
+
+quail's `text.lang` spent most of its time inside `compute_language_confidence_values`. The
+patches keep every probability bit-for-bit and change only how it is looked up:
+
+- **`fast.rs` (new):** `NgramTable`, every 1-, 2- and 3-gram of the detector's probability
+  models in one hash map from the packed n-gram (21 bits per character) to a dense row with
+  one slot per language: the model's exact `f64` bits, or empty. It is filled from the
+  embedded fst models once, in `LanguageDetector::from`, walking only keys of at most three
+  characters (an fst automaton prunes longer ones). Built only for detectors of at most 16
+  languages; larger ones keep upstream's lookups.
+- **`detector.rs`:**
+  - `compute_language_probabilities` and `count_unigrams` use the table: one probe per
+    n-gram (and backoff level) for all languages, instead of a `DashMap` probe plus an
+    `fst::Map::get` per language. Per language, the first backoff level found is added, in
+    n-gram order, exactly as upstream; 4- and 5-grams (texts under 120 characters) still go
+    to the fst.
+  - **Deterministic sums.** Upstream summed over a `HashSet` of n-grams and a `HashMap` of
+    languages, whose iteration order is random per call, so the last bits of the `f64`
+    confidences changed from call to call. The softmax denominator is now summed in language
+    order, and the very-long-text fallback breaks ties in language order.
+  - `filter_languages_by_rules` counts the words containing each character once, then adds
+    those counts per mapping entry, instead of searching every word for every character of
+    every entry. Same counts.
+- **`model.rs`:** `create_lower_order_ngrams` returns the distinct n-grams in order of first
+  occurrence (deterministic; see above) and slices each word once instead of walking it from
+  the start per n-gram.
+- **`alphabet.rs`:** `CharSet` is a sorted list of merged code point ranges with a binary
+  search, instead of a `HashSet` of every code point (SipHash per character, ~100 000 entries
+  for Han). Same characters match.
+- **`Cargo.toml`:** `rlib` only, no binary, test or bench targets.
+
+Checked: `quail scan` records (minus `timings`) identical before and after on the private
+corpus and CUAD, at `-j1` and `-j4`.
+
 ## Updating
 
 1. Copy the new upstream sources over the directory.
 2. Re-apply every `// quail:` change.
 3. Run `cargo test -p quail-pdf`. Its `tests/hostile.rs` regenerates the hostile inputs and
    fails if any of them gets through.
+4. For lingua, run `cargo test -p quail-text` and compare `quail scan` records (minus
+   `timings`) on a corpus before and after: they must be identical.

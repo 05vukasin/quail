@@ -48,9 +48,10 @@ Both require the `document` artifact and run in `Fast`.
 - `text.stats` reads at most `Limits::max_text_bytes` (records a problem when it stops), checks the deadline
   per page.
 - `text.lang` samples 3 000 characters for the model (start, middle, end) and scans at most 20 000
-  for sr/hr/bs markers: about 1 ms per document. The detector holds about 50 MB of models
-  (process-wide, read-only once loaded; about 28 MB after construction, 55 MB once every language has been
-  seen); build it once and share it.
+  for sr/hr/bs markers: about 1 ms per document. The detector holds about 60 MB: the models
+  (process-wide, read-only, file-backed pages of the binary, ~54 MB once touched) plus a 7 MB
+  table of their 1- to 3-grams that the vendored Lingua builds at construction (about 0.1 s,
+  once per process; see `vendor/README.md`). Build it once and share it.
 
 ## Measured
 
@@ -91,5 +92,7 @@ Throughput (`cargo bench -p quail-text --bench throughput`, thin LTO, shared 16-
 | `garbage_report` | 91 | 20 | 119 |
 
 Cyrillic is slower per byte because every character takes the Unicode-table path (two bytes per
-letter, no ASCII fast path). Language detection: 1.3–1.8 ms per 256 KiB document, 0.17–0.31 ms for a
-120-character snippet.
+letter, no ASCII fast path). Language detection: 0.8–1.4 ms per 256 KiB document (mostly sampling
+and the marker scan), 0.08–0.15 ms for a 120-character snippet. Over CUAD's 510 contracts
+(`Standard`: per document and per page), the analyzer takes 2.3 s instead of 9.0 s with upstream
+Lingua 1.8.0.

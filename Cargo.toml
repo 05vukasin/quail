@@ -65,3 +65,6 @@ hayro = { path = "vendor/hayro" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
+# Faster lingua for quail-text: one hash probe per n-gram for all languages instead of an fst
+# walk per language, and a deterministic summation order. Output unchanged; see vendor/README.md.
+lingua = { path = "vendor/lingua" }
