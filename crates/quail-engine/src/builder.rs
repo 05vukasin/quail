@@ -256,6 +256,11 @@ fn order(
                 }
             }
         }
+        for &r in a.after() {
+            if let Some(ps) = providers.get(r) {
+                deps[i].extend(ps.iter().copied().filter(|&p| p != i));
+            }
+        }
         deps[i].sort_unstable();
         deps[i].dedup();
     }

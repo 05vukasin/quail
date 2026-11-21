@@ -221,3 +221,94 @@ fn extractor_provided_artifact_satisfies_requirements() {
         .build()
         .expect("raster provided by the extractor");
 }
+
+/// `after` orders a consumer behind an active provider, and never blocks it when the provider is
+/// absent; `Ctx::document` prefers the revised document.
+#[test]
+fn after_is_soft_ordering_and_ctx_prefers_revised_document() {
+    use std::sync::{Arc, Mutex};
+
+    use quail_core::{
+        Analyzer, AnalyzerId, Blob, Ctx, Document, Emitter, Extractor, Format, Limits, Page,
+        PageKind, Result, RevisedDocument, SourceItem, TextSource,
+    };
+
+    struct Ext;
+    impl Extractor for Ext {
+        fn id(&self) -> AnalyzerId {
+            AnalyzerId::new("t.extract", 1)
+        }
+        fn formats(&self) -> &'static [Format] {
+            &[Format::Text]
+        }
+        fn extract(&self, _: &Blob, _: &Limits, _: &mut Emitter) -> Result<Document> {
+            Ok(Document {
+                pages: vec![Page {
+                    text: "native".into(),
+                    text_source: TextSource::Native,
+                    ..Page::new(0, PageKind::Logical)
+                }],
+            })
+        }
+    }
+    struct Reviser;
+    impl Analyzer for Reviser {
+        fn id(&self) -> AnalyzerId {
+            AnalyzerId::new("t.revise", 1)
+        }
+        fn requires(&self) -> &'static [&'static str] {
+            &["document"]
+        }
+        fn provides(&self) -> &'static [&'static str] {
+            &["revised_document"]
+        }
+        fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
+            let mut d = ctx.get::<Document>().cloned().unwrap_or_default();
+            d.pages[0].text = "revised".into();
+            out.provide(RevisedDocument(d));
+            Ok(())
+        }
+    }
+    struct Reader(Arc<Mutex<Vec<String>>>);
+    impl Analyzer for Reader {
+        fn id(&self) -> AnalyzerId {
+            AnalyzerId::new("t.read", 1)
+        }
+        fn requires(&self) -> &'static [&'static str] {
+            &["document"]
+        }
+        fn after(&self) -> &'static [&'static str] {
+            &["revised_document"]
+        }
+        fn run(&self, ctx: &Ctx<'_>, _: &mut Emitter) -> Result<()> {
+            let t = ctx
+                .document()
+                .map(|d| d.pages[0].text.clone())
+                .unwrap_or_default();
+            self.0.lock().unwrap().push(t);
+            Ok(())
+        }
+    }
+    let item = || SourceItem {
+        locator: "a.txt".into(),
+        blob: Blob::from(b"plain text\n".to_vec()),
+        modified: None,
+    };
+    // Reader registered first, but must run after the reviser.
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let engine = quail_engine::EngineBuilder::new()
+        .extractor(Box::new(Ext))
+        .analyzer(Box::new(Reader(Arc::clone(&seen))))
+        .analyzer(Box::new(Reviser))
+        .build()
+        .unwrap();
+    engine.process(item());
+    // Without a reviser the reader still runs and sees the original.
+    let engine = quail_engine::EngineBuilder::new()
+        .extractor(Box::new(Ext))
+        .analyzer(Box::new(Reader(Arc::clone(&seen))))
+        .build()
+        .unwrap();
+    engine.process(item());
+    assert_eq!(*seen.lock().unwrap(), ["revised", "native"]);
+}
