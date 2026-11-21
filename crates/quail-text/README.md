@@ -13,6 +13,7 @@ Text utilities every text analyzer builds on, plus two text-level analyzers. Nam
 | `token` | UAX #29 tokens with byte spans, linear time; kinds `Word Number Alnum Url Email Punct Symbol`; `114/23`, `2023-05-12`, `1.200,50`, `1 200 000,00`, spaced IBANs, `+381`, `C++`, URLs and e-mail addresses kept whole; `keyed_tokens` adds a folded key per token from one reused buffer |
 | `shingle` | word shingles and char n-grams as **stable** XXH3-64 hashes (fixed seed, pinned by tests) |
 | `garbage` | `garbage_report` / `garbage_ratio`: share of broken-text-layer characters; `verdict()` → `Clean`, `Garbage` (ratio > `NEEDS_OCR_RATIO` = 0.10) or `TooShort` (< 20 characters, never an OCR reason by itself) |
+| `money` | exact-decimal numbers and amounts: `parse_number` with a `NumberFormat` (`MONEY`: two decimals, no sign; `QUANTITY`: four decimals, sign, `1'200`) and a `DecimalHint` for `1,500`; `parse_money` with currency (symbol, word in any case incl. Cyrillic `дин.`, ISO code in capitals), multiplier (`5 million`, `2 miliona`) and sign (`-1,200.00`, `1.200,00-`, `(1,200.00)`); `Decimal` with `Display`; the currency and multiplier tables. Shared by `quail-signals` and `quail-items` |
 | `lang` | `LanguageDetector`: Lingua (high accuracy, 11 languages) + an sr/hr/bs marker layer, scored candidates |
 
 ## Stability of stored sketches
