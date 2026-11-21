@@ -70,10 +70,22 @@ pub const DATE_AMBIGUOUS_DEFAULT: f32 = 0.6;
 pub const DATE_MONTH_NAME: f32 = 0.97;
 /// Precision of the effective-date role (multiplies the date's conf).
 pub const DATE_ROLE_EFFECTIVE: f32 = 0.78;
+/// Precision of the first effective-role date on the first two pages (the agreement's own;
+/// measured as the effective-date prediction on Kleister-NDA / CUAD dev: 0.95 / 0.83 right,
+/// absent-gold documents counted wrong).
+pub const DATE_ROLE_EFFECTIVE_FIRST: f32 = 0.92;
 /// Precision of the expiry-date role.
 pub const DATE_ROLE_EXPIRY: f32 = 0.8;
+/// Factor on an expiry date before the agreement's effective date.
+pub const DATE_EXPIRY_BEFORE_EFFECTIVE: f32 = 0.3;
 /// Precision of the signing-date role.
 pub const DATE_ROLE_SIGNED: f32 = 0.65;
+/// Precision of the first signing phrase on the first two pages (measured as the date
+/// prediction on Kleister-NDA / CUAD dev: about 0.9 with absent-gold documents counted
+/// wrong).
+pub const DATE_ROLE_SIGNED_FIRST: f32 = 0.85;
+/// Factor on a signing date two years or more before the agreement's effective date.
+pub const DATE_SIGNED_YEARS_BEFORE: f32 = 0.5;
 /// Precision of a bare `Date:` / `Datum:` / `dana` label right before a date (signing).
 pub const DATE_ROLE_LABEL: f32 = 0.5;
 /// Precision of a date standing alone on a line at the head of the first page (the date

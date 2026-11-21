@@ -355,6 +355,42 @@ fn date_roles() {
     assert!(conf_of(&f, &keys::DATE_DUE) < conf_of(&f, &keys::DATE));
 }
 
+fn conf_for(facts: &[Fact], key: &FactKey, v: &Value) -> f32 {
+    facts
+        .iter()
+        .find(|f| &f.key == key && &f.value == v)
+        .map_or(0.0, |f| f.conf)
+}
+
+#[test]
+fn first_role_dates_and_sanity_against_the_effective_date() {
+    let p0 = "This Agreement is effective as of March 1, 2020 and was made on February 20, 2020.\n\
+              It replaces the terms signed on January 5, 2016.\n\
+              The prior term expires on December 31, 2019. This term expires on February 28, 2022.\n\
+              An amendment effective as of June 1, 2021 may follow.";
+    let p2 = "Later pages: made on May 2, 2023.";
+    let f = run_doc(doc(&[p0, "x", p2]), &Limits::default()).0;
+    let eff = conf_for(&f, &keys::DATE_EFFECTIVE, &date(2020, 3, 1));
+    let later_eff = conf_for(&f, &keys::DATE_EFFECTIVE, &date(2021, 6, 1));
+    assert!(eff > 0.85 && later_eff < 0.8, "{eff} {later_eff}");
+    // The first signing phrase on the first pages; a later one keeps the plain role conf.
+    let signed = conf_for(&f, &keys::DATE_SIGNED, &date(2020, 2, 20));
+    let later_signed = conf_for(&f, &keys::DATE_SIGNED, &date(2023, 5, 2));
+    assert!(
+        signed > 0.8 && later_signed < 0.65,
+        "{signed} {later_signed}"
+    );
+    // Signed four years before the effective date; an expiry before it.
+    let old = conf_for(&f, &keys::DATE_SIGNED, &date(2016, 1, 5));
+    assert!(old > 0.0 && old < 0.35, "{old}");
+    let before = conf_for(&f, &keys::DATE_EXPIRY, &date(2019, 12, 31));
+    let after = conf_for(&f, &keys::DATE_EXPIRY, &date(2022, 2, 28));
+    assert!(
+        before > 0.0 && before < 0.3 && after > 0.7,
+        "{before} {after}"
+    );
+}
+
 #[test]
 fn agreement_date_phrases() {
     for (text, key, want) in [

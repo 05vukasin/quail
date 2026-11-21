@@ -594,6 +594,71 @@ fn month_first(p: &PageText, i: usize) -> Option<(DateCand, usize)> {
     Some(cand(p, i, y, d, Order::Mdy, conf::DATE_MONTH_NAME))
 }
 
+/// Months from `a` to `b` (negative when `b` is earlier), ignoring days.
+fn months_between(a: Date, b: Date) -> i32 {
+    (i32::from(b.y) * 12 + i32::from(b.m)) - (i32::from(a.y) * 12 + i32::from(a.m))
+}
+
+/// Document-level role confidence, once every page is scanned and the ambiguous dates are
+/// resolved. `early[i]` says date `i` is on one of the first two pages.
+///
+/// - The first effective-role date on the first two pages is the agreement's own (it is the
+///   one picked about 90 % right on the Kleister-NDA and CUAD dev splits), and so is the first
+///   signing phrase there: both get the role precision measured for them
+///   ([`conf::DATE_ROLE_EFFECTIVE_FIRST`], [`conf::DATE_ROLE_SIGNED_FIRST`]).
+/// - Sanity against the most confident effective date: an expiry before it and a signing date
+///   two years or more before it are unlikely to be this agreement's (a cited agreement, a
+///   prior term, an OCR slip) and keep only a fraction of their role confidence.
+pub(crate) fn calibrate(dates: &mut [DateCand], early: &[bool]) {
+    let mut effective_seen = false;
+    let mut signed_seen = false;
+    for (d, &e) in dates.iter_mut().zip(early) {
+        let Some((role, rc)) = d.role.as_mut() else {
+            continue;
+        };
+        if !e {
+            continue;
+        }
+        match role {
+            Role::Effective if !effective_seen => {
+                *rc = conf::DATE_ROLE_EFFECTIVE_FIRST;
+                effective_seen = true;
+            }
+            // Only the phrase rule (`made on`, `dated as of`): labels and head dates keep
+            // their own precision.
+            Role::Signed if !signed_seen && (*rc - conf::DATE_ROLE_SIGNED).abs() < 1e-6 => {
+                *rc = conf::DATE_ROLE_SIGNED_FIRST;
+                signed_seen = true;
+            }
+            _ => {}
+        }
+    }
+    let mut effective: Option<(Date, f32)> = None;
+    for d in dates.iter() {
+        if let Some((Role::Effective, rc)) = d.role {
+            let c = d.conf * rc;
+            if effective.is_none_or(|(_, best)| c > best) {
+                effective = Some((d.date, c));
+            }
+        }
+    }
+    let Some((eff, _)) = effective else {
+        return;
+    };
+    for d in dates.iter_mut() {
+        let Some((role, rc)) = d.role.as_mut() else {
+            continue;
+        };
+        match role {
+            Role::Expiry if d.date < eff => *rc *= conf::DATE_EXPIRY_BEFORE_EFFECTIVE,
+            Role::Signed if months_between(d.date, eff) >= 24 => {
+                *rc *= conf::DATE_SIGNED_YEARS_BEFORE;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Reads the file's ambiguous dates once every page is scanned: month-first when the file
 /// has more month-first than day-first evidence, else day-first. Confidence is lower when
 /// there is no evidence either way.
