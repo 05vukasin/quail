@@ -69,11 +69,16 @@ pub const DATE_AMBIGUOUS_DEFAULT: f32 = 0.6;
 /// Date with a month name.
 pub const DATE_MONTH_NAME: f32 = 0.97;
 /// Precision of the effective-date role (multiplies the date's conf).
-pub const DATE_ROLE_EFFECTIVE: f32 = 0.8;
+pub const DATE_ROLE_EFFECTIVE: f32 = 0.78;
 /// Precision of the expiry-date role.
 pub const DATE_ROLE_EXPIRY: f32 = 0.8;
 /// Precision of the signing-date role.
-pub const DATE_ROLE_SIGNED: f32 = 0.55;
+pub const DATE_ROLE_SIGNED: f32 = 0.65;
+/// Precision of a bare `Date:` / `Datum:` / `dana` label right before a date (signing).
+pub const DATE_ROLE_LABEL: f32 = 0.5;
+/// Precision of a date standing alone on a line at the head of the first page (the date
+/// of a letter agreement or a cover page; signing role).
+pub const DATE_ROLE_HEAD: f32 = 0.9;
 /// Precision of the invoice-date role.
 pub const DATE_ROLE_INVOICE: f32 = 0.95;
 /// Precision of the due-date role.

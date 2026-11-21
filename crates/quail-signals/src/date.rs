@@ -15,7 +15,7 @@ use crate::checksum::valid_ymd;
 use crate::conf;
 use crate::keys;
 use crate::page::PageText;
-use crate::phrase::{Reach, find_before};
+use crate::phrase::{Reach, find_before_wrapped};
 
 /// What a keyword before a date says it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,77 +85,204 @@ fn month(key: &str) -> Option<u8> {
     })
 }
 
-/// Role keywords before a date (folded phrases).
-const ROLES: &[(&[&str], Role)] = &[
-    (&["effective", "date"], Role::Effective),
-    (&["effective"], Role::Effective),
-    (&["commencement", "date"], Role::Effective),
-    (&["start", "date"], Role::Effective),
-    (&["with", "effect", "from"], Role::Effective),
-    (&["stupa", "na", "snagu"], Role::Effective),
-    (&["stupanja", "na", "snagu"], Role::Effective),
-    (&["vazi", "od"], Role::Effective),
-    (&["datum", "pocetka"], Role::Effective),
-    (&["expiry", "date"], Role::Expiry),
-    (&["expiration", "date"], Role::Expiry),
-    (&["expires"], Role::Expiry),
-    (&["expire"], Role::Expiry),
-    (&["termination", "date"], Role::Expiry),
-    (&["end", "date"], Role::Expiry),
-    (&["valid", "until"], Role::Expiry),
-    (&["valid", "through"], Role::Expiry),
-    (&["through"], Role::Expiry),
-    (&["ending", "on"], Role::Expiry),
-    (&["end", "on"], Role::Expiry),
-    (&["terminate", "on"], Role::Expiry),
-    (&["terminates", "on"], Role::Expiry),
-    (&["concluding"], Role::Expiry),
-    (&["commencing", "on"], Role::Effective),
-    (&["as", "of"], Role::Effective),
-    (&["entered", "into"], Role::Effective),
-    (&["made", "this"], Role::Effective),
-    (&["into", "this"], Role::Effective),
-    (&["commences", "on"], Role::Effective),
-    (&["until"], Role::Expiry),
-    (&["vazi", "do"], Role::Expiry),
-    (&["do", "dana"], Role::Expiry),
-    (&["istice"], Role::Expiry),
-    (&["rok", "vazenja"], Role::Expiry),
-    (&["datum", "isteka"], Role::Expiry),
-    (&["zakljucno", "sa"], Role::Expiry),
-    (&["signed"], Role::Signed),
-    (&["dated"], Role::Signed),
-    (&["executed"], Role::Signed),
-    (&["date", "of", "signature"], Role::Signed),
-    (&["signature", "date"], Role::Signed),
-    (&["datum", "potpisivanja"], Role::Signed),
-    (&["potpisan"], Role::Signed),
-    (&["potpisano"], Role::Signed),
-    (&["zakljucen"], Role::Signed),
-    (&["zakljucen", "dana"], Role::Signed),
-    (&["zakljucen", "je", "dana"], Role::Signed),
-    (&["zakljucuju", "dana"], Role::Signed),
-    (&["invoice", "date"], Role::Invoice),
-    (&["date", "of", "invoice"], Role::Invoice),
-    (&["datum", "fakture"], Role::Invoice),
-    (&["datum", "racuna"], Role::Invoice),
-    (&["datum", "izdavanja"], Role::Invoice),
-    (&["issue", "date"], Role::Invoice),
-    (&["date", "of", "issue"], Role::Invoice),
-    (&["due", "date"], Role::Due),
-    (&["payment", "due"], Role::Due),
-    (&["due"], Role::Due),
-    (&["pay", "by"], Role::Due),
-    (&["valuta"], Role::Due),
-    (&["rok", "placanja"], Role::Due),
-    (&["datum", "dospeca"], Role::Due),
-    (&["dospece"], Role::Due),
+/// Role keywords before a date (folded phrases). `None` marks a phrase that says the date
+/// belongs to another document (`Ugovora zaključenog dana ...`): the search stops there and
+/// the date gets no role. When several phrases end on the same word the first listed wins,
+/// so longer phrases come before their tails.
+const ROLES: &[(&[&str], Option<Role>)] = &[
+    (&["effective", "date"], Some(Role::Effective)),
+    (&["dated", "effective", "as", "of"], Some(Role::Effective)),
+    (&["effective"], Some(Role::Effective)),
+    (&["commencement", "date"], Some(Role::Effective)),
+    (&["start", "date"], Some(Role::Effective)),
+    (&["with", "effect", "from"], Some(Role::Effective)),
+    (&["with", "effect", "on"], Some(Role::Effective)),
+    (&["stupa", "na", "snagu"], Some(Role::Effective)),
+    (&["stupio", "na", "snagu"], Some(Role::Effective)),
+    (&["stupanja", "na", "snagu"], Some(Role::Effective)),
+    (&["vazi", "od", "dana"], Some(Role::Effective)),
+    (&["vazi", "od"], Some(Role::Effective)),
+    (&["primenjuje", "se", "od"], Some(Role::Effective)),
+    (&["datum", "pocetka"], Some(Role::Effective)),
+    (&["expiry", "date"], Some(Role::Expiry)),
+    (&["expiration", "date"], Some(Role::Expiry)),
+    (&["expires"], Some(Role::Expiry)),
+    (&["expire"], Some(Role::Expiry)),
+    (&["termination", "date"], Some(Role::Expiry)),
+    (&["end", "date"], Some(Role::Expiry)),
+    (&["valid", "until"], Some(Role::Expiry)),
+    (&["valid", "through"], Some(Role::Expiry)),
+    (&["through"], Some(Role::Expiry)),
+    (&["ending", "on"], Some(Role::Expiry)),
+    (&["end", "on"], Some(Role::Expiry)),
+    (&["terminate", "on"], Some(Role::Expiry)),
+    (&["terminates", "on"], Some(Role::Expiry)),
+    (&["concluding"], Some(Role::Expiry)),
+    (&["commencing", "on"], Some(Role::Effective)),
+    (&["commencing"], Some(Role::Effective)),
+    (&["commence", "on"], Some(Role::Effective)),
+    (&["commences", "on"], Some(Role::Effective)),
+    (&["dated", "as", "of"], Some(Role::Signed)),
+    (&["as", "of"], Some(Role::Effective)),
+    (&["entered", "into", "on"], Some(Role::Signed)),
+    (&["entered", "into"], Some(Role::Effective)),
+    (&["made", "this"], Some(Role::Effective)),
+    (&["into", "this"], Some(Role::Effective)),
+    (&["made", "on"], Some(Role::Signed)),
+    (&["made"], Some(Role::Signed)),
+    (&["until"], Some(Role::Expiry)),
+    (&["vazi", "do"], Some(Role::Expiry)),
+    (&["do", "dana"], Some(Role::Expiry)),
+    (&["istice"], Some(Role::Expiry)),
+    (&["rok", "vazenja"], Some(Role::Expiry)),
+    (&["datum", "isteka"], Some(Role::Expiry)),
+    (&["zakljucno", "sa"], Some(Role::Expiry)),
+    (&["signed"], Some(Role::Signed)),
+    (&["dated"], Some(Role::Signed)),
+    (&["executed"], Some(Role::Signed)),
+    (&["date", "of", "signature"], Some(Role::Signed)),
+    (&["signature", "date"], Some(Role::Signed)),
+    (&["datum", "potpisivanja"], Some(Role::Signed)),
+    (&["datum", "zakljucenja"], Some(Role::Signed)),
+    (&["datum", "zakljucivanja"], Some(Role::Signed)),
+    (&["potpisan"], Some(Role::Signed)),
+    (&["potpisano"], Some(Role::Signed)),
+    (&["potpisali"], Some(Role::Signed)),
+    (&["zakljucen", "je", "dana"], Some(Role::Signed)),
+    (&["zakljuceno", "je", "dana"], Some(Role::Signed)),
+    (&["zakljucen", "dana"], Some(Role::Signed)),
+    (&["zakljuceno", "dana"], Some(Role::Signed)),
+    (&["zakljucuju", "dana"], Some(Role::Signed)),
+    (&["zakljucen"], Some(Role::Signed)),
+    (&["zakljuceno"], Some(Role::Signed)),
+    (&["zakljucuju"], Some(Role::Signed)),
+    (&["zakljucili"], Some(Role::Signed)),
+    // A participle of another document: "Ugovora zaključenog dana ...".
+    (&["zakljucenog"], None),
+    (&["zakljucenom"], None),
+    (&["potpisanog"], None),
+    (&["potpisanom"], None),
+    (&["invoice", "date"], Some(Role::Invoice)),
+    (&["date", "of", "invoice"], Some(Role::Invoice)),
+    (&["datum", "fakture"], Some(Role::Invoice)),
+    (&["datum", "racuna"], Some(Role::Invoice)),
+    (&["datum", "izdavanja"], Some(Role::Invoice)),
+    (&["issue", "date"], Some(Role::Invoice)),
+    (&["date", "of", "issue"], Some(Role::Invoice)),
+    (&["due", "date"], Some(Role::Due)),
+    (&["payment", "due"], Some(Role::Due)),
+    (&["due"], Some(Role::Due)),
+    (&["pay", "by"], Some(Role::Due)),
+    (&["valuta"], Some(Role::Due)),
+    (&["rok", "placanja"], Some(Role::Due)),
+    (&["datum", "dospeca"], Some(Role::Due)),
+    (&["dospece"], Some(Role::Due)),
 ];
 
+/// Words and one wrapped line break may sit between a role phrase and its date.
 const ROLE_REACH: Reach = Reach { words: 5, lines: 1 };
 
 /// Words that turn a role keyword into another date (`Discount Due Date`).
 const ROLE_BLOCKERS: &[&str] = &["discount", "early"];
+
+/// A bare label right before a date (`Date: 7/21/2015`, `Datum: ...`, `U Beogradu, dana
+/// 12.03.2024.`): the date of signing when nothing else names a role.
+const DATE_LABELS: &[&str] = &["date", "datum", "dana"];
+
+/// Words before a [`DATE_LABELS`] label that make it something else (`od dana`, `do dana`,
+/// `the date`).
+const LABEL_BLOCKERS: &[&str] = &[
+    "od", "do", "roku", "nakon", "pre", "posle", "dana", "the", "such", "that", "any", "which",
+    "of", "a", "this",
+];
+
+/// Nouns naming an agreement, for telling this agreement's date from a cited one's.
+const INSTRUMENTS: &[&str] = &[
+    "agreement",
+    "agreements",
+    "contract",
+    "contracts",
+    "amendment",
+    "letter",
+    "lease",
+    "license",
+    "plan",
+    "indenture",
+    "ugovor",
+    "ugovora",
+    "ugovorom",
+    "ugovoru",
+    "sporazum",
+    "sporazuma",
+    "sporazumom",
+    "aneks",
+    "aneksa",
+];
+
+/// Determiners that make the instrument this one.
+const THIS: &[&str] = &[
+    "this", "ovaj", "ovog", "ovoga", "ovim", "ovom", "ovo", "ova", "ove", "present",
+];
+
+/// Determiners that make the instrument another one (`the license agreement dated`, `a
+/// Covenant ... Agreement dated`, `both Agreements executed`). `the` right before the noun
+/// (`the Agreement`) still means this agreement.
+const OTHER: &[&str] = &[
+    "the", "that", "a", "an", "such", "its", "his", "her", "their", "any", "each", "both", "said",
+    "certain", "prior", "existing", "original", "previous", "attached", "our", "your", "my",
+    "other", "separate",
+];
+
+/// Is token `i` a word inside quotes (a defined term: `(the "Agreement")`)?
+fn quoted(p: &PageText, i: usize) -> bool {
+    let q = |j: usize| matches!(p.text(j), "\"" | "'");
+    (i > 0 && q(i - 1)) || q(i + 1)
+}
+
+/// Does the role phrase starting at `first` date another instrument than this one? Looks
+/// back, within the sentence, for the nearest instrument noun and the determiner before it.
+fn cited(p: &PageText, first: usize) -> bool {
+    let line = p.line(first);
+    let mut words = 0;
+    let mut j = first;
+    while j > 0 && words < 14 {
+        j -= 1;
+        if line - p.line(j).min(line) > 2 || matches!(p.text(j), "." | ";") {
+            return false;
+        }
+        if !p.wordlike(j) {
+            continue;
+        }
+        words += 1;
+        if !INSTRUMENTS.contains(&p.key(j)) || quoted(p, j) {
+            continue;
+        }
+        // The determiner of this noun phrase.
+        let mut k = j;
+        let mut between = 0;
+        while k > 0 && between < 10 {
+            k -= 1;
+            if line - p.line(k).min(line) > 3 || matches!(p.text(k), "." | ";" | ":" | ")") {
+                return false;
+            }
+            if !p.wordlike(k) {
+                continue;
+            }
+            let w = p.key(k);
+            if THIS.contains(&w) {
+                return false;
+            }
+            if OTHER.contains(&w) {
+                // `the Agreement` and `This is an Agreement` are this one.
+                let is_before = prev_word(p, k).is_some_and(|b| p.key(b) == "is");
+                return !((w == "the" && between == 0) || (matches!(w, "a" | "an") && is_before));
+            }
+            between += 1;
+        }
+        return false;
+    }
+    false
+}
 
 /// Is the word before the role phrase starting at `first` a blocker?
 fn blocked(p: &PageText, first: usize) -> bool {
@@ -164,6 +291,61 @@ fn blocked(p: &PageText, first: usize) -> bool {
         .find(|&j| p.wordlike(j))
         .is_some_and(|j| p.line(j) == p.line(first) && ROLE_BLOCKERS.contains(&p.key(j)))
 }
+
+/// The word-like token before `i`, over at most three punctuation tokens and one line break.
+fn prev_word(p: &PageText, i: usize) -> Option<usize> {
+    let line = p.line(i);
+    (i.saturating_sub(4)..i)
+        .rev()
+        .find(|&j| p.wordlike(j))
+        .filter(|&j| line - p.line(j).min(line) <= 1)
+}
+
+/// `Date: <date>`, `Datum: <date>`, `dana <date>`: the label right before the date.
+fn labelled(p: &PageText, i: usize) -> bool {
+    let Some(l) = prev_word(p, i) else {
+        return false;
+    };
+    if !DATE_LABELS.contains(&p.key(l)) {
+        return false;
+    }
+    let before = prev_word(p, l).filter(|&b| p.line(b) == p.line(l));
+    if p.key(l) == "dana" {
+        // `U Beogradu, dana ...` or `Dana ...` at the start of a line; never inside a
+        // sentence (`konstatuju da su dana ... zaključili`, `objavljen dana ...`).
+        return before.is_none() || (l > 0 && p.text(l - 1) == ",");
+    }
+    !before.is_some_and(|b| LABEL_BLOCKERS.contains(&p.key(b)))
+}
+
+/// Words that may follow a date on its own line (`12.12.2017. god.`).
+const YEAR_WORDS: &[&str] = &["godine", "god", "g"];
+
+/// A date standing alone on its line (a letter or cover-page date), with at most a place
+/// before it (`Rome, 2 April 2020`) and nothing but punctuation after it.
+fn alone_on_line(p: &PageText, a: usize, b: usize) -> bool {
+    let line = p.line(a);
+    let mut before = 0;
+    let mut j = a;
+    while j > 0 && p.line(j - 1) == line {
+        j -= 1;
+        if p.wordlike(j) {
+            before += 1;
+        }
+    }
+    let place = before == 0 || (before <= 2 && a > 0 && p.text(a - 1) == ",");
+    let mut k = b + 1;
+    while k < p.len() && p.line(k) == p.line(b) {
+        if p.wordlike(k) && !YEAR_WORDS.contains(&p.key(k)) {
+            return false;
+        }
+        k += 1;
+    }
+    place
+}
+
+/// Lines from the top of the first page where a date alone on its line is the document's.
+const HEAD_LINES: u32 = 25;
 
 /// Measured precision of each role (see the README).
 fn role_conf(r: Role) -> f32 {
@@ -176,21 +358,52 @@ fn role_conf(r: Role) -> f32 {
     }
 }
 
-/// Scans a page for dates.
-pub(crate) fn scan(p: &PageText, out: &mut Vec<DateCand>) {
+/// The role of the date at tokens `a..=b` and its precision. `first_page` enables the
+/// letter-date rule.
+fn role_of(p: &PageText, a: usize, b: usize, first_page: bool) -> Option<(Role, f32)> {
+    if let Some((role, first)) = find_before_wrapped(p, a, ROLES, ROLE_REACH) {
+        let role = role.filter(|_| !blocked(p, first))?;
+        if matches!(role, Role::Effective | Role::Signed) && cited(p, first) {
+            return None;
+        }
+        return Some((role, role_conf(role)));
+    }
+    if labelled(p, a) {
+        return Some((Role::Signed, conf::DATE_ROLE_LABEL));
+    }
+    if first_page && p.line(a) < HEAD_LINES && alone_on_line(p, a, b) {
+        return Some((Role::Signed, conf::DATE_ROLE_HEAD));
+    }
+    None
+}
+
+/// Scans a page for dates; `first_page` is true on the first page with text.
+pub(crate) fn scan(p: &PageText, first_page: bool, out: &mut Vec<DateCand>) {
     let mut i = 0;
     while i < p.len() {
         match at(p, i) {
             Some((mut c, last)) => {
-                c.role = find_before(p, i, ROLES, ROLE_REACH)
-                    .filter(|(_, first)| !blocked(p, *first))
-                    .map(|(k, _)| (k, role_conf(k)));
+                c.role = role_of(p, i, last, first_page);
                 out.push(c);
                 i = last + 1;
             }
             None => i += 1,
         }
     }
+}
+
+/// Next token index if it follows `j` tightly or starts the next line (a date wrapped over
+/// a line break: `January` / `22, 2013`).
+fn next_wrapped(p: &PageText, j: usize) -> Option<usize> {
+    let k = j + 1;
+    if k >= p.len() {
+        return None;
+    }
+    if p.tight(k) {
+        return Some(k);
+    }
+    let gap = p.gap_before(k)?;
+    (p.line(k) == p.line(j) + 1 && gap.len() <= 3 && gap.trim().is_empty()).then_some(k)
 }
 
 fn mk(y: u32, m: u32, d: u32) -> Option<Date> {
@@ -337,32 +550,45 @@ fn numeric(p: &PageText, i: usize) -> Option<(DateCand, usize)> {
 fn day_first(p: &PageText, i: usize) -> Option<(DateCand, usize)> {
     let day = day_of(p, i)?;
     let mut j = skip_punct(p, i, &["."]);
-    let mut k = next(p, j)?;
+    let mut k = next_wrapped(p, j)?;
     if p.key(k) == "day" {
-        k = next(p, k)?;
+        k = next_wrapped(p, k)?;
         if p.key(k) != "of" {
             return None;
         }
-        k = next(p, k)?;
+        k = next_wrapped(p, k)?;
     } else if p.key(k) == "of" {
-        k = next(p, k)?;
+        k = next_wrapped(p, k)?;
     }
     let m = month(p.key(k))?;
     j = skip_punct(p, k, &[".", ","]);
-    let y = next(p, j)?;
+    let y = next_wrapped(p, j)?;
     let year = year_of(p, y)?;
     let d = mk(year, u32::from(m), day)?;
     Some(cand(p, i, y, d, Order::Dmy, conf::DATE_MONTH_NAME))
 }
 
-/// `September 12, 2023`, `Sept. 12th, 2023`.
+/// `11,2014` read as one number token: day and year glued by a comma.
+fn glued_day_year(t: &str) -> Option<(u32, u32)> {
+    let (d, y) = t.split_once(',')?;
+    let ok = (1..=2).contains(&d.len())
+        && y.len() == 4
+        && d.bytes().chain(y.bytes()).all(|b| b.is_ascii_digit());
+    ok.then(|| Some((d.parse().ok()?, y.parse().ok()?)))?
+}
+
+/// `September 12, 2023`, `Sept. 12th, 2023`, `December 11,2014`.
 fn month_first(p: &PageText, i: usize) -> Option<(DateCand, usize)> {
     let m = month(p.key(i))?;
     let j = skip_punct(p, i, &["."]);
-    let dk = next(p, j)?;
+    let dk = next_wrapped(p, j)?;
+    if let Some((day, year)) = glued_day_year(p.text(dk)) {
+        let d = mk(year, u32::from(m), day)?;
+        return Some(cand(p, i, dk, d, Order::Mdy, conf::DATE_MONTH_NAME));
+    }
     let day = day_of(p, dk)?;
     let j = skip_punct(p, dk, &[","]);
-    let y = next(p, j)?;
+    let y = next_wrapped(p, j)?;
     let year = year_of(p, y)?;
     let d = mk(year, u32::from(m), day)?;
     Some(cand(p, i, y, d, Order::Mdy, conf::DATE_MONTH_NAME))

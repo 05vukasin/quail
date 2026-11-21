@@ -355,6 +355,113 @@ fn date_roles() {
     assert!(conf_of(&f, &keys::DATE_DUE) < conf_of(&f, &keys::DATE));
 }
 
+#[test]
+fn agreement_date_phrases() {
+    for (text, key, want) in [
+        (
+            "This Agreement is made as of June 1, 2020 by and between",
+            &keys::DATE_EFFECTIVE,
+            date(2020, 6, 1),
+        ),
+        (
+            "This Agreement (the \"Agreement\"), dated as of June 1, 2020, is",
+            &keys::DATE_SIGNED,
+            date(2020, 6, 1),
+        ),
+        (
+            "Agreement made December 28, 2018 between",
+            &keys::DATE_SIGNED,
+            date(2018, 12, 28),
+        ),
+        (
+            "This is an Agreement, entered into on January 15, 2018, by",
+            &keys::DATE_SIGNED,
+            date(2018, 1, 15),
+        ),
+        (
+            "The term commencing on 1 March 2021 shall",
+            &keys::DATE_EFFECTIVE,
+            date(2021, 3, 1),
+        ),
+        (
+            "is made and entered into as of\nthis 9th day of July, 2012, by",
+            &keys::DATE_EFFECTIVE,
+            date(2012, 7, 9),
+        ),
+        (
+            "Ovaj ugovor stupa na snagu 01.10.2022. godine",
+            &keys::DATE_EFFECTIVE,
+            date(2022, 10, 1),
+        ),
+        (
+            "Уговор је закључен дана 10. јануара 2024. године",
+            &keys::DATE_SIGNED,
+            date(2024, 1, 10),
+        ),
+        (
+            "Datum zaključenja ugovora: 05.10.2018. godine",
+            &keys::DATE_SIGNED,
+            date(2018, 10, 5),
+        ),
+        (
+            "У Београду, дана 12.03.2024. године",
+            &keys::DATE_SIGNED,
+            date(2024, 3, 12),
+        ),
+        (
+            "Name: X\nDate: 7/21/2015",
+            &keys::DATE_SIGNED,
+            date(2015, 7, 21),
+        ),
+    ] {
+        assert_eq!(values(&run(text), key), [want], "{text}");
+    }
+}
+
+#[test]
+fn cited_agreements_get_no_role() {
+    for text in [
+        "pursuant to the license agreement, dated as of July 9, 1999, between",
+        "parties to a Covenant Not to Compete Agreement dated as of February 28, 2006",
+        "the Asset Contribution Agreement entered into as of November 19, 2004.",
+        "both Agreements executed on or about March 13, 1992, and",
+        "na osnovu Ugovora zaključenog dana 12.03.2020. godine",
+        "Naručilac i Dobavljač konstatuju da su dana 28.01.2025. godine zaključili",
+    ] {
+        let f = run(text);
+        assert_eq!(values(&f, &keys::DATE).len(), 1, "{text}");
+        assert!(values(&f, &keys::DATE_SIGNED).is_empty(), "{text}");
+        assert!(values(&f, &keys::DATE_EFFECTIVE).is_empty(), "{text}");
+    }
+}
+
+#[test]
+fn letter_date_at_the_head_of_the_first_page() {
+    let head = "CONFIDENTIALITY AGREEMENT\nExhibit (d)(3)\nMarch 17, 2010\nACME Corp.\nDear Sirs:";
+    let f = run_doc(doc(&[head]), &Limits::default()).0;
+    assert_eq!(values(&f, &keys::DATE_SIGNED), [date(2010, 3, 17)]);
+    // Not on later pages, and not inside a sentence.
+    let f = run_doc(doc(&["Page one", head]), &Limits::default()).0;
+    assert!(values(&f, &keys::DATE_SIGNED).is_empty());
+    let f = run("We met on March 17, 2010 to discuss");
+    assert!(values(&f, &keys::DATE_SIGNED).is_empty());
+}
+
+#[test]
+fn dates_wrapped_over_lines_and_glued() {
+    for (text, want) in [
+        ("effective as of January\n22, 2013, you", date(2013, 1, 22)),
+        ("this 16th day of August\n2018, between", date(2018, 8, 16)),
+        (
+            "made as of the 15th\nday of May, 1996, by",
+            date(1996, 5, 15),
+        ),
+        ("December 11,2014", date(2014, 12, 11)),
+    ] {
+        assert_eq!(values(&run(text), &keys::DATE), [want], "{text}");
+    }
+}
+
 fn money(units: i64, scale: u8, cur: [u8; 3]) -> Value {
     Value::Money(Money {
         units,
