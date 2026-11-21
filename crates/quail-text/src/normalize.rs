@@ -145,6 +145,11 @@ impl OffsetMap {
         Self::default()
     }
 
+    /// Heap bytes held by the checkpoints.
+    pub fn heap_bytes(&self) -> usize {
+        self.points.capacity() * std::mem::size_of::<Point>()
+    }
+
     fn clear(&mut self) {
         self.points.clear();
         self.out_len = 0;
