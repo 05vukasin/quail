@@ -18,6 +18,13 @@ pub trait Extractor: Send + Sync {
     /// Formats it handles.
     fn formats(&self) -> &'static [Format];
 
+    /// Artifact names it may store besides the `document` (e.g. `"raster"`). Analyzers may
+    /// require them; they are absent for files of other formats or when extraction fails, in
+    /// which case such analyzers are skipped like for any other missing artifact.
+    fn provides(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Extracts the document. Must respect `limits` (stop at `max_pages`, refuse to inflate
     /// past `max_decompressed`) and prefer a partial document plus warnings over an error.
     fn extract(&self, blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document>;

@@ -320,11 +320,13 @@ impl Engine {
             Err(e @ (Error::Encrypted | Error::LimitExceeded(_))) => {
                 st.problems.push(format!("{id}: {e}"));
                 st.fail_provides(&["document"]);
+                st.fail_provides(ext.provides());
                 None
             }
             Err(e) => {
                 st.fatal = Some(format!("{id}: {e}"));
                 st.fail_provides(&["document"]);
+                st.fail_provides(ext.provides());
                 None
             }
         }
