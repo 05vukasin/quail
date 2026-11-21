@@ -162,7 +162,7 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
                 }
             } else if has(&["tax", "vat", "pdv"]) && w.len() <= 3 {
                 "vat"
-            } else if w.iter().any(|x| x == "commission" || x == "provizija") {
+            } else if has(&["commission", "provizija", "discount", "rabat", "popust"]) {
                 "discount"
             } else if matches!(w.first().map(String::as_str), Some("gross" | "bruto")) {
                 "gross"
@@ -172,14 +172,18 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
                 return None;
             }
         }
-        // `4,420.43 USD at TAX (0.0%) Totals`: a long label ending in a total word.
+        // `4,420.43 USD at TAX (0.0%) Totals`: a long label ending in a total word;
+        // `... Total Taxable Amount`.
         None if matches!(
             w.last().map(String::as_str),
             Some("total" | "totals" | "subtotal" | "ukupno")
-        ) =>
+        ) || (w.last().is_some_and(|x| x == "amount")
+            && w.iter().any(|x| x == "total")) =>
         {
             "total"
         }
+        // `Operations (E+F+G)`, `(C = A - B)`: a formula over other rows.
+        None if is_formula(label) => "subtotal",
         None => return None,
     };
     // `ukupno sa PDV-om` is gross, `ukupno bez PDV-a` net, `Total incl. VAT` gross.
@@ -328,6 +332,14 @@ fn is_numbering_row(row: &[Option<GCell>]) -> bool {
     true
 }
 
+/// `E+F+G`, `C = A - B`: capital letters joined by arithmetic.
+fn is_formula(label: &str) -> bool {
+    let b: Vec<char> = label.chars().filter(|c| !c.is_whitespace()).collect();
+    b.windows(3).any(|w| {
+        w[0].is_ascii_uppercase() && matches!(w[1], '+' | '=' | '*') && w[2].is_ascii_uppercase()
+    })
+}
+
 const MONTHS: &[&str] = &[
     "jan",
     "january",
@@ -389,6 +401,89 @@ pub(crate) fn is_date_text(s: &str) -> bool {
     !letters.is_empty()
         && letters.len() <= 2
         && letters.iter().all(|x| MONTHS.contains(&x.as_str()))
+}
+
+/// Company legal forms: a description holding one is an address or a party block.
+const LEGAL_FORMS: &[&str] = &[
+    "gmbh",
+    "doo",
+    "ltd",
+    "limited",
+    "llc",
+    "inc",
+    "plc",
+    "bv",
+    "sas",
+    "ag",
+    "kft",
+    "spa",
+    "srl",
+    "oy",
+    "corp",
+    "corporation",
+    "sarl",
+    "pty",
+];
+
+/// Words that make a description a sentence (a verb or a relative pronoun).
+pub(crate) const SENTENCE_WORDS: &[&str] = &[
+    "will",
+    "shall",
+    "must",
+    "may",
+    "is",
+    "are",
+    "be",
+    "been",
+    "was",
+    "were",
+    "has",
+    "have",
+    "had",
+    "which",
+    "that",
+    "who",
+    "whom",
+    "whose",
+    "if",
+    "when",
+    "where",
+    "pay",
+    "paid",
+    "agrees",
+    "agree",
+    "increase",
+    "decrease",
+    "se",
+    "je",
+    "su",
+    "ce",
+    "biti",
+    "bice",
+    "koji",
+    "koja",
+    "koje",
+    "ako",
+    "kada",
+    "placa",
+    "iznosi",
+    "obavezuje",
+    "dostavlja",
+];
+
+/// A description that cannot be a price line: an address or party block (legal form, phone
+/// number), a currency code alone, an unclosed fragment `(adjusting ...`, or (without a
+/// header) a sentence.
+pub(crate) fn not_an_item(desc: &str, from_header: bool) -> bool {
+    let w = header::words(desc);
+    let legal = w.iter().any(|x| LEGAL_FORMS.contains(&x.as_str()));
+    let phone = desc
+        .char_indices()
+        .any(|(i, c)| c == '+' && desc[i + 1..].starts_with(|d: char| d.is_ascii_digit()));
+    let currency_only = w.len() == 1 && num::currency_word(&w[0], false).is_some();
+    let fragment = desc.trim_start().starts_with('(') && !desc.contains(')');
+    let sentence = !from_header && w.iter().any(|x| SENTENCE_WORDS.contains(&x.as_str()));
+    (legal && w.len() >= 2) || phone || currency_only || fragment || sentence
 }
 
 /// A first row of short labels over the columns, with no numbers.
@@ -989,7 +1084,9 @@ pub(crate) fn parse(
             if letters(&desc) >= 2 && only_desc {
                 if grid.source == Source::Layout
                     && ri.checked_sub(1).is_some_and(|p| last_item_row == Some(p))
+                    && !not_an_item(&desc, false)
                     && let Some(it) = out.items.last_mut()
+                    && it.description.len() + desc.len() <= 160
                 {
                     // A wrapped description line.
                     it.description.push(' ');
@@ -1010,6 +1107,7 @@ pub(crate) fn parse(
         if letters(&desc) < 2
             || (!roles.from_header && desc.trim_end().ends_with(':'))
             || is_date_text(&desc)
+            || not_an_item(&desc, roles.from_header)
         {
             out.unused_rows.push(ri);
             continue;

@@ -392,12 +392,27 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
                 .and_then(|h| h.trim_end_matches('-').chars().next_back())
                 .and_then(currency_symbol);
             let after_text = text.get(end_b..).unwrap_or("");
-            let after_sym = after_text
-                .trim_start_matches(is_group_space)
-                .chars()
-                .next()
-                .and_then(currency_symbol);
-            let after_word = word_after(text, end_b).and_then(|(w, _)| currency_word(&w, false));
+            // A currency after the number belongs to it only when no other number follows
+            // (`2022 £5,000`: the pound sign is the next amount's).
+            let after_sym = {
+                let t = after_text.trim_start_matches(is_group_space);
+                let mut cs = t.chars();
+                let sym = cs.next().and_then(currency_symbol);
+                let next_is_num = cs
+                    .as_str()
+                    .trim_start()
+                    .starts_with(|c: char| c.is_ascii_digit());
+                sym.filter(|_| !next_is_num)
+            };
+            let after_word = word_after(text, end_b)
+                .filter(|(_, e)| {
+                    !text
+                        .get(*e..)
+                        .unwrap_or("")
+                        .trim_start()
+                        .starts_with(|c: char| c.is_ascii_digit())
+                })
+                .and_then(|(w, _)| currency_word(&w, false));
             let before_word = if glued_prev {
                 None
             } else {

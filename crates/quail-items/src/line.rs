@@ -94,51 +94,6 @@ const SENTENCE_TAIL: &[&str] = &[
     "worth",
 ];
 
-/// Words that make a description a sentence (a verb or a relative pronoun).
-const SENTENCE_WORDS: &[&str] = &[
-    "will",
-    "shall",
-    "must",
-    "may",
-    "is",
-    "are",
-    "be",
-    "been",
-    "was",
-    "were",
-    "has",
-    "have",
-    "had",
-    "which",
-    "that",
-    "who",
-    "whom",
-    "whose",
-    "if",
-    "when",
-    "where",
-    "pay",
-    "paid",
-    "agrees",
-    "agree",
-    "se",
-    "je",
-    "su",
-    "ce",
-    "biti",
-    "bice",
-    "koji",
-    "koja",
-    "koje",
-    "ako",
-    "kada",
-    "placa",
-    "placanje",
-    "iznosi",
-    "obavezuje",
-    "dostavlja",
-];
-
 /// Words allowed after the last amount.
 fn tail_ok(rest: &str) -> bool {
     let w = header::words(rest);
@@ -294,9 +249,7 @@ pub(crate) fn parse(
     let desc_words = header::words(&desc);
     let last_word = desc_words.last().cloned().unwrap_or_default();
     if SENTENCE_TAIL.contains(&last_word.as_str())
-        || desc_words
-            .iter()
-            .any(|w| SENTENCE_WORDS.contains(&w.as_str()))
+        || table::not_an_item(&desc, false)
         || desc.starts_with(|c: char| c.is_lowercase())
     {
         return None;
