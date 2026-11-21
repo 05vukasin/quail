@@ -179,6 +179,54 @@ impl<'a> IdentScan<'a> {
         out
     }
 
+    /// A spaced IBAN that starts at token `i` (`compact` is its text without spaces) and
+    /// wraps over exactly one line break: the groups of four go on after a single `\n`
+    /// (never a blank line) until the country's length. Kept only when the check digits
+    /// validate. Returns the IBAN and its last token.
+    fn wrapped_iban(&self, i: usize, compact: &str) -> Option<(String, usize)> {
+        let p = self.p;
+        let b = compact.as_bytes();
+        if b.len() < 4
+            || !b[..2].iter().all(u8::is_ascii_uppercase)
+            || !b[2..4].iter().all(u8::is_ascii_digit)
+        {
+            return None;
+        }
+        let want = checksum::iban_length(&compact[..2])?;
+        // Every group so far is a full group of four (`DE89 3704 0044`).
+        if b.len() >= want || !p.text(i).split(' ').all(|g| g.len() == 4) {
+            return None;
+        }
+        let mut iban = compact.to_owned();
+        let mut breaks = 0;
+        let mut last_group = 4;
+        let mut j = i + 1;
+        while iban.len() < want && j < p.len() && last_group == 4 {
+            match p.gap_before(j)? {
+                " " => {}
+                "\n" => breaks += 1,
+                _ => return None,
+            }
+            let t = p.text(j);
+            if breaks > 1
+                || !matches!(p.kind(j), Some(TokenKind::Number | TokenKind::Alnum))
+                || t.is_empty()
+                || t.len() > 4
+                || !t.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            {
+                return None;
+            }
+            iban.push_str(t);
+            last_group = t.len();
+            j += 1;
+        }
+        // One more digit group on the line: a longer number, not this IBAN.
+        let more = p.gap_before(j) == Some(" ")
+            && p.text(j).len() <= 4
+            && p.text(j).bytes().all(|c| c.is_ascii_digit());
+        (breaks == 1 && !more && iban.len() == want && checksum::iban(&iban)).then(|| (iban, j - 1))
+    }
+
     /// Alphanumeric token: IBAN, LEI, glued VAT, BIC, or a VAT prefix followed by numbers.
     /// Returns the next token to look at when it consumed several.
     #[allow(clippy::too_many_lines)] // one flat decision list, easier to audit in one place
@@ -199,6 +247,17 @@ impl<'a> IdentScan<'a> {
         }
         let b = compact.as_bytes();
         let sp = p.span(i, i);
+        // IBAN wrapped over a line break: `DE89 3704 0044` / `0532 0130 00`.
+        if let Some((iban, last)) = self.wrapped_iban(i, &compact) {
+            let conf = if self.label(i) == Some(Label::Iban) {
+                conf::IBAN_LABELED
+            } else {
+                conf::IBAN
+            };
+            self.last_iban = Some(last);
+            out.push(Cand::new(keys::IBAN, Value::text(iban), conf, p.span(i, last)));
+            return Some(last + 1);
+        }
         // IBAN.
         if b.len() >= 15
             && b[..2].iter().all(u8::is_ascii_uppercase)

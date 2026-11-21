@@ -204,6 +204,55 @@ fn iban_spaced_unspaced_and_invalid() {
     assert!(conf_of(&f, &keys::IBAN) <= 0.25);
 }
 
+fn iban_de() -> String {
+    let bban = "512080001234567890";
+    for k in 2..=98 {
+        let s = format!("DE{k:02}{bban}");
+        if checksum::iban(&s) {
+            return s;
+        }
+    }
+    unreachable!()
+}
+
+#[test]
+fn iban_wrapped_over_one_line_break() {
+    for i in [iban_rs(), iban_de()] {
+        let s = spaced(&i);
+        // Break after the third group (the head is then too short for the tokenizer) and
+        // after the fourth (the head is a spaced run of its own).
+        for at in [14, 19] {
+            let (a, b) = s.split_at(at);
+            let text = format!("IBAN: {}\n{} BIC: AAAARSBG", a.trim_end(), b.trim_start());
+            let f = run(&text);
+            assert_eq!(texts(&f, &keys::IBAN), std::slice::from_ref(&i), "{text}");
+            assert!(conf_of(&f, &keys::IBAN) >= 0.99, "{text}");
+            assert_eq!(texts(&f, &keys::BIC), ["AAAARSBG"], "{text}");
+            // Unlabelled, inside a sentence.
+            let text = format!("pay to {}\n{} by Friday", a.trim_end(), b.trim_start());
+            assert_eq!(texts(&run(&text), &keys::IBAN), [i.clone()], "{text}");
+            // Never across a paragraph.
+            let text = format!("IBAN: {}\n\n{}", a.trim_end(), b.trim_start());
+            assert!(texts(&run(&text), &keys::IBAN).is_empty(), "{text}");
+        }
+        // Wrong check digits after the join: nothing.
+        let bad = format!(
+            "{}{:02}{}",
+            &i[..2],
+            (i[2..4].parse::<u32>().unwrap() + 1) % 100,
+            &i[4..]
+        );
+        let s = spaced(&bad);
+        let (a, b) = s.split_at(14);
+        let text = format!("ref {}\n{}", a.trim_end(), b.trim_start());
+        assert!(texts(&run(&text), &keys::IBAN).is_empty(), "{text}");
+    }
+    // Too many groups: the next line is something else.
+    let s = spaced(&iban_de());
+    let text = format!("ref {}\n{} 1234", &s[..14], &s[15..]);
+    assert!(texts(&run(&text), &keys::IBAN).is_empty(), "{text}");
+}
+
 #[test]
 fn bic_needs_label_or_iban() {
     let i = iban_rs();
