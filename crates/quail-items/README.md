@@ -6,7 +6,7 @@ later service can answer "who is cheapest for X" across suppliers. Namespace `it
 The crate reports each line as written plus normalized fields and top-3 category candidates
 (EU CPV 2008). It never decides that two suppliers' lines are the same service.
 
-- Analyzer: `item.lines@3` (`ItemLines`), requires `document`, runs after `revised_document`,
+- Analyzer: `item.lines@4` (`ItemLines`), requires `document`, runs after `revised_document`,
   reads `Ctx::document()`. Line extraction is `Profile::Fast`; category candidates are added
   from `Profile::Standard` on. The CPV index is built lazily on the first file that needs
   categories (about 0.16 s, about 9 MB RSS) and shared by every clone of the analyzer.
@@ -59,8 +59,11 @@ line) in the page text, the row's box when the format has geometry. `conf` refle
    (text column, unit column, numeric columns checked by `qty × price = amount` and by
    net/gross VAT ratios; rate matrices such as `Role | Onshore | Offshore` give one item per
    cell with the column label in the description). Total rows go to `item.table_total`.
-2. **PDF**: `quail-pdf` gives paragraph blocks with one box each. Blocks are split into lines
-   with estimated boxes, lines grouped into rows by vertical centre, table regions found from
+2. **PDF**: `quail-pdf` gives paragraph blocks with their measured lines (`Block.lines`). Lines
+   keep their measured boxes; a block without them, or with a line holding several cells
+   (a run of two or more spaces, whose box spans the columns between them), is split into
+   lines with estimated boxes (height divided evenly, width by length). Lines are grouped
+   into rows by vertical centre, table regions found from
    a header row or runs of rows with money, columns found by an x-projection profile (one
    merged cell does not merge two columns; a cell spanning several columns is split by word
    position), then parsed as above. Without a header only amounts written as money (currency,
@@ -112,6 +115,9 @@ documents that write `1,200.50`, a plain space never groups thousands (`88 131 1
 numbers of adjacent cells).
 
 ## Versions
+
+- `item.lines@4`: PDF tables from the measured line boxes of `Block.lines` (estimated boxes
+  only for blocks without them or with merged cells). RealKIE FCC dev: F1 42.6 to 46.2.
 
 - `item.lines@3`: summary, formula, before/after-change and credit rows go to
   `item.table_total`; multi-amount descriptions dropped; CPV alias layer and stronger service

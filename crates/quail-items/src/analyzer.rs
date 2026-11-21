@@ -1,4 +1,4 @@
-//! The `item.lines@3` analyzer.
+//! The `item.lines@4` analyzer.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -47,7 +47,7 @@ impl Default for ItemLines {
 
 impl ItemLines {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 3);
+    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 4);
 
     /// With the embedded CPV 2008 index. The index is built lazily on the first file that
     /// needs categories (about 0.2 s, about 15 MB), once for this value and all its clones; a

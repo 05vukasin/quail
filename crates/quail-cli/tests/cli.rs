@@ -596,7 +596,7 @@ fn keys_and_version() {
         expected.push("sketch.page_phash@1");
     }
     if cfg!(feature = "items") {
-        expected.push("item.lines@3");
+        expected.push("item.lines@4");
     }
     if cfg!(feature = "summary") {
         expected.extend(["summary.card@1", "summary.extractive@1"]);
