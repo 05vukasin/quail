@@ -304,9 +304,10 @@ fn digest_words(words: &[&str]) -> u64 {
 }
 
 /// The distinct `k`-word windows of `words` (tokens hold no white space, so equal joined
-/// strings are equal windows) with their digests, in no particular order. Equal strings have
+/// strings are equal windows) with their digests, in no particular order. Equal windows have
 /// equal digests, so sorting by digest first and the words second puts duplicates side by
-/// side; two different windows that share a digest both stay.
+/// side; two different windows that share a digest both stay. (Digesting first and sorting
+/// integers beats sorting the windows: shingles rarely repeat.)
 fn distinct_digests<'a>(words: &'a [&'a str], k: usize) -> Vec<(u64, &'a [&'a str])> {
     let mut v: Vec<(u64, &[&str])> = words.windows(k).map(|w| (digest_words(w), w)).collect();
     v.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
@@ -371,7 +372,7 @@ fn minhash_of_digests(base: &[u64]) -> [u64; PERMUTATIONS] {
 /// shingles; `None` below [`MIN_SHINGLES`].
 ///
 /// Same result as `minhash_of(&shingles(&tokens(text)))`, computed on borrowed tokens: each
-/// shingle is digested without being joined, and the set is formed on the digests.
+/// shingle is digested without being joined.
 pub fn raw_minhash(text: &str) -> Option<([u64; PERMUTATIONS], usize)> {
     let lower = text.to_lowercase();
     let words: Vec<&str> = WORD.find_iter(&lower).map(|m| m.as_str()).collect();
@@ -417,10 +418,11 @@ pub fn mask_entities(text: &str) -> Result<String, RegexLimit> {
 /// `template_fp(text)`: SimHash of the set of masked unigrams; 0 for no tokens.
 pub fn template_fp(text: &str) -> Result<u64, RegexLimit> {
     let lower = mask_entities(text)?.to_lowercase();
-    let words: Vec<&str> = WORD.find_iter(&lower).map(|m| m.as_str()).collect();
-    Ok(simhash(
-        distinct_digests(&words, 1).into_iter().map(|(d, _)| (d, 1)),
-    ))
+    // Unigrams repeat a lot: dedup the borrowed tokens first, then digest each once.
+    let mut words: Vec<&str> = WORD.find_iter(&lower).map(|m| m.as_str()).collect();
+    words.sort_unstable();
+    words.dedup();
+    Ok(simhash(words.iter().map(|w| (digest_int(w), 1))))
 }
 
 /// `_normalize_heading`: numbering off, white space collapsed, stripped, lowercased.
