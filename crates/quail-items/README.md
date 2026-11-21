@@ -95,7 +95,7 @@ UJN translation) is embedded; see `data/README.md` for sources and licence, and
 ## Limits
 
 At most `MAX_ITEMS` (5 000) items per file (then a problem), tables up to 5 000 rows × 64
-columns, 40 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked per
+columns, 24 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked per
 page and per table. Scanned pages without a text layer produce nothing unless OCR filled a
 `RevisedDocument`.
 
@@ -125,7 +125,7 @@ numbers of adjacent cells).
   station, network and code columns); a station or code alone under a program row takes that
   program. A header role over an empty column moves to the unnamed column its values sit in;
   a price header over a text column without an amount is dropped; `Total Spots` is a
-  quantity; up to 40 rebuilt columns; period labels (`2024`, `Year 2`) are column labels.
+  quantity; period labels (`2024`, `Year 2`) are column labels.
   RealKIE FCC dev: F1 46.2 to 51.7; text-layer documents without a line 16 to 4.
 - `item.lines@4`: PDF tables from the measured line boxes of `Block.lines` (estimated boxes
   only for blocks without them or with merged cells). RealKIE FCC dev: F1 42.6 to 46.2.

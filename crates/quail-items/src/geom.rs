@@ -67,7 +67,7 @@ impl Row {
 
 /// Most rows, columns and regions handled per page (hostile layouts).
 const MAX_LINES: usize = 20_000;
-const MAX_BANDS: usize = 40;
+const MAX_BANDS: usize = 24;
 
 fn numeric_line(t: &str) -> bool {
     let digits = t.chars().filter(char::is_ascii_digit).count();

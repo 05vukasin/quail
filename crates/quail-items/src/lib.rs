@@ -55,7 +55,7 @@
 //! # Limits
 //!
 //! At most [`MAX_ITEMS`] items per file (then a problem), tables up to 5 000 rows × 64
-//! columns, 40 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked
+//! columns, 24 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked
 //! per page and per table.
 
 // Table and line parsers walk rows (`r`), columns (`c`) and tokens (`t`).
