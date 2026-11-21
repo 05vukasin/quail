@@ -72,8 +72,11 @@ impl Renderer<'_> {
         }
 
         // quail: the tile pixmap outlives this call (it is the paint); charge it.
-        self.global
-            .charge(u64::from(x.size) * u64::from(y.size) * 4);
+        self.global.charge(
+            u64::from(x.size)
+                .saturating_mul(u64::from(y.size))
+                .saturating_mul(4),
+        );
         let mut pixmap = Pixmap::new(x.size, y.size);
         ctx.flush();
         ctx.render(&mut pixmap, &mut vello_cpu::Resources::default());

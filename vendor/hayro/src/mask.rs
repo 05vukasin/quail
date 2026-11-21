@@ -65,7 +65,11 @@ fn draw_soft_mask(
     global: &GlobalState,
 ) -> Mask {
     // quail: canvas, pixmap and mask of the soft mask (about 12 bytes per pixel).
-    global.charge(u64::from(width) * u64::from(height) * 12);
+    global.charge(
+        u64::from(width)
+            .saturating_mul(u64::from(height))
+            .saturating_mul(12),
+    );
     let mut ctx = vello_cpu::RenderContext::new_with(width, height, derive_settings(&settings));
     ctx.set_aliasing_threshold(global.aliasing_threshold);
     let mut renderer = Renderer::new(&mut ctx, global);

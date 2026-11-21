@@ -2750,6 +2750,7 @@ dependencies = [
 name = "quail-engine"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "criterion",
  "crossbeam-channel",
  "quail-core",

@@ -11,6 +11,8 @@
     clippy::missing_panics_doc
 )]
 
+mod repro;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -1170,4 +1172,202 @@ fn raster_reports_an_object_stream_bomb_as_a_limit() {
         "{:?}",
         res.map(|i| i.width)
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fuzzer findings (issues #35-#38): the minimized reproducers, as filed.
+
+/// No path may end in a caught panic: the test profile has overflow checks on, so an
+/// arithmetic overflow in a patched path panics here instead of wrapping silently.
+fn assert_no_panic_anywhere(bytes: &[u8], limits: &Limits) {
+    let r = run(bytes.to_vec(), limits);
+    assert!(!matches!(r.doc, Err(Error::Panic(_))), "{:?}", r.doc);
+    assert!(
+        !r.problems
+            .iter()
+            .any(|p| p.contains("failed") || p.contains("panic")),
+        "{:?}",
+        r.problems
+    );
+    let raster = PdfRaster::new(Blob::from(bytes.to_vec()));
+    for dpi in [36.0, 150.0] {
+        let res = raster.render(0, dpi, limits);
+        assert!(
+            !matches!(res, Err(Error::Panic(_))),
+            "{:?}",
+            res.map(|i| i.width)
+        );
+    }
+    let scan = raster.embedded_scan(0, limits);
+    assert!(!matches!(scan, Some(Err(Error::Panic(_)))));
+}
+
+/// Runs `f` on a thread with the engine's worker stack (32 MiB): a stack overflow aborts the
+/// whole test process, so reaching the join is the assertion.
+fn on_worker_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(32 << 20)
+        .spawn(f)
+        .expect("spawn")
+        .join()
+        .expect("join")
+}
+
+#[test]
+fn issue_35_recursive_type3_glyphs_do_not_overflow_the_stack() {
+    let bytes = repro::pdf(repro::TYPE3_RECURSION);
+    on_worker_stack(move || {
+        let limits = Limits {
+            timeout: Duration::from_secs(5),
+            ..Limits::default()
+        };
+        let raster = PdfRaster::new(Blob::from(bytes.clone()));
+        let t = Instant::now();
+        let res = raster.render(0, 36.0, &limits);
+        assert!(
+            !matches!(res, Err(Error::Panic(_))),
+            "{:?}",
+            res.map(|i| i.width)
+        );
+        assert!(t.elapsed() < Duration::from_secs(15), "{:?}", t.elapsed());
+        assert_no_panic_anywhere(&bytes, &limits);
+    });
+}
+
+fn small_render_limits() -> Limits {
+    Limits {
+        max_decompressed: 64 << 20,
+        max_render_pixels: 4_000_000,
+        timeout: Duration::from_secs(10),
+        ..Limits::default()
+    }
+}
+
+#[test]
+fn issue_36_long_text_runs_are_charged_to_the_render_budget() {
+    let bytes = repro::pdf(repro::LONG_TJ_GZ);
+    let limits = small_render_limits();
+    let (res, peak) = peak_of(|| PdfRaster::new(Blob::from(bytes)).render(0, 150.0, &limits));
+    assert!(
+        matches!(res, Ok(_) | Err(Error::LimitExceeded(_) | Error::Timeout)),
+        "{:?}",
+        res.map(|i| i.width)
+    );
+    assert!(peak < 320 * MIB, "peak {} MiB", peak / MIB);
+}
+
+#[test]
+fn issue_36_many_shading_fills_are_charged_to_the_render_budget() {
+    let bytes = repro::pdf(repro::MANY_SH_GZ);
+    let limits = small_render_limits();
+    let (res, peak) = peak_of(|| PdfRaster::new(Blob::from(bytes)).render(0, 36.0, &limits));
+    assert!(
+        matches!(res, Err(Error::LimitExceeded(_) | Error::Timeout)),
+        "{:?}",
+        res.map(|i| i.width)
+    );
+    assert!(peak < 320 * MIB, "peak {} MiB", peak / MIB);
+}
+
+#[test]
+fn issue_37_nested_groups_are_bounded_before_rasterization() {
+    let bytes = repro::pdf(repro::NESTED_GROUPS);
+    let limits = Limits {
+        timeout: Duration::from_secs(3),
+        ..Limits::default()
+    };
+    let raster = PdfRaster::new(Blob::from(bytes));
+    let t = Instant::now();
+    let res = raster.render(0, 36.0, &limits);
+    // Refused by the work budget or the deadline, or rendered, but never long past it.
+    assert!(t.elapsed() < Duration::from_secs(8), "{:?}", t.elapsed());
+    assert!(!matches!(res, Err(Error::Panic(_))));
+}
+
+#[test]
+fn issue_37_extraction_checks_the_deadline_between_operators() {
+    // 59 000 `sh` operators: the deadline is checked between operators, not only on draws.
+    let bytes = repro::pdf(repro::MANY_SH_GZ);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let t = Instant::now();
+    let r = run_with(
+        bytes,
+        &Limits::default(),
+        Emitter::with_deadline(PdfExtractor::ID, deadline),
+    );
+    assert!(r.doc.is_ok());
+    assert!(t.elapsed() < Duration::from_secs(6), "{:?}", t.elapsed());
+}
+
+#[test]
+fn issue_37_raster_calls_share_the_file_deadline() {
+    // The file's time is spent: every call fails fast, whatever `limits.timeout` says.
+    let bytes = repro::pdf(repro::NESTED_GROUPS);
+    let past = Instant::now().checked_sub(Duration::from_secs(1));
+    let raster = PdfRaster::with_deadline(Blob::from(bytes.clone()), past);
+    let t = Instant::now();
+    assert!(matches!(
+        raster.render(0, 36.0, &Limits::default()),
+        Err(Error::Timeout)
+    ));
+    assert!(matches!(
+        raster.embedded_scan(0, &Limits::default()),
+        Some(Err(Error::Timeout))
+    ));
+    assert!(t.elapsed() < Duration::from_secs(1));
+    // The extractor hands out a raster bound to the file's deadline.
+    let limits = Limits {
+        timeout: Duration::from_millis(1),
+        ..Limits::default()
+    };
+    let r = run(bytes, &limits);
+    std::thread::sleep(Duration::from_millis(5));
+    let raster = r.raster.expect("raster");
+    assert!(matches!(
+        raster.0.render(0, 36.0, &Limits::default()),
+        Err(Error::Timeout)
+    ));
+}
+
+#[test]
+fn issue_38_predictor_divide_by_zero() {
+    assert_no_panic_anywhere(&repro::pdf(repro::PREDICTOR_DIV_ZERO), &Limits::default());
+}
+
+#[test]
+fn issue_38_predictor_row_length_overflow() {
+    assert_no_panic_anywhere(
+        &repro::pdf(repro::PREDICTOR_MUL_OVERFLOW),
+        &Limits::default(),
+    );
+}
+
+#[test]
+fn issue_38_image_budget_charge_overflow() {
+    let bytes = repro::pdf(repro::IMAGE_CHARGE_OVERFLOW);
+    assert_no_panic_anywhere(&bytes, &Limits::default());
+    // The charge saturates instead of wrapping, so the image is refused, not drawn.
+    let res = PdfRaster::new(Blob::from(bytes)).render(0, 36.0, &Limits::default());
+    assert!(!matches!(res, Err(Error::Panic(_))));
+}
+
+#[test]
+fn issue_38_glyph_position_overflow() {
+    assert_no_panic_anywhere(&repro::pdf(repro::GLYPH_POS_OVERFLOW), &Limits::default());
+}
+
+#[test]
+fn predictor_with_huge_columns_does_not_size_a_zero_row() {
+    // `/Columns 2^31` with 16 colors of 16 bits: the zero row alone would be gigabytes.
+    let img = stream_raw(
+        "/Type /XObject /Subtype /Image /Width 4 /Height 4 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 2147483647 /Colors 16 /BitsPerComponent 16 >>",
+        &zlib(&[0u8; 64]),
+    );
+    let bytes = page_pdf(
+        b"q 612 0 0 792 0 0 cm /Im0 Do Q",
+        "/XObject << /Im0 5 0 R >>",
+        vec![(5, img)],
+    );
+    let ((), peak) = peak_of(|| assert_no_panic_anywhere(&bytes, &Limits::default()));
+    assert!(peak < 128 * MIB, "peak {} MiB", peak / MIB);
 }
