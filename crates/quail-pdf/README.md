@@ -26,6 +26,8 @@ inside the decoders. See [`vendor/README.md`](../../vendor/README.md).
     - the canvas is over `max_render_pixels` or hayro's 65,535 px per side;
     - a counting dry run hits the draw-call cap or `limits.timeout`;
     - a stream or image was refused by the decode budget (a render with missing images would mislead OCR).
+    - The render itself runs under `hayro::render_limited`. Every callback and tile copy checks `limits.timeout` (`Timeout`). Decoded images (8 bytes per declared pixel), pattern tiles and soft-mask canvases are charged to a render byte budget of `max_decompressed` + 8 × `max_render_pixels` before they are allocated (`LimitExceeded("render memory")`).
+    - After any limit hit or unwind the cached parse is dropped, because hayro caches refused streams.
   - `embedded_scan(page, limits)` decodes the page's single image as stored (gray or RGB; image masks come back as dark ink on white). It applies only when the page draws exactly one image, upright, covering ≥ 98 % of the page, so OCR can map pixels to page points by scaling. Otherwise it returns `None` and rendering is the fallback.
   - `PdfRaster` shares the file's `Blob` and keeps one parsed document behind a mutex (OCR over N pages parses once). It drops that parse after 64 MiB decoded, and every call gets a fresh decode budget.
 
