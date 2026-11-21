@@ -240,6 +240,22 @@ fn image_only_page_needs_ocr() {
     assert_eq!((scan.width, scan.height, scan.channels), (4, 4, 1));
     assert!(scan.data.iter().all(|&v| v == 0x80));
     assert!(raster.0.embedded_scan(0, &Limits::default()).is_none());
+    // A reduced decode of a filter that cannot reduce (Flate) is the full scan; the same
+    // pages answer `None`.
+    for max_side in [0, 1, 2, 4, 128] {
+        let reduced = raster
+            .0
+            .embedded_scan_reduced(1, max_side, &Limits::default())
+            .expect("scan")
+            .expect("decoded");
+        assert_eq!(reduced, scan);
+        assert!(
+            raster
+                .0
+                .embedded_scan_reduced(0, max_side, &Limits::default())
+                .is_none()
+        );
+    }
 }
 
 #[test]
