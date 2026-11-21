@@ -1,4 +1,4 @@
-//! The `item.lines@4` analyzer.
+//! The `item.lines@5` analyzer.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -10,6 +10,7 @@ use quail_core::{
 use quail_text::fold::{FoldOptions, fold};
 
 use crate::cpv::CpvIndex;
+use crate::desc;
 use crate::geom;
 use crate::item::{DocHints, Item, Source, TableTotal, span_union, union};
 use crate::keys;
@@ -47,7 +48,7 @@ impl Default for ItemLines {
 
 impl ItemLines {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 4);
+    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 5);
 
     /// With the embedded CPV 2008 index. The index is built lazily on the first file that
     /// needs categories (about 0.2 s, about 15 MB), once for this value and all its clones; a
@@ -438,6 +439,16 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
             found.items.truncate(MAX_ITEMS);
             full = true;
             break;
+        }
+    }
+    for it in &mut found.items {
+        if it.source != Source::Table
+            && let Some((text, code)) = desc::clean(&it.description)
+        {
+            it.description = text;
+            if it.code.is_none() {
+                it.code = code;
+            }
         }
     }
     credits_to_totals(&mut found);
