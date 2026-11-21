@@ -21,6 +21,8 @@ serde.workspace = true
 serde_json.workspace = true
 toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
 clap = { version = "4.6", features = ["derive"] }
+# RealKIE ships its OCR page offsets as .json.gz (pure-Rust backend).
+flate2 = "1.1.11"
 
 [dev-dependencies]
 quail-engine = { path = "../quail-engine" }

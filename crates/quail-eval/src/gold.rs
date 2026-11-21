@@ -65,6 +65,9 @@ pub enum MatchMode {
     AnyOf,
     /// Both parse as numbers and differ by at most `tol` (default 0.01).
     NumericTol,
+    /// `value` is an object, one gold row of a rows task (`items`): scored by
+    /// [`crate::items`], never by value comparison.
+    Row,
 }
 
 /// One known value of one task.
@@ -101,9 +104,14 @@ impl Label {
         }
     }
 
-    /// The value as one or more strings: a list gives its items, a scalar gives itself.
+    /// The value as one or more strings: a list gives its items, a scalar gives itself, a
+    /// row its display form (`description @ price`).
     pub fn alternatives(&self) -> Vec<String> {
         match &self.value {
+            serde_json::Value::Object(_) => crate::items::GoldRow::of(self)
+                .map(|r| r.display())
+                .into_iter()
+                .collect(),
             serde_json::Value::Array(items) => items.iter().filter_map(scalar_string).collect(),
             v => scalar_string(v).into_iter().collect(),
         }
@@ -216,9 +224,21 @@ impl GoldDoc {
                     l.task
                 )));
             }
+            if l.value.is_object() != (l.mode == MatchMode::Row) {
+                return Err(Error::Invalid(format!(
+                    "{id}: task {}: an object value goes with match row and only with it",
+                    l.task
+                )));
+            }
+            if l.mode == MatchMode::Row && crate::items::GoldRow::of(l).is_none() {
+                return Err(Error::Invalid(format!(
+                    "{id}: task {}: a row has unknown fields or wrong types",
+                    l.task
+                )));
+            }
             if l.alternatives().is_empty() {
                 return Err(Error::Invalid(format!(
-                    "{id}: task {}: value must be a string, number, boolean or a list of them",
+                    "{id}: task {}: value must be a string, number, boolean, a list of them or a row",
                     l.task
                 )));
             }

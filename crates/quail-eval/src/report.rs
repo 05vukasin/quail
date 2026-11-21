@@ -117,6 +117,38 @@ pub fn markdown(sb: &Scoreboard) -> String {
         );
     }
 
+    for (name, r) in &sb.rows {
+        let lp = &r.lines_price_only;
+        let _ = writeln!(
+            s,
+            "\n## Rows: {name}\n\nPrice and page only (no description test): TP {} · FP {} · FN {} · P {} · R {} · F1 {}\n\n| field (matched pairs) | n | filled | correct | accuracy |\n|---|---:|---:|---:|---:|",
+            lp.tp,
+            lp.fp,
+            lp.fn_,
+            pct(lp.precision),
+            pct(lp.recall),
+            pct(lp.f1)
+        );
+        for (f, x) in &r.fields {
+            let _ = writeln!(
+                s,
+                "| {f} | {} | {} | {} | {} |",
+                x.n,
+                x.filled,
+                x.correct,
+                pct(x.accuracy)
+            );
+        }
+        let c = &r.category;
+        let _ = writeln!(
+            s,
+            "\ncategories (matched pairs with CPV gold): n {} · hit@3 {} · division@3 {}",
+            c.n,
+            pct(c.hit_at_3),
+            pct(c.division_at_3)
+        );
+    }
+
     let multi_dataset = sb
         .tasks
         .values()

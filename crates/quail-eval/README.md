@@ -68,7 +68,8 @@ One JSON file per document, in a dataset directory outside the repository:
   FP); any other task is not annotated for that document and not scored on it.
 - Match modes (after the task's normalizer, except `exact`): `exact` (trimmed text),
   `normalized` (equal), `contains` (token run of one inside the other, shorter ≥ 3
-  chars), `any_of` (list of alternatives), `numeric_tol` (|gold − pred| ≤ `tol`, default 0.01).
+  chars), `any_of` (list of alternatives), `numeric_tol` (|gold − pred| ≤ `tol`, default 0.01),
+  `row` (an object value: one gold row of a rows task, see *Rows tasks*).
 - Gold names neutral **tasks**, never fact keys, so it survives key renames.
 
 ## Task map (`tasks.toml`)
@@ -93,6 +94,8 @@ Committed in this crate and compiled in (override with `--tasks`). Per task:
   drops `effective_date` when it is the agreement date). On such documents a prediction equal
   to a gold label of the named task is neither a TP nor an FP; any other prediction is an FP as
   usual.
+- `rows`: gold labels are rows and predictions are whole records (see *Rows tasks*);
+  `normalize`/`field`/`only`/`except`/`aliases` do not apply.
 - `pending`: why the task has no producer yet; its keys are the planned names, it is scored as
   abstentions and flagged in the report.
 
@@ -100,7 +103,30 @@ Tasks: `doc_type`, `doc_title`, `party`, `effective_date`, `agreement_date`,
 `expiration_date`, `jurisdiction`, `term`, `contract_number`, `document_number`,
 `parent_contract_number`, `procurement_number`, `tax_id`, `registration_number`,
 `bank_account`, `iban`, `amount_total`, `language`, `script`, `is_scanned`,
-`near_duplicate_of`.
+`near_duplicate_of`, `items` (rows).
+
+## Rows tasks (`items`)
+
+`items` scores the price lines of `quail-items` (`item.line` records). Gold rows:
+
+```json
+{ "task": "items", "match": "row", "page": 0,
+  "value": { "description": "Senior consultant", "quantity": 10, "unit": "h",
+             "unit_price": 85.0, "total": 850.0, "currency": "EUR", "cpv": ["79411000"] } }
+```
+
+Every field is optional. A line and a row match when they are on the same page (if both are
+known), their prices agree within 0.5 % (relative; the unit price, else the total, else one
+against the other), and their folded descriptions have a token Jaccard ≥ 0.3 (when both
+have one). Pairs are taken one to one, best first. This gives the task's P/R/F1. The
+scoreboard's `rows.items` adds:
+
+- `lines_price_only`: the same matching without the description test;
+- per field (`quantity`, `unit`, `unit_price`, `total`, `currency`), over matched pairs whose
+  row has the field: `n`, `filled` (the line has it), `correct` (numbers within 0.5 %,
+  quantity exact, text case-insensitive), `accuracy`;
+- categories: over matched pairs with `cpv` gold, `hit@3` (a gold code among the top 3
+  `category_candidates`, first 8 digits) and `division@3` (same two-digit division).
 
 ## Metrics
 
@@ -141,7 +167,7 @@ hook; no renderer ships yet (`NoRenderer`), the pack says so on every page.
 `assign(id) = holdout` iff `blake3("<seed>:<id>")` as a fraction of 2^64 is below the share
 (default 20 %, seed `quail-eval-holdout-2026-11-20`). Per file, so adding files never moves
 others. `splits` writes `<dataset>.dev.txt` / `<dataset>.holdout.txt` (BLAKE3 ids only:
-committed in `crates/quail-eval/split/`: Kleister-NDA 253 dev / 84 holdout, CUAD 409 / 100); files already listed keep
+committed in `crates/quail-eval/split/`: Kleister-NDA 253 dev / 84 holdout, CUAD 409 / 100, RealKIE FCC 296 / 74); files already listed keep
 their side even if seed or share change. `--check` fails if lists are stale or a gold file's
 `split` disagrees; `--apply` fixes the gold files. `convert` uses the same assignment.
 
@@ -151,6 +177,7 @@ their side even if seed or share change. `--check` fails if lists are stale or a
 |---|---|---|---|
 | `kleister-nda` | `{train,dev-0}/expected.tsv` + `in.tsv` (decompress `in.tsv.xz` first), `documents/*.pdf` | `party`, `effective_date`, `jurisdiction`, `term` (missing key → absent) | run on the real data: 337 documents (train + dev-0), 1315 labels |
 | `cuad` | `CUAD_v1.json` (SQuAD form), contract PDFs/TXTs by title | `doc_title`, `party` (contains), `agreement_date`, `effective_date`, `expiration_date` (dates parsed to ISO; non-date answers skipped and counted; no answer → absent) | run on the real data: 510 documents (1 without a file), 3675 labels, 773 non-date answers skipped |
+| `realkie-fcc` | RealKIE `fcc_invoices`: `{train,val,test}.csv` (span labels in the OCR text), `ocr/*.json.gz` (page offsets), `files/*.pdf` | `items`: `Line Item - *` spans grouped into rows in text order, one gold row per `Rate` (`description`, `unit_price`, `currency` = USD when a `$` precedes the rate) on the rate's page; no rows → absent | run on the real data: 370 documents, 19,991 rows (33 documents without rows) |
 
 CUAD's party spans include defined-term aliases ("Distributor"), so party precision against
 CUAD is low by construction; recall is the meaningful number there.
@@ -159,4 +186,4 @@ CUAD is low by construction; recall is the meaningful number there.
 
 Records and gold are loaded into memory (fine for gold sets of thousands; records of a
 million-file run are about the JSONL size). No network, no models; depends only on clap,
-serde, serde_json, toml and quail crates.
+serde, serde_json, toml, flate2 (pure Rust, for RealKIE's `.json.gz`) and quail crates.

@@ -56,7 +56,7 @@ fn ratio(num: u64, den: u64) -> Option<f64> {
 }
 
 impl Counts {
-    fn add(&mut self, tp: u64, fp: u64, fn_: u64) {
+    pub(crate) fn add(&mut self, tp: u64, fp: u64, fn_: u64) {
         self.tp += tp;
         self.fp += fp;
         self.fn_ += fn_;
@@ -406,6 +406,9 @@ pub struct Scoreboard {
     pub tasks: BTreeMap<String, TaskScore>,
     /// Per step (`name@version`) and `total` (sum per file), over every record.
     pub latency: BTreeMap<String, Latency>,
+    /// Field accuracy and category hits of rows tasks (`items`), by task.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rows: BTreeMap<String, crate::items::ItemsScore>,
     /// One row per scored document (values included: keep scoreboards out of git when the
     /// gold describes private documents).
     pub docs: Vec<DocRow>,
@@ -598,6 +601,7 @@ fn gold_digest(gold: &[&GoldDoc]) -> String {
 }
 
 /// Scores `records` against `gold` with the task map `tasks`.
+#[allow(clippy::too_many_lines)]
 pub fn score(
     records: &Records,
     gold: &[GoldDoc],
@@ -665,11 +669,20 @@ pub fn score(
             tasks: BTreeMap::new(),
         };
         for (name, spec) in &tasks.tasks {
-            let (preds, dropped) = predictions(rec, spec, opts.min_conf);
-            let Some(mut dt) = score_doc_task(doc, name, spec, preds) else {
+            let dt = if spec.rows {
+                let acc = sb.rows.entry(name.clone()).or_default();
+                crate::items::score_doc(doc, name, spec, rec, opts.min_conf, acc)
+            } else {
+                let (preds, dropped) = predictions(rec, spec, opts.min_conf);
+                score_doc_task(doc, name, spec, preds).map(|mut dt| {
+                    dt.below_min_conf = dropped;
+                    dt
+                })
+            };
+            let Some(dt) = dt else {
                 continue;
             };
-            dt.below_min_conf = dropped;
+            let dropped = dt.below_min_conf;
             let ts = sb.tasks.entry(name.clone()).or_default();
             ts.pending.clone_from(&spec.pending);
             ts.counts.add(dt.tp, dt.fp, dt.fn_);
@@ -698,6 +711,10 @@ pub fn score(
         }
         sb.docs.push(row);
     }
+    sb.rows.retain(|name, r| {
+        r.finish();
+        sb.tasks.contains_key(name)
+    });
     for (name, ts) in &mut sb.tasks {
         ts.abstain_rate = ratio(ts.abstained, ts.docs_labelled);
         ts.calibration = cal.get(name).map(CalAcc::finish).unwrap_or_default();
@@ -1021,5 +1038,81 @@ mod tests {
         let l = latency((1..=100).collect());
         assert_eq!((l.p50, l.p95, l.p99, l.max), (50, 95, 99, 100));
         assert_eq!(latency(vec![]).n, 0);
+    }
+
+    #[test]
+    fn rows_task_matches_lines_and_scores_fields() {
+        let line = |desc: &str, price: i64, qty: f64| Fact {
+            key: FactKey::new("item.line"),
+            value: Value::record([
+                ("description", Value::text(desc)),
+                ("quantity", Value::Float(qty)),
+                (
+                    "unit_price",
+                    Value::Money(quail_core::Money {
+                        units: price,
+                        scale: 2,
+                        currency: Some(*b"EUR"),
+                    }),
+                ),
+                ("currency", Value::text("EUR")),
+                (
+                    "category_candidates",
+                    Value::List(vec![Value::record([("code", Value::text("79411000-8"))])]),
+                ),
+            ]),
+            conf: 0.8,
+            src: AnalyzerId::new("item.lines", 1),
+            evidence: Some(quail_core::Evidence {
+                page: Some(0),
+                ..quail_core::Evidence::default()
+            }),
+        };
+        let row = |v: serde_json::Value| Label {
+            task: "items".into(),
+            value: v,
+            mode: MatchMode::Row,
+            tol: None,
+            page: Some(0),
+            note: None,
+        };
+        let doc = gold(
+            1,
+            vec![
+                row(
+                    serde_json::json!({"description": "Senior consultant", "unit_price": 85.0,
+                    "quantity": 10.0, "currency": "EUR", "cpv": ["79411000"]}),
+                ),
+                row(serde_json::json!({"description": "Travel", "unit_price": 300.0})),
+            ],
+            &[],
+        );
+        doc.validate().unwrap();
+        let recs = Records {
+            records: vec![record(
+                1,
+                vec![
+                    line("Senior consultant (h)", 8500, 12.0),
+                    line("Project management", 9000, 1.0),
+                ],
+                Status::Ok,
+                10,
+            )],
+            bad_lines: 0,
+        };
+        let tasks = TaskMap::from_toml(
+            "[task.items]\nkeys = [\"item.line\"]\nrows = true\nmulti = true\n",
+            std::path::Path::new("t.toml"),
+        )
+        .unwrap();
+        let sb = score(&recs, &[doc], &tasks, &ScoreOptions::default()).unwrap();
+        let t = &sb.tasks["items"];
+        assert_eq!((t.counts.tp, t.counts.fp, t.counts.fn_), (1, 1, 1));
+        let r = &sb.rows["items"];
+        assert_eq!(r.fields["unit_price"].accuracy, Some(1.0));
+        assert_eq!(r.fields["quantity"].accuracy, Some(0.0));
+        assert_eq!(r.fields["currency"].correct, 1);
+        assert_eq!(r.category.hit_at_3, Some(1.0));
+        assert!(crate::report::markdown(&sb).contains("## Rows: items"));
     }
 }
