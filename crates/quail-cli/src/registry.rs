@@ -81,6 +81,13 @@ pub const STEPS: &[StepDoc] = &[
     },
     #[cfg(feature = "text")]
     StepDoc {
+        id: quail_text::TextExtractor::ID,
+        kind: StepKind::Extractor,
+        formats: &[Format::Text],
+        doc: "Plain text: encoding (BOM, UTF-8/16, chardetng legacy guess), LF line endings, form-feed pages, paragraphs and headings.",
+    },
+    #[cfg(feature = "text")]
+    StepDoc {
         id: quail_text::TextStats::ID,
         kind: StepKind::Analyzer,
         formats: &[],
@@ -221,6 +228,7 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     let b = b.extractor(Box::new(quail_pdf::PdfExtractor::new()));
     #[cfg(feature = "text")]
     let b = b
+        .extractor(Box::new(quail_text::TextExtractor::new()))
         .analyzer(Box::new(quail_text::TextStats))
         .analyzer(Box::new(quail_text::TextLang::new()));
     #[cfg(feature = "signals")]

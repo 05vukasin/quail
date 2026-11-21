@@ -143,8 +143,15 @@ fn isolated_run_equals_in_process_run() {
     assert_eq!(is["isolation"]["poisoned"], 0);
     // The documents come back from the workers: the same dump.
     assert_eq!(lines(&idump), lines(&ldump));
-    let extracted = usize::from(cfg!(feature = "docx")) + 2 * usize::from(cfg!(feature = "pdf"));
-    assert_eq!(lines(&idump).len(), extracted, "docx + 2 pdf dumped");
+    // The empty file is not text, so two text files.
+    let extracted = usize::from(cfg!(feature = "docx"))
+        + 2 * usize::from(cfg!(feature = "pdf"))
+        + 2 * usize::from(cfg!(feature = "text"));
+    assert_eq!(
+        lines(&idump).len(),
+        extracted,
+        "docx + 2 pdf + 2 txt dumped"
+    );
     // The oversized file failed in the supervisor, before any worker read it.
     let big = local
         .iter()

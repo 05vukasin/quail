@@ -18,6 +18,7 @@ SPECS = [
     ("SIGNALS", "quail_signals::keys", "quail-signals/src/lib.rs", "keys", "signals"),
     ("REFS", "quail_refs::keys", "quail-refs/src/lib.rs", "keys", "refs"),
     ("PARTIES", "quail_parties::keys", "quail-parties/src/lib.rs", "keys", "parties"),
+    ("CLAUSES", "quail_clauses::keys", "quail-clauses/src/lib.rs", "keys", "clauses"),
     ("SKETCH", "quail_sketch::keys", "quail-sketch/src/lib.rs", "keys", "sketch"),
     ("ITEMS", "quail_items::keys", "quail-items/src/lib.rs", "keys", "items"),
     ("SUMMARY", "quail_summary::keys", "quail-summary/src/lib.rs", "keys", "summary"),
