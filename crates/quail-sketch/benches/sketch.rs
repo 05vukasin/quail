@@ -76,11 +76,15 @@ fn bench_phash(c: &mut Criterion) {
     let mut g = c.benchmark_group("page_phash");
     g.sample_size(20);
     // A4 at 300 dpi (gray JBIG2/JPEG scan) and at 150 dpi in color.
-    for (name, w, h, ch) in [("gray A4 300dpi", 2480, 3508, 1u8), ("rgb A4 150dpi", 1240, 1754, 3)] {
+    for (name, w, h, ch) in [
+        ("gray A4 300dpi", 2480, 3508, 1u8),
+        ("rgb A4 150dpi", 1240, 1754, 3),
+    ] {
         let data = page(w, h, usize::from(ch));
+        let (w32, h32) = (u32::try_from(w).unwrap(), u32::try_from(h).unwrap());
         g.throughput(Throughput::Elements((w * h) as u64));
         g.bench_function(name, |b| {
-            b.iter(|| phash::phash(w as u32, h as u32, ch, black_box(&data)));
+            b.iter(|| phash::phash(w32, h32, ch, black_box(&data)));
         });
     }
     g.finish();

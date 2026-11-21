@@ -171,6 +171,7 @@ mod tests {
     }
 
     /// The definition, literally: per-pixel cell index and `f64` sums in row-major order.
+    #[allow(clippy::many_single_char_names)]
     fn thumbnail_reference(w: u32, h: u32, ch: u8, data: &[u8]) -> Option<[f32; N * N]> {
         let (w, h, c) = (w as usize, h as usize, usize::from(ch));
         if w == 0 || h == 0 || !matches!(c, 1 | 3 | 4) || data.len() != w * h * c {
@@ -196,7 +197,11 @@ mod tests {
         let mut out = [0f32; N * N];
         for ((o, s), n) in out.iter_mut().zip(sum).zip(count) {
             #[allow(clippy::cast_possible_truncation)]
-            let mean = if n == 0 { 255.0 } else { (s / f64::from(n)) as f32 };
+            let mean = if n == 0 {
+                255.0
+            } else {
+                (s / f64::from(n)) as f32
+            };
             *o = mean;
         }
         Some(out)
@@ -212,8 +217,17 @@ mod tests {
             x
         };
         let sizes = [
-            (1, 1), (5, 3), (31, 33), (32, 32), (33, 31), (64, 1), (1, 70), (97, 61),
-            (250, 333), (612, 792), (1000, 7),
+            (1, 1),
+            (5, 3),
+            (31, 33),
+            (32, 32),
+            (33, 31),
+            (64, 1),
+            (1, 70),
+            (97, 61),
+            (250, 333),
+            (612, 792),
+            (1000, 7),
         ];
         for (w, h) in sizes {
             for ch in [1u8, 3, 4] {
@@ -222,7 +236,7 @@ mod tests {
                     let data: Vec<u8> = (0..n)
                         .map(|i| {
                             if noisy {
-                                (next() >> 24) as u8
+                                (next() >> 24).to_le_bytes()[0]
                             } else {
                                 u8::try_from(i * 7 % 256).unwrap()
                             }
