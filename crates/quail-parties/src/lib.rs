@@ -1,6 +1,6 @@
 //! Per-file candidates for the companies a document is about, and the roles it gives them.
 //!
-//! Namespace: `party.*`. One analyzer, [`PartyCandidates`] (`party.candidates@1`, `Fast`,
+//! Namespace: `party.*`. One analyzer, [`PartyCandidates`] (`party.candidates@3`, `Fast`,
 //! requires `document`). It reports candidates, never verdicts: it does not say which company
 //! owns a file and it never compares files. A resolution service joins the keys across files
 //! (union-find on the `key` field of [`keys::COMPANY`], [`keys::ALIAS_OF`] pairs) and decides.

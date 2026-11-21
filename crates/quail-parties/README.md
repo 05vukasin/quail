@@ -8,7 +8,7 @@ the `party.alias_of` pairs) and assigns documents to suppliers.
 Out of scope (sibling crates): identifiers, dates, money and e-mail domains (`quail-signals`);
 document numbers, references and titles (`quail-refs`).
 
-- Analyzer: `party.candidates@1` (`PartyCandidates`), profile `Fast`, requires `document`.
+- Analyzer: `party.candidates@3` (`PartyCandidates`), profile `Fast`, requires `document`.
 - Public API: `PartyCandidates`, `keys::*`, and the pure helpers in `names`
   (`normalize_name`, `normalized_key`, `core_key`, `squashed_key`, `meaningful_words`,
   `core_words`, `score_name_match`, `are_names_similar`, `acronym_key`,
@@ -40,7 +40,24 @@ read whole (soft `after(["normalized_text"])`), else they are computed here, wit
    Incorporated`). A weak form after `of` or after only generic nouns (`Return of Company`, `HOLDING
    CO.`, `Parent Company`) is no name. A seat city after the form ("ACME d.o.o. Beograd") stays in the surface and
    leaves the key. A sole trader (`PR`) needs a two- or three-word personal name before the form
-   and no digits.
+   and no digits. English name shapes the walk keeps (`party.candidates@3`):
+   - a capitalised preposition that opens a name mid-sentence (`by At Home Corporation`, `and ON
+     Semiconductor`), `&` inside a word (`AT&T Corp.`);
+   - a parenthesised part (`GALEN (CHEMICALS) LIMITED`, `Bunker One (USA) Inc.`);
+   - a registration number as the first word before `Limited`/`Ltd`/`Inc.`/`Corp.` (`2205925
+     Ontario Limited`), a digit-led word before `Company` (`3M Company`);
+   - brands mixing cases (`ChipMOS TECHNOLOGIES INC.` is not cut at `ChipMOS`);
+   - names wrapped over a line: a strong form that starts its line (`Sibannac,` / `Inc.`), `&` or
+     `and` at the break (`Leggett &` / `Platt, Incorporated`), a short line that opens with
+     `between`/`and`/`by` (`between Aspect Medical` / `Systems, Inc.`).
+
+   And where it stops: a connector does not reset the capitals rule (`Yu Zhou and GENEXOSOME
+   TECHNOLOGIES INC.` → `GENEXOSOME TECHNOLOGIES INC.`), the same first word on both sides of
+   `and` starts two names (`Velto ASP and Velto AB`), a column gap of six spaces or a tab
+   (`Snap Sample      Ultra Airlines, Inc.` in a two-column signature block), `X and Company`
+   when the document defines `"Company"`, a possessive or an initialled person before a weak form
+   (`Licensee's Company`, `Brian J. Sample Company`), and runs of column letters before a weak
+   form (`V W X Y Z AA AB`).
 2. **Role labels** (`Dobavljač:`, `Izvršilac:`, `Naručilac:`, `Kupac:`, `Supplier:`, `Vendor:`,
    `Customer:`, `Bill to:`, `Ship to:`, `Remit to:`, `Consignee`, ...) give the next name its role;
    without a legal form, the name must fill the line, have at least two words and no person's
@@ -52,12 +69,15 @@ read whole (soft `after(["normalized_text"])`), else they are computed here, wit
    `renamed`, `trading as`, `t/a`, `d/b/a`, `doing business as`, `prethodno`, `ranije`,
    `bivše` between a found name and the next → `party.alias_of`.
 5. **Context** per mention: parties clause (an opener such as `između`, `between`, `entered
-   into` before it on the first page, or registration details such as `sa sedištem`, `PIB`,
+   into` before it on the opening page — the first page, or the first of the first three with 60
+   words or more when a short cover or exhibit page comes first — or registration details such as `sa sedištem`, `PIB`,
    `matični broj`, `registered office`, `incorporated`, `represented by` after it); defined terms
    (`(u daljem tekstu: Naručilac)`, `(hereinafter the "Supplier")`, `("Company")`); letterhead
    (header zone, or the first 6 lines of page 1 when the extractor gives no zones); footer;
-   signature block (`For and on behalf of X`, `Za X`, `Za i u ime X`, or after a signature cue
-   on the last two pages); bank in payment details (lower confidence, no issuer role).
+   signature block (`For and on behalf of X`, also with X on the next line, `Za X`, `Za i u ime
+   X`, a name alone on its line over a `By:` line, or after a signature cue on the last two
+   pages); bank in payment details (lower confidence, no issuer role); the EDGAR filer on a
+   `Source: X, 10-K, ...` line (no signatory role); counsel after `with a copy to`.
 
 Every surface passes the reference name-quality gates (ported from the owner's
 `name_quality.py`): length (2–120 chars, ≤ 10 words), no line break, e-mail/URL, addressee label,
@@ -107,10 +127,12 @@ issuer of, the document:
 | heading | +0.05 |
 | bank in payment details | −0.30 |
 | clamp | 0.05 … 0.97 |
-| then, when the only role is `mentioned`: × 0.7 on page 1 with a defined term, × 0.45 on page 1 without one, × 0.25 on later pages | |
+| then, when the only role is `mentioned`: × 0.7 on the opening page with a defined term, × 0.3 on it without one, × 0.25 on later pages | |
+| then, when the only role is `party` (a clause) on a later page and there is no defined term | × 0.3 |
+| then: the EDGAR filer (`Source:` line) at most 0.5; after `with a copy to` × 0.4 | |
 
 The `mentioned` factors are the measured precision of such mentions on the Kleister-NDA and CUAD
-dev splits (about 50 %, 25 % and 10 % against about 60–85 % for mentions with any other role), so a
+dev splits (about 50 %, 15 % and 10 % against about 60–85 % for mentions with any other role), so a
 `min_conf` of 0.3 keeps the parties and drops most affiliates, advisers and third parties named in
 the body. In `party.candidates`, a key's score is the noisy-or of its mentions that have a role and
 of its single strongest mentioned-only mention: a company named twenty times in the body is no more
@@ -122,6 +144,17 @@ customer / party, 0.85 signatory, 0.8 issuer from a letterhead, 0.6 issuer from 
 ## Measured
 
 Aggregates only; the private corpus never leaves the machine.
+
+**`quail-eval` party task, dev splits** (`min_conf` 0.3, committed task map, `surface` field
+only; `party.candidates@2` → `@3`):
+
+| dataset | support | P | R | F1 | ECE |
+|---|---:|---|---|---|---|
+| Kleister-NDA | 475 | 63.0 → 67.7 | 67.4 → 71.4 | 65.1 → 69.5 | 0.128 → 0.143 |
+| CUAD | 2040 | 75.4 → 79.1 | 40.7 → 44.8 | 52.8 → 57.2 | 0.100 → 0.034 |
+
+About 470 of CUAD's misses are aliases and defined terms (`Licensor`, `the "Company"`), which
+`party.company` carries in `defined_term`; scored with that field too, CUAD is F1 76.6.
 
 **Private business corpus** (380 PDF/DOCX files, PDFs through `pdftotext`, DOCX through
 `quail-docx`; gold = the supplier names the owner's system recorded per file, 354 files, 330 of

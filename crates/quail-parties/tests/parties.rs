@@ -377,6 +377,81 @@ Promptly notify the Company, Section 5 Company.";
 }
 
 #[test]
+fn walk_fixes_on_english_names() {
+    let t = "x\nx\nx\nx\nx\nx\nx\n\
+This Agreement is made by and between\n\
+ZentaMOS DEVICES INC., a company incorporated under the laws of Exland (\"ZentaMOS\"), and\n\
+GALVEN (CHEMICALS) LIMITED of 4 Sample Street and 1234567 Exland Limited and 7Q Company\n\
+and also by At Home Example Corporation and with AT&T Sample Corp. here.\n\
+Then Quillon &\n\
+Brack, Incorporated (\"Company\") and Yu Sample and GENEXOTE SAMPLES INC. agree,\n\
+Velto ASP and Velto AB join, Norvin and Company too.\n\
+columns V W X Y Z AA AB\n\
+Licensee's Company, Brian J. Sample Company.";
+    let ms = mentions(&run(plain(&[t])));
+    let surfaces: Vec<&str> = ms.iter().map(|m| m.surface.as_str()).collect();
+    for want in [
+        "ZentaMOS DEVICES INC.",
+        "GALVEN (CHEMICALS) LIMITED",
+        "1234567 Exland Limited",
+        "7Q Company",
+        "At Home Example Corporation",
+        "AT&T Sample Corp.",
+        "Quillon & Brack, Incorporated",
+        "GENEXOTE SAMPLES INC.",
+        "Velto AB",
+    ] {
+        assert!(surfaces.contains(&want), "{want}: {surfaces:#?}");
+    }
+    for bad in [
+        "Norvin and Company",
+        "Licensee's Company",
+        "Brian J. Sample Company",
+    ] {
+        assert!(!surfaces.contains(&bad), "{bad}: {surfaces:#?}");
+    }
+    assert!(
+        surfaces.iter().all(|s| !s.ends_with("AA AB")),
+        "{surfaces:#?}"
+    );
+}
+
+#[test]
+fn signature_blocks_filer_lines_and_columns() {
+    let body = "This Agreement is entered into between Orvane Sample, Inc. (\"Orvane\") and \
+        Pelko Example LLC (\"Pelko\"). ";
+    let p0 = body.repeat(6);
+    let p1 = "IN WITNESS WHEREOF the parties sign.\n\
+Snap Sample          Ultra Example Airlines, Inc.\n\
+By: /s/ Someone      By: /s/ Someone Else\n\
+TRIVEX SAMPLE FUND LP\n\
+By: Trivex Manager LLC, its general partner\n\
+For and on behalf of\n\
+Kestro Example S.A.\n\
+Source: ORVANE SAMPLE INC, 10-K, 3/19/2007";
+    let ms = mentions(&run(plain(&[&p0, p1])));
+    let surfaces: Vec<&str> = ms.iter().map(|m| m.surface.as_str()).collect();
+    assert!(
+        surfaces.contains(&"Ultra Example Airlines, Inc."),
+        "{surfaces:#?}"
+    );
+    assert!(
+        !surfaces.iter().any(|s| s.starts_with("Snap Sample ")),
+        "{surfaces:#?}"
+    );
+    assert!(has_role(&ms, "trivex sample fund", "signatory"), "{ms:#?}");
+    assert!(has_role(&ms, "kestro example", "signatory"), "{ms:#?}");
+    let filer = by_key(&ms, "orvane sample");
+    assert!(
+        filer
+            .iter()
+            .filter(|m| m.surface.starts_with("ORVANE"))
+            .all(|m| m.conf <= 0.5 && !m.roles.iter().any(|r| r == "signatory")),
+        "{filer:#?}"
+    );
+}
+
+#[test]
 fn code_and_product_traps() {
     let t = "x\nx\nx\nx\nx\nx\nx\n\
 Part AV-W-AD replaced.\n\
@@ -595,9 +670,14 @@ fn same_facts_with_the_shared_artifact() {
         "Kupac: Zelenkor d.o.o. Beo-\ngrad, PIB 100000001 — prodavac „Marvic Trade“ AD.\n\
          formerly known as Marvic Holdings plc; www.marvic.example",
         "IN WITNESS WHEREOF\nBRENWICK DALTON LTD.\nBy: ____\nName: Ana Petrović\nTitle: Director",
+        // The rules of party.candidates@3: column gaps, wrapped forms, filer lines.
+        "Snap Sample\u{a0}\u{a0}        Ultra Example Airlines, Inc.\nBy: /s/ A      By: /s/ B\n\
+         For and on behalf of\nKestro Example S.A.\nmade by At Home Example Corporation and\n\
+         Sibannac Sample,\nInc. and 1234567 Exland Limited\n\
+         Source: ORVANE SAMPLE INC, 10-K, 3/19/2007",
     ]);
     doc.pages.push(page_of(
-        4,
+        5,
         &[
             ("Ostvale Pharma GmbH", Zone::Header),
             ("Signed for Ostvale Pharma GmbH", Zone::Body),

@@ -171,16 +171,31 @@ const STATE_WORDS: &[&str] = &[
 /// Whether some word of `name` could identify a company: not a legal form, place, role,
 /// connector, state word, trade noun or calendar word.
 pub fn has_distinctive_word(name: &str) -> bool {
-    word_keys(name).iter().any(|t| {
-        !(vocab::is_legal_form_word(t)
-            || vocab::is_geo(t)
-            || is_role_key(t)
-            || has(vocab::CONNECTOR_WORDS, t)
-            || has(STATE_WORDS, t)
-            || has(vocab::TRADE_NOUNS, t)
-            || has(vocab::CALENDAR_WORDS, t)
-            || has(vocab::NOISE_EXTRA, t))
-    })
+    // A hyphenated compound of two words is a coined name, whatever its parts
+    // ("Georgia-Pacific", "Rolls-Royce").
+    let compound = name.split_whitespace().any(|w| {
+        let mut parts = w.split('-');
+        let (Some(x), Some(y), None) = (parts.next(), parts.next(), parts.next()) else {
+            return false;
+        };
+        x.chars().count() >= 3
+            && y.chars().count() >= 3
+            && x.chars().all(char::is_alphabetic)
+            && y.trim_end_matches([',', '.'])
+                .chars()
+                .all(char::is_alphabetic)
+    });
+    compound
+        || word_keys(name).iter().any(|t| {
+            !(vocab::is_legal_form_word(t)
+                || vocab::is_geo(t)
+                || is_role_key(t)
+                || has(vocab::CONNECTOR_WORDS, t)
+                || has(STATE_WORDS, t)
+                || has(vocab::TRADE_NOUNS, t)
+                || has(vocab::CALENDAR_WORDS, t)
+                || has(vocab::NOISE_EXTRA, t))
+        })
 }
 
 /// Folded words of `name`, split on everything that is not a letter or digit.

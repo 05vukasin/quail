@@ -66,6 +66,8 @@ fn bench(c: &mut Criterion) {
             first: true,
             near_end: true,
             has_zones: false,
+            company_term: false,
+            opening: true,
         };
         let words: Vec<PageWords> = d
             .pages

@@ -28,6 +28,9 @@ pub struct Tok {
     pub line: u32,
     /// Whitespace separates it from the previous token.
     pub space_before: bool,
+    /// A column gap separates it from the previous token on the same line: six spaces or
+    /// more, or a tab, in the page text (`Snap Technologies      United Airlines, Inc.`).
+    pub column_gap: bool,
     /// Zone of the block it sits in (`Unknown` without blocks).
     pub zone: Zone,
 }
@@ -45,6 +48,9 @@ pub struct PageWords<'a> {
     /// Lines of the page.
     pub lines: u32,
 }
+
+/// Whitespace characters (in the page text) that make a column gap between two tokens.
+const COLUMN_GAP: usize = 6;
 
 impl PageWords<'static> {
     /// Tokenizes `page.text` (at most `budget` bytes of it, on a char boundary).
@@ -82,6 +88,13 @@ impl<'a> PageWords<'a> {
                 line += u32::try_from(gap.bytes().filter(|&b| b == b'\n').count()).unwrap_or(0);
                 let k0 = keys.len();
                 key(&mut keys);
+                let column_gap = prev_end > 0 && !gap.contains('\n') && !gap.is_empty() && {
+                    let (a, b) = (map.to_source(prev_end), map.to_source(start));
+                    src.get(a..b).is_some_and(|g| {
+                        g.contains('\t')
+                            || g.chars().filter(|c| c.is_whitespace()).count() >= COLUMN_GAP
+                    })
+                };
                 let zone = if zones.spans.is_empty() {
                     Zone::Unknown
                 } else {
@@ -94,6 +107,7 @@ impl<'a> PageWords<'a> {
                     key: (to_u32(k0), to_u32(keys.len())),
                     line,
                     space_before: !gap.is_empty() || prev_end == 0,
+                    column_gap,
                     zone,
                 });
                 prev_end = end;
