@@ -31,12 +31,42 @@ pub enum Kind {
     Invoice,
     /// Quotation or offer (*ponuda*).
     Quote,
+    /// Public-procurement framework agreement (*okvirni sporazum*, "framework agreement").
+    /// A private *okvirni ugovor* stays [`Kind::Msa`].
+    FrameworkAgreement,
+    /// Contract award decision (*odluka o dodeli ugovora / okvirnog sporazuma*, *odluka o
+    /// izboru najpovoljnije ponude*).
+    AwardDecision,
+    /// Any other decision or ruling (*odluka*, *rešenje*).
+    Decision,
+    /// Price list (*cenovnik*, "price list").
+    PriceList,
+    /// Public notice or call (*obaveštenje*, *javni poziv*, *poziv za podnošenje ponuda*,
+    /// *oglas*, "contract award notice").
+    Notice,
+    /// Tender documentation or a model contract inside it (*konkursna / tenderska
+    /// dokumentacija*, *model ugovora*).
+    TenderDocumentation,
+    /// A public procurement procedure (*javna nabavka*, *JN*): only ever cited, with its
+    /// number ("javna nabavka br. 404-1-110/19").
+    Procurement,
+    /// The registry (*delovodni*) number of a Serbian document ("Broj: 404-12/25-3" at its
+    /// head): only ever an own number's kind, never a document kind.
+    Registry,
 }
 
 impl Kind {
     /// Stable lowercase name used in facts.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::FrameworkAgreement => "framework_agreement",
+            Self::AwardDecision => "award_decision",
+            Self::Decision => "decision",
+            Self::PriceList => "price_list",
+            Self::Notice => "notice",
+            Self::TenderDocumentation => "tender_documentation",
+            Self::Procurement => "procurement",
+            Self::Registry => "registry",
             Self::Msa => "msa",
             Self::Contract => "contract",
             Self::Nda => "nda",
@@ -54,10 +84,32 @@ impl Kind {
     }
 
     /// The kind a matched, folded kind phrase names (see the crate docs for the phrases).
+    #[allow(clippy::too_many_lines)] // one flat table of phrase tests
     pub(crate) fn of_phrase(p: &str) -> Option<Self> {
         let first = p.split(' ').next().unwrap_or("");
+        let second = p.split(' ').nth(1).unwrap_or("");
         let k = if p.starts_with("amended and restated") {
             Self::AmendedRestated
+        } else if (first.starts_with("okvirn") && second.starts_with("sporazum"))
+            || p == "framework agreement"
+        {
+            Self::FrameworkAgreement
+        } else if first.starts_with("odluk") && (p.contains(" dodel") || p.contains(" izbor")) {
+            Self::AwardDecision
+        } else if first.starts_with("odluk") || first.starts_with("resenj") {
+            Self::Decision
+        } else if first.starts_with("cenovnik") || p == "price list" || p == "spisak cena" {
+            Self::PriceList
+        } else if first.starts_with("obavestenj")
+            || first.starts_with("oglas")
+            || p.contains("poziv")
+            || p.ends_with(" notice")
+        {
+            Self::Notice
+        } else if p.contains("dokumentacij") || first == "model" {
+            Self::TenderDocumentation
+        } else if first.starts_with("javn") || p == "jn" {
+            Self::Procurement
         } else if p.starts_with("master ") || p == "msa" || first.starts_with("okvirn") {
             Self::Msa
         } else if p == "statement of work"
@@ -141,12 +193,20 @@ impl Kind {
     /// Whether a number labelled with `self` can be the own number of a document of kind
     /// `doc`.
     pub(crate) fn fits(self, doc: Self) -> bool {
-        use Kind::{AmendedRestated, Contract, Msa, Nda, Order, Po, SideLetter, Sow};
+        use Kind::{
+            AmendedRestated, Contract, FrameworkAgreement, Msa, Nda, Order, Po, Procurement,
+            SideLetter, Sow,
+        };
+        if self == Procurement {
+            return false;
+        }
         self == doc
             || matches!(
                 (doc, self),
-                (Msa | Nda | AmendedRestated | SideLetter, Contract)
-                    | (AmendedRestated, Msa)
+                (
+                    Msa | Nda | AmendedRestated | SideLetter | FrameworkAgreement,
+                    Contract
+                ) | (AmendedRestated, Msa)
                     | (Po | Sow, Order)
                     | (Order, Po)
             )
@@ -189,16 +249,17 @@ impl Relation {
     /// text names none.
     pub(crate) fn default_for(doc: Option<Kind>, cited: Kind) -> Self {
         use Kind::{
-            AmendedRestated, Amendment, Annex, ChangeOrder, Contract, Invoice, Msa, Nda, Order, Po,
-            Quote, SideLetter, Sow,
+            AmendedRestated, Amendment, Annex, ChangeOrder, Contract, FrameworkAgreement, Invoice,
+            Msa, Nda, Order, Po, Quote, SideLetter, Sow,
         };
         let parent = matches!(
             cited,
-            Msa | Contract | Nda | Sow | Po | Order | AmendedRestated
+            Msa | Contract | Nda | Sow | Po | Order | AmendedRestated | FrameworkAgreement
         );
         match doc {
             Some(Amendment | ChangeOrder | SideLetter | AmendedRestated) if parent => Self::Amends,
             Some(Annex) if parent => Self::AnnexTo,
+            Some(Contract | Po | Order) if cited == FrameworkAgreement => Self::IssuedUnder,
             Some(Sow | Order | Po) if matches!(cited, Msa | Contract | Nda | AmendedRestated) => {
                 Self::IssuedUnder
             }

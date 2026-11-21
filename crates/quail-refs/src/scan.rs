@@ -382,9 +382,17 @@ fn date_after(p: &Patterns, pp: &Prepared<'_>, last: usize, after: usize) -> Opt
     Some((date, pp.toks[last_tok].ne))
 }
 
+/// Serbian registry labels: "Broj:", "Br.:" (with the colon), "Delov. br.", "Број акта".
+fn is_registry_label(lab: &str, gap: &str) -> bool {
+    let strong = lab
+        .split(' ')
+        .any(|w| matches!(w, "delovodni" | "delov" | "del" | "akta" | "predmeta"));
+    strong || (gap.contains(':') && lab.split(' ').any(|w| matches!(w, "br" | "broj")))
+}
+
 /// A number after a generic label at the start of a head line ("Broj: 01-123/2023",
-/// "Ref. No.: KW-482917"), without a kind word.
-pub(crate) fn generic_numbers(p: &Patterns, pp: &Prepared<'_>) -> Vec<Number> {
+/// "Ref. No.: KW-482917"), without a kind word; `true` for a Serbian registry label.
+pub(crate) fn generic_numbers(p: &Patterns, pp: &Prepared<'_>) -> Vec<(Number, bool)> {
     let mut out = Vec::new();
     let n = pp.toks.len();
     let mut i = 0;
@@ -398,10 +406,10 @@ pub(crate) fn generic_numbers(p: &Patterns, pp: &Prepared<'_>) -> Vec<Number> {
             }
             continue;
         }
-        for len in [1usize, 2, 3] {
+        for len in [3usize, 2, 1] {
             let last = a + len - 1;
             if last >= b {
-                break;
+                continue;
             }
             let ks = pp.toks[a].ks;
             let ke = pp.toks[last].ke;
@@ -424,14 +432,28 @@ pub(crate) fn generic_numbers(p: &Patterns, pp: &Prepared<'_>) -> Vec<Number> {
                 && let Some(m) = p.value.find(rest)
             {
                 let raw = m.as_str();
-                let key = normalize_contract_number(raw);
+                let registry = is_registry_label(lab, gap);
+                let mut key = normalize_contract_number(raw);
+                // A registry label carries a registry number even when it is short
+                // ("Број акта: 92/16"): any three digits will do.
+                if key.is_empty() && registry && raw.bytes().filter(u8::is_ascii_digit).count() >= 3
+                {
+                    key = raw
+                        .chars()
+                        .filter(|c| c.is_alphanumeric())
+                        .flat_map(char::to_lowercase)
+                        .collect();
+                }
                 if !key.is_empty() && raw.chars().count() <= MAX_RAW {
-                    out.push(Number {
-                        raw: raw.to_owned(),
-                        key,
-                        ns: pp.toks[v].ns,
-                        ne: pp.toks[v].ns + m.end(),
-                    });
+                    out.push((
+                        Number {
+                            raw: raw.to_owned(),
+                            key,
+                            ns: pp.toks[v].ns,
+                            ne: pp.toks[v].ns + m.end(),
+                        },
+                        registry,
+                    ));
                 }
             }
             break;

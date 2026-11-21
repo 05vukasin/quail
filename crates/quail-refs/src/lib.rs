@@ -44,7 +44,10 @@
 //! | `ref.version_hint` | `kind` (`version`, `revision`, `draft`, `final`, `execution`, `redline`, `clean`), `n` (Text) |
 //!
 //! Kinds: `msa contract nda sow amendment amended_restated annex change_order side_letter po
-//! order invoice quote` (and `unknown` for an own number found without a kind). Serbian *aneks*
+//! order invoice quote framework_agreement award_decision decision price_list notice
+//! tender_documentation`; own numbers may also be `registry` (a Serbian head "Broj:" number)
+//! and cites `procurement` (a public procurement procedure), and `unknown` marks an own number
+//! found without a kind. Serbian *aneks*
 //! is an amendment (izmena ugovora), *prilog* an annex. Relations: `amends annex_to
 //! issued_under billed_against references`.
 //!

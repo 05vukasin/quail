@@ -480,7 +480,14 @@ fn instrument_kinds_from_titles() {
         ("NARUDŽBENICA", "po", None),
         ("ANEKS II", "amendment", Some(2)),
         ("PRILOG 1", "annex", Some(1)),
-        ("OKVIRNI SPORAZUM", "msa", None),
+        ("OKVIRNI SPORAZUM", "framework_agreement", None),
+        ("OKVIRNI UGOVOR", "msa", None),
+        ("ODLUKA O DODELI UGOVORA", "award_decision", None),
+        ("ОДЛУКА О ИЗМЕНИ УГОВОРА", "decision", None),
+        ("CENOVNIK USLUGA", "price_list", None),
+        ("ОБАВЕШТЕЊЕ О ЗАКЉУЧЕНОМ УГОВОРУ", "notice", None),
+        ("KONKURSNA DOKUMENTACIJA", "tender_documentation", None),
+        ("MODEL UGOVORA", "tender_documentation", None),
         ("PONUDA", "quote", None),
         ("Amendment AM9", "amendment", Some(9)),
     ];
@@ -680,4 +687,82 @@ fn version_words_in_prose_and_codes_are_not_markers() {
         "{:?}",
         of(&f, &keys::VERSION_HINT)
     );
+}
+
+#[test]
+fn serbian_framework_agreement_number_and_procurement() {
+    let f = run(&["ОКВИРНИ СПОРАЗУМ БР. 97-4/17\nЗА ЈАВНУ НАБАВКУ ЛЕКОВА\n\
+         Наручилац и Добављач закључују у поступку јавне набавке бр. 404-1-110/17\n"]);
+    assert_eq!(
+        single_text(&f, &keys::TITLE).as_deref(),
+        Some("ОКВИРНИ СПОРАЗУМ БР. 97-4/17")
+    );
+    assert_eq!(
+        single_text(&f, &keys::INSTRUMENT_KIND).as_deref(),
+        Some("framework_agreement")
+    );
+    assert_eq!(own(&f), vec![(s("framework_agreement"), s("97417"))]);
+    let c = cites(&f);
+    assert!(
+        c.iter().any(|r| r.0 == "procurement" && r.2 == "404111017"),
+        "{c:?}"
+    );
+}
+
+#[test]
+fn serbian_registry_numbers_in_the_head() {
+    let f = run(&[
+        "Број акта: 92/16\nДатум: 13.04.2018.\nОБАВЕШТЕЊЕ\nо закљученом оквирном споразуму\n",
+    ]);
+    assert_eq!(
+        single_text(&f, &keys::INSTRUMENT_KIND).as_deref(),
+        Some("notice")
+    );
+    assert!(
+        own(&f).contains(&(s("registry"), s("9216"))),
+        "{:?}",
+        own(&f)
+    );
+    let f = run(&["ODLUKA O DODELI UGOVORA\nBroj: 404-13/26\nNa osnovu člana 27."]);
+    assert_eq!(
+        single_text(&f, &keys::INSTRUMENT_KIND).as_deref(),
+        Some("award_decision")
+    );
+    assert_eq!(own(&f), vec![(s("registry"), s("4041326"))]);
+}
+
+#[test]
+fn field_labels_and_header_lines() {
+    // A field label naming a contract in the genitive is no title.
+    let f = run(&["Naziv naručioca: Grad\nPrvobitna vrednost ugovora\n1.000.000,00"]);
+    assert_ne!(
+        single_text(&f, &keys::INSTRUMENT_KIND).as_deref(),
+        Some("contract")
+    );
+    // An upper-case kind line in the header zone of page 1 is the title.
+    let mut d = doc(&["ОДЛУКА О ИЗМЕНИ УГОВОРА\nНазив наручиоца: Град\nАдреса: улица 2"]);
+    d.pages[0].blocks[0].zone = Zone::Header;
+    let mut out = Emitter::new(RefAnalyzer::ID);
+    run_with(d, &Limits::default(), &mut out).unwrap();
+    let f = out.into_parts().0;
+    assert_eq!(
+        single_text(&f, &keys::TITLE).as_deref(),
+        Some("ОДЛУКА О ИЗМЕНИ УГОВОРА")
+    );
+    assert_eq!(
+        single_text(&f, &keys::INSTRUMENT_KIND).as_deref(),
+        Some("decision")
+    );
+}
+
+#[test]
+fn serbian_registry_shape() {
+    use quail_refs::number::{is_serbian_registry_shape, normalize_contract_number};
+    for v in ["97-4/17", "3-1/25", "116-21/2025", "23-5/20-1"] {
+        assert!(is_serbian_registry_shape(v), "{v}");
+    }
+    for v in ["12/2023", "1-2/3", "4/17", "a-1/20", "1-2/123"] {
+        assert!(!is_serbian_registry_shape(v), "{v}");
+    }
+    assert_eq!(normalize_contract_number("97-4/17"), "97417");
 }

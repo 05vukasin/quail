@@ -126,6 +126,13 @@ fn find_on(p: &Patterns, pp: &Prepared<'_>, pi: usize) -> Option<Title> {
         .or_else(|| kind_in(p, pp, a, b).map(|(_, s)| s))
         .and_then(|s| {
             let (k, _) = kind_in(p, pp, s, b)?;
+            // A title naming a procurement ("JAVNA NABAVKA MALE VREDNOSTI ...") is the
+            // cover of its tender documentation.
+            let k = if k == Kind::Procurement {
+                Kind::TenderDocumentation
+            } else {
+                k
+            };
             let near_start = s - a <= 3;
             Some((
                 k,
@@ -194,11 +201,12 @@ fn candidate(
 ) -> Option<Cand> {
     let src = pp.source_span(pp.toks[a].ns, pp.toks[a].ne);
     let block = pp.block_at(src.start);
-    if block
-        .is_some_and(|bl| matches!(bl.zone, quail_core::Zone::Header | quail_core::Zone::Footer))
-    {
+    if block.is_some_and(|bl| bl.zone == quail_core::Zone::Footer) {
         return None;
     }
+    // A header-zone line is a running header, unless it is an upper-case kind line at the
+    // top of the first page (portal forms put "ОДЛУКА О ...", "ОБАВЕШТЕЊЕ О ..." there).
+    let in_header = block.is_some_and(|bl| bl.zone == quail_core::Zone::Header);
     let n = b - a + 1;
     let keys = pp.keys.get(pp.toks[a].ks..pp.toks[b].ke)?;
     if NOT_TITLES.contains(&keys) || keys.starts_with("exhibit 10") || is_exhibit_tag(keys) {
@@ -231,10 +239,17 @@ fn candidate(
             .get(pp.toks[a].ns..pp.toks[s].ns)
             .is_some_and(|x| x.contains(':'))
     };
-    let kind_at = kind_in(p, pp, a, b).map(|(_, s)| s).filter(|&s| {
+    let kind_at = kind_in(p, pp, a, b).filter(|&(k, s)| k != Kind::Procurement || s == a);
+    let kind_at = kind_at.map(|(_, s)| s).filter(|&s| {
         let pos = s - a;
-        !field_before(s) && (pos <= 3 || (n <= 10 && (upper >= 0.8 || heading)))
+        // "Prvobitna vrednost ugovora", "Уговорена вредност": a field label naming a
+        // contract in an oblique case is no title unless the line is set in capitals.
+        let oblique = pos > 0 && upper < 0.8 && !heading && oblique_case(pp.key(s));
+        !field_before(s) && !oblique && (pos <= 3 || (n <= 10 && (upper >= 0.8 || heading)))
     });
+    if in_header && !(pp.page.index == 0 && kind_at == Some(a) && upper >= 0.8) {
+        return None;
+    }
     let big = matches!((height, median), (Some(h), Some(m)) if h >= 1.25 * m);
     let mut score: f32 = if prose {
         0.0
@@ -286,6 +301,14 @@ fn candidate(
     })
 }
 
+/// A Serbian contract word in an oblique case (`ugovora`, `ugovoru`, `ugovorom`,
+/// `sporazuma`, ...): it names a contract inside a phrase rather than heading one.
+fn oblique_case(key: &str) -> bool {
+    ["ugovor", "sporazum"]
+        .iter()
+        .any(|stem| key.starts_with(stem) && key.len() > stem.len())
+}
+
 /// An annex kind at the line start, followed by its code and not by "to"/"uz"/"of".
 fn is_attachment_tag(p: &Patterns, pp: &Prepared<'_>, a: usize, b: usize) -> bool {
     if kind_in(p, pp, a, b).map(|(k, _)| k) != Some(Kind::Annex) {
@@ -327,7 +350,9 @@ fn join(pp: &Prepared<'_>, lines: &[(usize, usize)], a: usize, b: usize) -> (usi
             break;
         };
         let runs_on = JOIN_AFTER.contains(&pp.key(end)) || JOIN_BEFORE.contains(&pp.key(na));
-        if !runs_on || nb - na + 1 > 10 {
+        // "... ЗА ЈАВНУ НАБАВКУ ..." names the procurement, not the instrument.
+        let procurement = pp.key(na) == "za" && pp.key(na + 1).starts_with("javn");
+        if !runs_on || procurement || nb - na + 1 > 10 {
             break;
         }
         end = nb;
