@@ -88,9 +88,9 @@ fn bench_phash(c: &mut Criterion) {
         });
     }
     // Worst case for the color path: every pixel a random color.
-    let (w, h) = (1240usize, 1754usize);
+    let (nw, nh) = (1240usize, 1754usize);
     let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
-    let noise: Vec<u8> = (0..w * h * 3)
+    let noise: Vec<u8> = (0..nw * nh * 3)
         .map(|_| {
             x ^= x << 13;
             x ^= x >> 7;
@@ -98,7 +98,7 @@ fn bench_phash(c: &mut Criterion) {
             x.to_le_bytes()[3]
         })
         .collect();
-    g.throughput(Throughput::Elements((w * h) as u64));
+    g.throughput(Throughput::Elements((nw * nh) as u64));
     g.bench_function("rgb noise 150dpi", |b| {
         b.iter(|| phash::phash(1240, 1754, 3, black_box(&noise)));
     });
