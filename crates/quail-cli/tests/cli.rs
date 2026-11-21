@@ -525,16 +525,16 @@ fn keys_and_version() {
     }
     expected.extend(["docx.extract@1", "hash.identity@1"]);
     if cfg!(feature = "text") {
-        expected.extend(["text.stats@1", "text.lang@1"]);
+        expected.extend(["text.stats@2", "text.lang@2"]);
     }
     if cfg!(feature = "signals") {
-        expected.push("signal.scan@1");
+        expected.push("signal.scan@2");
     }
     if cfg!(feature = "refs") {
-        expected.push("ref.references@1");
+        expected.push("ref.references@2");
     }
     if cfg!(feature = "parties") {
-        expected.push("party.candidates@1");
+        expected.push("party.candidates@2");
     }
     if cfg!(feature = "sketch") {
         expected.extend([

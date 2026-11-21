@@ -1,8 +1,6 @@
 //! `text.stats@1` and `text.lang@1`.
 
-use quail_core::{
-    Analyzer, AnalyzerId, Ctx, Document, Emitter, Evidence, Page, Profile, Result, Value,
-};
+use quail_core::{Analyzer, AnalyzerId, Ctx, Emitter, Evidence, Page, Profile, Result, Value};
 
 use crate::garbage::{GarbageReport, garbage_report};
 use crate::keys;
@@ -40,7 +38,7 @@ pub struct TextStats;
 
 impl TextStats {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("text.stats", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("text.stats", 2);
 }
 
 impl Analyzer for TextStats {
@@ -52,12 +50,16 @@ impl Analyzer for TextStats {
         &["document"]
     }
 
+    fn after(&self) -> &'static [&'static str] {
+        &["revised_document"]
+    }
+
     fn profile(&self) -> Profile {
         Profile::Fast
     }
 
     fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
-        let Some(doc) = ctx.get::<Document>() else {
+        let Some(doc) = ctx.document() else {
             return Ok(());
         };
         let mut budget = usize::try_from(ctx.limits.max_text_bytes).unwrap_or(usize::MAX);
@@ -140,7 +142,7 @@ pub struct TextLang {
 
 impl TextLang {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("text.lang", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("text.lang", 2);
 
     /// Letters a page needs for a per-page language.
     pub const MIN_PAGE_LETTERS: u64 = 40;
@@ -186,12 +188,16 @@ impl Analyzer for TextLang {
         &["document"]
     }
 
+    fn after(&self) -> &'static [&'static str] {
+        &["revised_document"]
+    }
+
     fn profile(&self) -> Profile {
         Profile::Fast
     }
 
     fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
-        let Some(doc) = ctx.get::<Document>() else {
+        let Some(doc) = ctx.document() else {
             return Ok(());
         };
         let opts = NormalizeOptions::default();
@@ -256,7 +262,9 @@ impl Analyzer for TextLang {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quail_core::{Artifacts, Blob, Fact, FactKey, Format, Limits, PageKind, TextSource};
+    use quail_core::{
+        Artifacts, Blob, Document, Fact, FactKey, Format, Limits, PageKind, TextSource,
+    };
 
     fn page(index: u32, text: &str) -> Page {
         Page {
