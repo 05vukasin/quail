@@ -62,7 +62,7 @@ fetch() {
     if [[ -s "$dest" ]]; then log "have $(basename "$dest")"; return 0; fi
     mkdir -p "$(dirname "$dest")"
     log "curl $url"
-    curl -fL --retry 5 --retry-delay 5 -C - -A "$UA" -o "$dest.part" "$url"
+    curl -fsSL --retry 5 --retry-delay 5 -C - -A "$UA" -o "$dest.part" "$url"
     mv "$dest.part" "$dest"
 }
 
