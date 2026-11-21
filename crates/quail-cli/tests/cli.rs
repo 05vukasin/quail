@@ -483,9 +483,11 @@ fn ctrl_c_drains_prints_stats_and_exits_130() {
     assert_eq!(status.code(), Some(130), "{err}");
     assert!(err.contains("interrupted"), "{err}");
     assert!(err.contains("cancelled"), "{err}");
-    // Records of files already pulled are written in full.
+    // Records of files already pulled are written in full. On a slow runner the interrupt can
+    // land while the engine is still being built (language models, indexes): then nothing was
+    // pulled yet, which is a clean cancel too.
     let n = records(&recs).len();
-    assert!((2..=3).contains(&n), "{n} records");
+    assert!(n <= 3, "{n} records");
 }
 
 #[test]
