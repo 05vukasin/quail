@@ -172,10 +172,10 @@ pub const STEPS: &[StepDoc] = &[
     },
     #[cfg(feature = "sketch")]
     StepDoc {
-        id: quail_sketch::SadaMinHash::ID,
+        id: quail_sketch::CompatMinHash::ID,
         kind: StepKind::Analyzer,
         formats: &[],
-        doc: "Byte-compatible port of the reference service's MinHash and template sketches.",
+        doc: "Compatibility mode: byte-compatible port of an existing deployment's MinHash and template sketches.",
     },
     #[cfg(all(feature = "sketch", feature = "pdf"))]
     StepDoc {
@@ -240,7 +240,7 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     let b = b.analyzer(Box::new(quail_parties::PartyCandidates));
     #[cfg(feature = "clauses")]
     let b = b.analyzer(Box::new(quail_clauses::ClauseTerms));
-    // `sketch.minhash_sada@1` is Standard: the engine leaves it out under `Profile::Fast`.
+    // `sketch.minhash_compat@3` is Standard: the engine leaves it out under `Profile::Fast`.
     #[cfg(feature = "sketch")]
     let b = b
         .analyzer(Box::new(quail_sketch::MinHashAnalyzer))
@@ -249,7 +249,7 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
         .analyzer(Box::new(quail_sketch::LayoutAnalyzer))
         .analyzer(Box::new(quail_sketch::InvoiceLayout))
         .analyzer(Box::new(quail_sketch::TextKey))
-        .analyzer(Box::new(quail_sketch::SadaMinHash));
+        .analyzer(Box::new(quail_sketch::CompatMinHash));
     // Needs the `raster` artifact, which only the PDF extractor provides.
     #[cfg(all(feature = "sketch", feature = "pdf"))]
     let b = b.analyzer(Box::new(quail_sketch::PagePHash));
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     #[cfg(feature = "sketch")]
     fn standard_sketches_follow_the_profile() {
-        let standard = [quail_sketch::SadaMinHash::ID];
+        let standard = [quail_sketch::CompatMinHash::ID];
         let fast = builder(Profile::Fast, Limits::default()).build().unwrap();
         let std_ = builder(Profile::Standard, Limits::default())
             .build()

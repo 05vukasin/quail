@@ -1,5 +1,5 @@
 //! The backtracking patterns of the Python-compatible sketches (`fancy-regex`, bounded by
-//! `sada::BACKTRACK_LIMIT`) stay fast on 1 MB of hostile text, and a pattern that gives up
+//! `compat::BACKTRACK_LIMIT`) stay fast on 1 MB of hostile text, and a pattern that gives up
 //! degrades to a warning, never a panic or a hang.
 
 mod common;
@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 
 use common::text_doc;
 use quail_core::{Analyzer, Artifacts, Blob, Ctx, Emitter, Format, Limits, Profile};
-use quail_sketch::{InvoiceLayout, SadaMinHash, invoice, sada};
+use quail_sketch::{CompatMinHash, InvoiceLayout, compat, invoice};
 
 const MB: usize = 1 << 20;
-/// Wall-time bound per input for the whole sada path, in a debug build.
+/// Wall-time bound per input for the whole compatibility path, in a debug build.
 const BOUND: Duration = Duration::from_secs(2);
 
 fn repeat(unit: &str) -> String {
@@ -62,19 +62,19 @@ fn run_analyzer(a: &dyn Analyzer, text: &str) -> (usize, Vec<String>) {
 }
 
 #[test]
-fn sada_path_is_bounded_on_hostile_text() {
+fn compat_path_is_bounded_on_hostile_text() {
     let mut slowest = (Duration::ZERO, "");
     for (name, text) in inputs() {
         // Every pattern, directly: errors are allowed, panics and hangs are not.
         let t = Instant::now();
-        let _ = sada::mask_entities(&text);
+        let _ = compat::mask_entities(&text);
         let _ = invoice::number_patterns(&text);
-        let _ = sada::structural_fp([text.as_str()]);
+        let _ = compat::structural_fp([text.as_str()]);
         let patterns = t.elapsed();
         assert!(patterns < BOUND, "{name}: patterns alone {patterns:?}");
-        // The whole sada path, as the analyzers run it; a pattern that gave up is a warning.
+        // The whole compatibility path, as the analyzers run it; a pattern that gave up is a warning.
         let t = Instant::now();
-        let (_, w1) = run_analyzer(&SadaMinHash, &text);
+        let (_, w1) = run_analyzer(&CompatMinHash, &text);
         let (_, w2) = run_analyzer(&InvoiceLayout, &text);
         for w in w1.iter().chain(&w2) {
             assert!(
@@ -102,7 +102,7 @@ fn limit_error_degrades_to_a_warning() {
     let (facts, warnings) = run_analyzer(&InvoiceLayout, &text);
     assert!(t.elapsed() < BOUND);
     match invoice::features(&text) {
-        Err(sada::RegexLimit) => {
+        Err(compat::RegexLimit) => {
             assert_eq!(facts, 0);
             assert!(warnings[0].contains("backtracking limit"));
         }

@@ -1,5 +1,5 @@
-//! Byte-compatible port of the document fingerprints of an existing Python service, so
-//! sketches quail stores can be compared with the ones that service already holds.
+//! Byte-compatible port of the document fingerprints of an existing deployment (compatibility mode), so
+//! sketches quail stores can be compared with the ones that deployment already holds.
 //!
 //! Given the same text, every function here returns exactly what the Python original
 //! returns (checked by a cross-check script on a corpus; see the README). Its rules, kept
@@ -9,7 +9,7 @@
 //!   `_`, which is `[\p{L}\p{N}_]`; marks are *not* word characters).
 //! - Shingles: the set of word 3-shingles joined by one space; fewer than 3 tokens give the
 //!   set of the tokens themselves.
-//! - Digest: `BLAKE2b`, 8-byte output, personalization `b"sada-fp-v1"`, read as a big-endian
+//! - Digest: `BLAKE2b`, 8-byte output, personalization [`PERSONALIZATION`], read as a big-endian
 //!   integer.
 //! - MinHash: 128 permutations `(a·x + b) mod (2^61 − 1)` over the digests, with the
 //!   coefficients `CPython`'s `random.Random(0x5ADAF19315)` draws (see
@@ -44,6 +44,11 @@ use crate::simhash::simhash;
 
 /// Fewest distinct shingles for a version signature.
 pub const MIN_SHINGLES: usize = 40;
+
+/// `BLAKE2b` personalization: the personalization string of the compatible deployment.
+/// Part of the byte-compatibility contract: changing these bytes changes every digest, so
+/// they stay exactly as that deployment uses them.
+pub const PERSONALIZATION: &[u8] = b"sada-fp-v1";
 /// Hamming distance within which two template fingerprints are one template.
 pub const TEMPLATE_HAMMING_MAX: u32 = 8;
 
@@ -270,11 +275,11 @@ impl std::fmt::Display for RegexLimit {
 
 impl std::error::Error for RegexLimit {}
 
-/// BLAKE2b-64 with the personalization `b"sada-fp-v1"`.
+/// BLAKE2b-64 with the personalization [`PERSONALIZATION`].
 pub fn digest(value: &str) -> [u8; 8] {
     let h = blake2b_simd::Params::new()
         .hash_length(8)
-        .personal(b"sada-fp-v1")
+        .personal(PERSONALIZATION)
         .hash(value.as_bytes());
     let mut out = [0u8; 8];
     out.copy_from_slice(h.as_bytes());
@@ -290,7 +295,7 @@ pub fn digest_int(value: &str) -> u64 {
 fn digest_words(words: &[&str]) -> u64 {
     let mut st = blake2b_simd::Params::new()
         .hash_length(8)
-        .personal(b"sada-fp-v1")
+        .personal(PERSONALIZATION)
         .to_state();
     for (i, w) in words.iter().enumerate() {
         if i > 0 {

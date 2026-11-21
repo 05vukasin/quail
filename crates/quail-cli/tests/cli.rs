@@ -600,7 +600,7 @@ fn keys_and_version() {
             "sketch.layout@2",
             "sketch.invoice_layout@2",
             "sketch.text_key@2",
-            "sketch.minhash_sada@2",
+            "sketch.minhash_compat@3",
         ]);
     }
     if cfg!(all(feature = "sketch", feature = "pdf")) {

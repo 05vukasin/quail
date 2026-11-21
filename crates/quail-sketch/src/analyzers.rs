@@ -14,7 +14,7 @@ use quail_text::token::keyed_tokens;
 use crate::keys;
 use crate::minhash::{MIN_SHINGLES, MinHash, shingle_hashes_of_keys};
 use crate::text::{DocText, raw_text};
-use crate::{invoice, layout, phash, sada, simhash, template};
+use crate::{compat, invoice, layout, phash, simhash, template};
 
 fn int(n: usize) -> Value {
     Value::Int(i64::try_from(n).unwrap_or(i64::MAX))
@@ -235,7 +235,7 @@ impl LayoutAnalyzer {
         if heads.len() >= 2 {
             out.fact(
                 keys::HEADINGS,
-                Value::U64(sada::structural_fp(heads.iter().copied())),
+                Value::U64(compat::structural_fp(heads.iter().copied())),
             );
         }
         Ok(())
@@ -340,51 +340,51 @@ fn text_key_of_joined(joined: &str) -> Option<[u8; 16]> {
     })
 }
 
-/// `sketch.minhash_sada@2`: the Python-compatible sketches of [`crate::sada`]: version
-/// signature [`keys::SADA_MINHASH`] with its buckets [`keys::SADA_MINHASH_BANDS`] and
-/// [`keys::SADA_SHINGLES`] (nothing below 40 shingles), and the template fingerprint
-/// [`keys::SADA_TEMPLATE`]. Reads the text as extracted (not normalized), as the original.
+/// `sketch.minhash_compat@3`: the Python-compatible sketches of [`crate::compat`]: version
+/// signature [`keys::COMPAT_MINHASH`] with its buckets [`keys::COMPAT_MINHASH_BANDS`] and
+/// [`keys::COMPAT_SHINGLES`] (nothing below 40 shingles), and the template fingerprint
+/// [`keys::COMPAT_TEMPLATE`]. Reads the text as extracted (not normalized), as the original.
 /// Standard only: `BLAKE2b` per shingle and backtracking (`fancy-regex`) masking cost several
-/// times the native sketches; a pattern that hits `sada::backtrack_limit` is a warning and
+/// times the native sketches; a pattern that hits `compat::backtrack_limit` is a warning and
 /// that sketch is skipped.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SadaMinHash;
+pub struct CompatMinHash;
 
 analyzer!(
-    SadaMinHash,
-    "sketch.minhash_sada",
-    2,
+    CompatMinHash,
+    "sketch.minhash_compat",
+    3,
     Profile::Standard,
     &["document"],
     AFTER_REVISED,
     revised
 );
 
-impl SadaMinHash {
+impl CompatMinHash {
     fn applies_to(self, ctx: &Ctx<'_>) -> bool {
         has_text(ctx)
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
         let text = raw_text(doc, ctx.limits, out)?;
-        if let Some((sig, n)) = sada::raw_minhash(&text) {
+        if let Some((sig, n)) = compat::raw_minhash(&text) {
             let bytes: Vec<u8> = sig.iter().flat_map(|r| r.to_le_bytes()).collect();
-            out.fact(keys::SADA_MINHASH, Value::Bytes(bytes.into()));
+            out.fact(keys::COMPAT_MINHASH, Value::Bytes(bytes.into()));
             out.fact(
-                keys::SADA_MINHASH_BANDS,
+                keys::COMPAT_MINHASH_BANDS,
                 Value::List(
-                    sada::lsh_buckets(&sig)
+                    compat::lsh_buckets(&sig)
                         .into_iter()
                         .map(Value::text)
                         .collect(),
                 ),
             );
-            out.fact(keys::SADA_SHINGLES, int(n));
+            out.fact(keys::COMPAT_SHINGLES, int(n));
         }
         out.check_deadline()?;
         if !text.trim().is_empty() {
-            match sada::template_fp(&text) {
-                Ok(fp) => out.fact(keys::SADA_TEMPLATE, Value::U64(fp)),
+            match compat::template_fp(&text) {
+                Ok(fp) => out.fact(keys::COMPAT_TEMPLATE, Value::U64(fp)),
                 Err(e) => out.warn(format!("{}: {e}, sketch skipped", Self::ID)),
             }
         }

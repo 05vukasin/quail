@@ -362,7 +362,7 @@ impl Target {
             .analyzer(Box::new(Traced(quail_sketch::LayoutAnalyzer)))
             .analyzer(Box::new(Traced(quail_sketch::InvoiceLayout)))
             .analyzer(Box::new(Traced(quail_sketch::TextKey)))
-            .analyzer(Box::new(Traced(quail_sketch::SadaMinHash)))
+            .analyzer(Box::new(Traced(quail_sketch::CompatMinHash)))
             .analyzer(Box::new(Traced(quail_sketch::PagePHash)));
         // quail's own panic hook would hide panic locations; ours is installed afterwards.
         let engine = match b.build() {

@@ -14,7 +14,7 @@
 //! | [`LayoutAnalyzer`] `sketch.layout@2` | Fast | geometry SimHash (PDF), block-structure SimHash, heading skeleton | [`hamming`] ≤ [`layout::LAYOUT_HAMMING_MAX`] / [`layout::STRUCTURE_HAMMING_MAX`]; headings: equality |
 //! | [`InvoiceLayout`] `sketch.invoice_layout@2` | Fast | invoice labels + number-pattern digest | equality |
 //! | [`TextKey`] `sketch.text_key@2` | Fast | 128-bit key of the folded words | equality |
-//! | [`SadaMinHash`] `sketch.minhash_sada@2` | Standard | byte-compatible port of an existing Python service's sketches | as in that service, see [`sada`] |
+//! | [`CompatMinHash`] `sketch.minhash_compat@3` | Standard | byte-compatible port of an existing deployment's sketches (compatibility mode) | as in that deployment, see [`compat`] |
 //! | [`PagePHash`] `sketch.page_phash@3` | Standard | 64-bit DCT pHash of up to 4 scanned pages (first 3 + last; scans decoded at reduced resolution) | [`hamming`] ≤ [`phash::PAGE_HAMMING_MAX`] per page |
 //!
 //! Everything builds on `quail-text`: its normalization, tokens, folding and pinned XXH3
@@ -28,18 +28,18 @@
 mod coeffs;
 
 mod analyzers;
+pub mod compat;
 pub mod invoice;
 pub mod layout;
 pub mod minhash;
 pub mod phash;
-pub mod sada;
 pub mod simhash;
 pub mod template;
 mod text;
 
 pub use analyzers::{
-    InvoiceLayout, LayoutAnalyzer, MAX_PHASH_PAGES, MinHashAnalyzer, PHASH_DPI, PHASH_SCAN_SIDE,
-    PagePHash, SadaMinHash, SimHashTemplate, SimHashText, TextKey, phash_pages, text_key,
+    CompatMinHash, InvoiceLayout, LayoutAnalyzer, MAX_PHASH_PAGES, MinHashAnalyzer, PHASH_DPI,
+    PHASH_SCAN_SIDE, PagePHash, SimHashTemplate, SimHashText, TextKey, phash_pages, text_key,
 };
 
 /// Number of differing bits of two 64-bit sketches (SimHash, pHash).
@@ -54,7 +54,7 @@ pub fn hamming(a: u64, b: u64) -> u32 {
 
 /// Estimated Jaccard similarity of the shingle sets behind two MinHash signatures as stored
 /// in `Value::Bytes`: the share of rows that agree. Works for both layouts this crate emits
-/// ([`keys::MINHASH`], 128 rows of 4 bytes, and [`keys::SADA_MINHASH`], 128 rows of 8 bytes).
+/// ([`keys::MINHASH`], 128 rows of 4 bytes, and [`keys::COMPAT_MINHASH`], 128 rows of 8 bytes).
 /// Returns 0 when the signatures differ in length or are not a whole number of 128 rows.
 ///
 /// The estimate's standard error is `sqrt(J(1-J)/128)`: ±0.04 at J = 0.6, ±0.027 at 0.9.
@@ -108,7 +108,7 @@ pub mod keys {
     /// their shape, paragraph runs (`Value::U64`). Any format with blocks.
     pub const STRUCTURE: FactKey = FactKey::new("sketch.structure");
     /// Digest of the heading skeleton (heading texts, numbering stripped, lowercased), the
-    /// `structural_fp` of [`crate::sada`] as a big-endian integer (`Value::U64`). Compare
+    /// `structural_fp` of [`crate::compat`] as a big-endian integer (`Value::U64`). Compare
     /// for equality. Absent with fewer than two headings.
     pub const HEADINGS: FactKey = FactKey::new("sketch.headings");
     /// Invoice layout digest: which of 16 invoice labels occur, plus the shapes of
@@ -123,15 +123,15 @@ pub mod keys {
     /// characters.
     pub const TEXT_KEY: FactKey = FactKey::new("sketch.text_key");
     /// Python-compatible version signature (`Value::Bytes`, 128 rows × 8 bytes little-endian),
-    /// see [`crate::sada`].
-    pub const SADA_MINHASH: FactKey = FactKey::new("sketch.sada_minhash");
-    /// Python-compatible LSH bucket keys of [`SADA_MINHASH`] (`Value::List` of 32
+    /// see [`crate::compat`].
+    pub const COMPAT_MINHASH: FactKey = FactKey::new("sketch.compat_minhash");
+    /// Python-compatible LSH bucket keys of [`COMPAT_MINHASH`] (`Value::List` of 32
     /// `Value::Text`, `"<band>:<16 hex>"`).
-    pub const SADA_MINHASH_BANDS: FactKey = FactKey::new("sketch.sada_minhash_bands");
-    /// Distinct shingles behind [`SADA_MINHASH`] (`Value::Int`).
-    pub const SADA_SHINGLES: FactKey = FactKey::new("sketch.sada_shingles");
+    pub const COMPAT_MINHASH_BANDS: FactKey = FactKey::new("sketch.compat_minhash_bands");
+    /// Distinct shingles behind [`COMPAT_MINHASH`] (`Value::Int`).
+    pub const COMPAT_SHINGLES: FactKey = FactKey::new("sketch.compat_shingles");
     /// Python-compatible template SimHash of the entity-masked words (`Value::U64`).
-    pub const SADA_TEMPLATE: FactKey = FactKey::new("sketch.sada_template");
+    pub const COMPAT_TEMPLATE: FactKey = FactKey::new("sketch.compat_template");
     /// 64-bit DCT pHash per scanned page (`Value::List` of `Value::U64`), aligned with
     /// [`PAGE_PHASH_PAGES`].
     pub const PAGE_PHASH: FactKey = FactKey::new("sketch.page_phash");
