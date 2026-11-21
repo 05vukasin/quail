@@ -338,12 +338,12 @@ fn push_block(
         return;
     }
     let bbox = map.bbox(&row);
-    blocks.push(Block {
-        span: span(start, text.len()),
-        kind: BlockKind::Paragraph,
-        zone: zone_of(&bbox, page_h),
-        bbox: Some(bbox),
-    });
+    blocks.push(Block::new(
+        span(start, text.len()),
+        BlockKind::Paragraph,
+        zone_of(&bbox, page_h),
+        Some(bbox),
+    ));
 }
 
 fn span(start: usize, end: usize) -> Span {

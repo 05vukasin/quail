@@ -379,12 +379,8 @@ impl PageText {
         let start = u32::try_from(self.text.len()).unwrap_or(u32::MAX);
         self.text.push_str(text);
         let end = u32::try_from(self.text.len()).unwrap_or(u32::MAX);
-        self.blocks.push(Block {
-            span: Span { start, end },
-            kind,
-            zone,
-            bbox: None,
-        });
+        self.blocks
+            .push(Block::new(Span { start, end }, kind, zone, None));
     }
 }
 

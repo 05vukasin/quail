@@ -193,19 +193,19 @@ impl Extractor for PlainText {
                     } else {
                         BlockKind::Paragraph
                     };
-                    page.blocks.push(Block {
-                        span: Span {
+                    page.blocks.push(Block::new(
+                        Span {
                             start: start as u32,
                             end: end as u32,
                         },
                         kind,
-                        zone: if i == 0 && start == 0 {
+                        if i == 0 && start == 0 {
                             Zone::Title
                         } else {
                             Zone::Body
                         },
-                        bbox: None,
-                    });
+                        None,
+                    ));
                 }
                 start = end;
             }
