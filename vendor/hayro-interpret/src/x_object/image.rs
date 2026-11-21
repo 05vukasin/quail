@@ -22,6 +22,9 @@ pub(crate) struct ImageXObject<'a> {
     pub(crate) stream: Stream<'a>,
     pub(crate) transfer_function: Option<ActiveTransferFunction>,
     pub(crate) warning_sink: WarningSinkFn,
+    // quail: the file's decode budget when the stream itself has no document context (inline
+    // images), so they obey the same pixel cap.
+    pub(crate) budget: Option<&'a hayro_syntax::budget::DecodeBudget>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -125,6 +128,7 @@ impl<'a> ImageXObject<'a> {
             interpolate,
             stream: stream.clone(),
             kind,
+            budget: None,
         })
     }
 
@@ -218,6 +222,31 @@ impl<'a> ImageXObject<'a> {
         }
 
         decode_image(self, target_dimension)
+    }
+
+    /// quail: use `budget` for the pixel cap (and to report refusals).
+    pub(crate) fn with_budget(
+        mut self,
+        budget: Option<&'a hayro_syntax::budget::DecodeBudget>,
+    ) -> Self {
+        if self.budget.is_none() {
+            self.budget = budget;
+        }
+        self
+    }
+
+    /// quail: the pixel cap this image decodes under.
+    pub(crate) fn max_pixels(&self) -> u64 {
+        self.budget
+            .map_or_else(|| self.stream.max_image_pixels(), |b| b.max_pixels())
+    }
+
+    /// quail: records a refusal on the file's budget.
+    pub(crate) fn note_limit_hit(&self) {
+        match self.budget {
+            Some(b) => b.mark_limit_hit(),
+            None => self.stream.note_limit_hit(),
+        }
     }
 
     pub(crate) fn width(&self) -> u32 {

@@ -95,14 +95,18 @@ impl Filter {
         };
         match self {
             Self::AsciiHexDecode => capped(ascii_hex::decode(data)),
-            Self::Ascii85Decode => capped(ascii_85::decode(data)),
+            Self::Ascii85Decode => capped(ascii_85::decode(data, max_out)),
             Self::RunLengthDecode => capped(run_length::decode(data, max_out)),
             Self::LzwDecode => capped(lzw_flate::lzw::decode(data, params, max_out)),
             Self::FlateDecode => capped(lzw_flate::flate::decode(data, params, max_out)),
             #[cfg(feature = "images")]
             Self::DctDecode => {
-                if !declared_fits() || !dct::header_fits(data, limits) {
-                    return refuse_image();
+                match dct::header_fits(data, limits) {
+                    _ if !declared_fits() => return refuse_image(),
+                    Some(false) => return refuse_image(),
+                    // quail: no frame header: corrupt, not a limit.
+                    None => return Err(DecodeFailure::ImageDecode),
+                    Some(true) => {}
                 }
                 dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
             }

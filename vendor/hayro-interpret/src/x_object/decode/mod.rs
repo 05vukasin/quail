@@ -33,8 +33,8 @@ fn decode_context<'a>(
     // data, so a 1 KB stream can ask for gigabytes. Refuse images above the file's pixel cap
     // before anything is allocated.
     let pixels = u64::from(obj.width()).saturating_mul(u64::from(obj.height()));
-    if pixels > obj.stream.max_image_pixels() {
-        obj.stream.note_limit_hit();
+    if pixels > obj.max_pixels() {
+        obj.note_limit_hit();
         (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
         return None;
     }

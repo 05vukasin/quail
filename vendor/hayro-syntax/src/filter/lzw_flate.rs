@@ -14,25 +14,13 @@ pub(crate) mod flate {
     #[cfg(feature = "unsafe")]
     pub(crate) fn decode(data: &[u8], params: &Dict<'_>, max_out: usize) -> Option<Vec<u8>> {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
-        use std::io::Read;
 
-        let limit = (max_out as u64).saturating_add(1);
-        let zlib_stream = |data: &[u8]| -> Option<Vec<u8>> {
-            let mut result = Vec::new();
-            ZlibDecoder::new(data)
-                .take(limit)
-                .read_to_end(&mut result)
-                .ok()
-                .map(|_| result)
-        };
-        let deflate_stream = |data: &[u8]| -> Option<Vec<u8>> {
-            let mut result = Vec::new();
-            DeflateDecoder::new(data)
-                .take(limit)
-                .read_to_end(&mut result)
-                .ok()
-                .map(|_| result)
-        };
+        // quail: chunked reads into a buffer that never grows past the cap (no doubling to
+        // 2 × cap as `read_to_end` does), with fallible allocation.
+        let zlib_stream =
+            |data: &[u8]| crate::budget::read_capped(ZlibDecoder::new(data), max_out);
+        let deflate_stream =
+            |data: &[u8]| crate::budget::read_capped(DeflateDecoder::new(data), max_out);
 
         let decoded = zlib_stream(data)
             .or_else(|| deflate_stream(data))
@@ -95,6 +83,8 @@ pub(crate) mod flate {
             eof: bool,
             // quail: stop once the output passes this.
             max_out: usize,
+            // quail: an allocation failed.
+            oom: bool,
         }
 
         impl<'a> FlateStream<'a> {
@@ -107,6 +97,7 @@ pub(crate) mod flate {
                     output: Vec::new(),
                     eof: false,
                     max_out,
+                    oom: false,
                 }
             }
 
@@ -117,6 +108,9 @@ pub(crate) mod flate {
                     if self.output.len() > self.max_out {
                         break;
                     }
+                }
+                if self.oom {
+                    return None;
                 }
 
                 Some(core::mem::take(&mut self.output))
@@ -266,6 +260,12 @@ pub(crate) mod flate {
                     }
                 } else {
                     let block = self.get_bytes(block_len as usize);
+                    // quail: capped, fallible growth.
+                    if !crate::budget::reserve_capped(&mut self.output, block.len(), self.max_out) {
+                        self.oom = true;
+                        self.eof = true;
+                        return;
+                    }
                     self.output.extend_from_slice(&block);
                     if block.len() < block_len as usize {
                         self.eof = true;
@@ -287,8 +287,14 @@ pub(crate) mod flate {
                 };
 
                 loop {
-                    // quail: a single block can expand without bound; stop past the cap.
+                    // quail: a single block can expand without bound; stop past the cap, and
+                    // keep room for one symbol (at most 258 bytes) with capped, fallible growth.
                     if self.output.len() > self.max_out {
+                        self.eof = true;
+                        return;
+                    }
+                    if !crate::budget::reserve_capped(&mut self.output, 258, self.max_out) {
+                        self.oom = true;
                         self.eof = true;
                         return;
                     }
@@ -638,6 +644,10 @@ pub(crate) mod lzw {
                     if new < table.size() {
                         let entry = table.get(new)?;
                         let first_byte = entry[0];
+                        // quail: capped, fallible growth.
+                        if !crate::budget::reserve_capped(&mut decoded, entry.len(), max_out) {
+                            return None;
+                        }
                         decoded.extend_from_slice(entry);
 
                         if let Some(prev_code) = prev {
@@ -649,6 +659,10 @@ pub(crate) mod lzw {
                         let first_byte = prev_entry[0];
 
                         let new_entry = table.register(prev_code, first_byte)?;
+                        // quail: capped, fallible growth.
+                        if !crate::budget::reserve_capped(&mut decoded, new_entry.len(), max_out) {
+                            return None;
+                        }
                         decoded.extend_from_slice(new_entry);
                     } else {
                         return None;

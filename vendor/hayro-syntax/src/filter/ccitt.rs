@@ -74,12 +74,15 @@ pub(crate) fn decode(
             decoded_rows: u32,
             // quail: rows beyond this are dropped.
             max_rows: u32,
+            // quail: some rows were dropped.
+            truncated: bool,
         }
 
         impl Decoder for BitPackDecoder {
             fn push_row(&mut self, changes: &[u32]) {
                 // quail: never grow past the row cap.
                 if self.decoded_rows >= self.max_rows {
+                    self.truncated = true;
                     return;
                 }
                 let start = self.decoded_rows as usize * self.stride;
@@ -125,9 +128,14 @@ pub(crate) fn decode(
             last_byte_mask: 0xFF_u8 << ((8 - columns % 8) % 8),
             decoded_rows: 0,
             max_rows,
+            truncated: false,
         };
         let mut context = DecoderContext::new(settings);
         let result = hayro_ccitt::decode(data, &mut decoder, &mut context);
+        // quail: rows dropped by the cap are a limit hit.
+        if decoder.truncated {
+            limits.refuse();
+        }
 
         // If we decoded at least one row, let's be lenient and return what we got.
         // See also 0001763.pdf.
@@ -148,12 +156,15 @@ pub(crate) fn decode(
             decoded_rows: u32,
             // quail: rows beyond this are dropped.
             max_rows: u32,
+            // quail: some rows were dropped.
+            truncated: bool,
         }
 
         impl Decoder for Luma8Decoder {
             fn push_row(&mut self, changes: &[u32]) {
                 // quail: never grow past the row cap.
                 if self.decoded_rows >= self.max_rows {
+                    self.truncated = true;
                     return;
                 }
                 let start = self.decoded_rows as usize * self.columns as usize;
@@ -180,9 +191,14 @@ pub(crate) fn decode(
             white,
             decoded_rows: 0,
             max_rows,
+            truncated: false,
         };
         let mut context = DecoderContext::new(settings);
         let result = hayro_ccitt::decode(data, &mut decoder, &mut context);
+        // quail: rows dropped by the cap are a limit hit.
+        if decoder.truncated {
+            limits.refuse();
+        }
 
         if result.is_err() && decoder.decoded_rows == 0 {
             return None;

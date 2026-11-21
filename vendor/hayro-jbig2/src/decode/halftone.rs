@@ -42,6 +42,16 @@ pub(crate) fn decode_into(
     htreg: &mut Bitmap,
     ctx: &mut ScratchBuffers,
 ) -> Result<()> {
+    // quail: the grid places one pattern per cell into the region, so a grid with far more
+    // cells than the region has pixels does no useful work: a 1 KB file could ask for a
+    // 16384 × 16384 grid (a 1 GiB value array and 2^28-step loops). Allow at most
+    // max(region pixels, 2^16) cells.
+    let grid = &header.grid_position_and_size;
+    let cells = u64::from(grid.width) * u64::from(grid.height);
+    let region = u64::from(htreg.width) * u64::from(htreg.height);
+    if cells > region.max(1 << 16) {
+        return Err(OverflowError::BitmapDimension.into());
+    }
     let skip_bitmap = if header.flags.enable_skip {
         Some(compute_skip_bitmap(header, pattern_dict, htreg)?)
     } else {

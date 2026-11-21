@@ -188,8 +188,9 @@ fn decode_bitplanes<F>(
 where
     F: FnMut(u32, &mut Bitmap) -> Result<()>,
 {
-    // quail: the value array is 4 bytes per pixel; refuse before allocating it.
-    if u64::from(width) * u64::from(height) > crate::bitmap::MAX_PIXELS {
+    // quail: the value array is 4 bytes per pixel (plus a bitplane and its copy); cap it at
+    // MAX_PIXELS bytes, i.e. a quarter of the bitmap pixel cap.
+    if u64::from(width) * u64::from(height) * 4 > crate::bitmap::MAX_PIXELS {
         return Err(OverflowError::BitmapDimension.into());
     }
     let size = width as usize * height as usize;

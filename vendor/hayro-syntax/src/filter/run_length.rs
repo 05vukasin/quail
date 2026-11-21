@@ -22,10 +22,18 @@ pub(crate) fn decode(data: &[u8], max_out: usize) -> Option<Vec<u8>> {
                     break;
                 };
 
+                // quail: capped, fallible growth.
+                if !crate::budget::reserve_capped(&mut decoded, bytes.len(), max_out) {
+                    return None;
+                }
                 decoded.extend(bytes);
             }
             _ => {
                 let length = 257 - length as usize;
+                // quail: capped, fallible growth.
+                if !crate::budget::reserve_capped(&mut decoded, length, max_out) {
+                    return None;
+                }
                 decoded.extend([reader.read_byte()?].repeat(length));
             }
         }

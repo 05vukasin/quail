@@ -282,9 +282,29 @@ impl<'a> Page<'a> {
                         .filter_map(|item| item.resolve(&self.ctx)?.into_stream())
                         .flat_map(convert_single);
 
+                    // quail: the concatenation is a second copy of every part, so it is
+                    // charged to the file's decode budget too, grows only within what is left
+                    // of it (no doubling), and stops at the first part that does not fit.
+                    let budget = self.ctx.xref().decode_budget();
                     let mut collected = vec![];
 
                     for stream in streams {
+                        let extra = stream.len().saturating_add(1);
+                        let room = budget.map_or(crate::budget::DEFAULT_MAX_STREAM_BYTES, |b| {
+                            b.remaining()
+                        });
+                        let fits = budget.is_none_or(|b| b.charge(extra as u64))
+                            && (budget.is_some()
+                                || (collected.len() + extra) as u64 <= room);
+                        let cap = collected
+                            .len()
+                            .saturating_add(usize::try_from(room).unwrap_or(usize::MAX));
+                        if !fits || !crate::budget::reserve_capped(&mut collected, extra, cap) {
+                            if let Some(b) = budget {
+                                b.mark_limit_hit();
+                            }
+                            break;
+                        }
                         collected.extend(stream);
                         // Streams must have at least one whitespace in-between.
                         collected.push(b' ');

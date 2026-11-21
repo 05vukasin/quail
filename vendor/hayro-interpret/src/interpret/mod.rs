@@ -679,13 +679,17 @@ pub fn interpret<'a>(
                 let warning_sink = context.settings.warning_sink.clone();
                 let transfer_function = context.compositing().transfer_function.clone();
                 let cache = context.interpreter_cache.object_cache.clone();
+                // quail: inline images have no document context; give them the file's budget.
+                let budget = context.xref.decode_budget();
                 if let Some(x_object) = ImageXObject::new(
                     i.0,
                     |name| context.get_color_space(resources, name),
                     &warning_sink,
                     &cache,
                     transfer_function,
-                ) {
+                )
+                .map(|x| x.with_budget(budget))
+                {
                     x_object.draw(context, device);
                 }
             }

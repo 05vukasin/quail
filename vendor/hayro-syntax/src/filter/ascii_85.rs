@@ -4,7 +4,8 @@ use crate::reader::Reader;
 use crate::trivia::is_white_space_character;
 use alloc::vec::Vec;
 
-pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
+// quail: `max_out` caps the output ('z' expands one byte to four).
+pub(crate) fn decode(data: &[u8], max_out: usize) -> Option<Vec<u8>> {
     const POW_85: [u32; 5] = [52200625, 614125, 7225, 85, 1];
 
     let mut reader = Reader::new(data);
@@ -76,6 +77,13 @@ pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
             }
             b'z' => {
                 flush_group(&mut group, &mut decoded)?;
+                // quail: over the cap: stop, the caller refuses; capped, fallible growth.
+                if decoded.len() > max_out {
+                    return Some(decoded);
+                }
+                if !crate::budget::reserve_capped(&mut decoded, 4, max_out) {
+                    return None;
+                }
                 decoded.extend_from_slice(&[0, 0, 0, 0]);
             }
             b'~' => {

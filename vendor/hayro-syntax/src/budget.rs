@@ -7,6 +7,7 @@
 //! process allocate more than the budget (an allocation failure aborts the process; it cannot
 //! be caught).
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Bytes decoded per stream when no budget is attached (e.g. inline images, which carry no
@@ -76,6 +77,49 @@ impl DecodeBudget {
             self.mark_limit_hit();
         }
         ok
+    }
+}
+
+/// Growth step below which buffers are not grown (64 KiB).
+const MIN_GROWTH: usize = 64 << 10;
+
+/// Grows `v` so that `extra` more bytes fit. The capacity grows by half at a time, but never
+/// past `cap + extra`, so a buffer capped at `cap` never doubles to `2 × cap`. The allocation
+/// goes through `try_reserve_exact`, so a failure is reported (`false`), never an abort.
+pub(crate) fn reserve_capped(v: &mut Vec<u8>, extra: usize, cap: usize) -> bool {
+    let need = v.len().saturating_add(extra);
+    if need <= v.capacity() {
+        return true;
+    }
+    let ceiling = cap.saturating_add(extra).max(need);
+    let target = need
+        .max(v.capacity().saturating_add(v.capacity() / 2))
+        .max(MIN_GROWTH)
+        .min(ceiling);
+    v.try_reserve_exact(target - v.len()).is_ok()
+}
+
+/// Reads `r` to the end in 64 KiB chunks into a buffer grown by [`reserve_capped`]. Stops just
+/// past `cap` (the caller sees `len() > cap` and refuses). `None` when an allocation fails.
+#[cfg(feature = "std")]
+pub(crate) fn read_capped<R: std::io::Read>(mut r: R, cap: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = [0u8; 64 << 10];
+    loop {
+        let n = match r.read(&mut buf) {
+            Ok(0) => return Some(out),
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        let chunk = buf.get(..n)?;
+        if !reserve_capped(&mut out, n, cap) {
+            return None;
+        }
+        out.extend_from_slice(chunk);
+        if out.len() > cap {
+            return Some(out);
+        }
     }
 }
 
