@@ -36,6 +36,8 @@ use crate::models::{self, Role};
 use crate::script::{ScriptCounts, script_of};
 
 /// Settings of the PP-OCR backend. Everything here is part of the engine fingerprint.
+// Independent switches, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaddleConfig {
     /// Longest side the detector sees (images are scaled down to it, never up).
@@ -107,7 +109,7 @@ impl PaddleFactory {
             models::verify(dir, m)?;
             fp.push_str(m.sha256);
         }
-        fp.push_str(&format!("{cfg:?}"));
+        let _ = std::fmt::Write::write_fmt(&mut fp, format_args!("{cfg:?}"));
         let name = if cfg.cyrillic {
             "paddle/pp-ocrv6-small+cyrillic-v5"
         } else {
@@ -289,6 +291,7 @@ fn upright(rgb: RgbImage, rot: u16) -> RgbImage {
 
 /// Maps a point of the upright image back to the input image (`w × h`) whose content was
 /// rotated clockwise by `rot`.
+#[allow(clippy::many_single_char_names)]
 pub fn unrotate(p: (f32, f32), rot: u16, w: f32, h: f32) -> (f32, f32) {
     let (u, v) = p;
     match rot {

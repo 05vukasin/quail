@@ -12,17 +12,15 @@ use std::process::ExitCode;
 
 use quail_ocr::models;
 
+#[allow(clippy::cast_precision_loss)] // sizes in MiB for display
 fn main() -> ExitCode {
-    let dir = match std::env::args_os()
+    let Some(dir) = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
         .or_else(models::model_dir)
-    {
-        Some(d) => d,
-        None => {
-            eprintln!("no model directory: pass one or set {}", models::MODELS_ENV);
-            return ExitCode::FAILURE;
-        }
+    else {
+        eprintln!("no model directory: pass one or set {}", models::MODELS_ENV);
+        return ExitCode::FAILURE;
     };
     let total: u64 = models::MANIFEST.iter().map(|m| m.size).sum();
     eprintln!(
