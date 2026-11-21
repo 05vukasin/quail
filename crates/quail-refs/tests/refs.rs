@@ -766,3 +766,47 @@ fn serbian_registry_shape() {
     }
     assert_eq!(normalize_contract_number("97-4/17"), "97417");
 }
+
+/// Facts of `ref.references` over `d`, with the `normalized_text` artifact when `shared`.
+fn facts_of(d: &Document, limits: &Limits, shared: bool) -> Vec<Fact> {
+    let mut artifacts = Artifacts::new();
+    artifacts.insert(d.clone());
+    if shared {
+        artifacts.insert(quail_text::NormalizedText::of(d));
+    }
+    let blob = Blob::new(Vec::<u8>::new());
+    let ctx = Ctx {
+        blob: &blob,
+        format: Format::Pdf,
+        locator: "mem://test",
+        artifacts: &artifacts,
+        facts: &[],
+        limits,
+        profile: Profile::Fast,
+    };
+    let mut out = Emitter::new(RefAnalyzer::ID);
+    RefAnalyzer::new().run(&ctx, &mut out).unwrap();
+    out.into_parts().0
+}
+
+#[test]
+fn same_facts_with_the_shared_artifact() {
+    let d = doc(&[
+        "MASTER SERVICES AGREEMENT\nAgreement No. KW-482917\nDated 12 May 2023",
+        "This Amendment No. 3 to the Master Services Agreement No. KW-482917 dated \
+         12.05.2023. Ugo-\nvor br. 114/23 od 1.\u{a0}2.\u{a0}2023 — „Purchase Order“ PO 778812.",
+        "",
+        "Page 3 of 4\nSee Statement of Work SOW-2041 and Invoice INV-99812 of 3 June 2023.",
+        "Version 2.1 – Final\nContract number QXPSO_078",
+    ]);
+    let all = facts_of(&d, &Limits::default(), false);
+    assert!(!all.is_empty());
+    assert_eq!(facts_of(&d, &Limits::default(), true), all);
+    // A limit that cuts page 1: that page is normalized by the analyzer itself.
+    let cut = Limits {
+        max_text_bytes: 120,
+        ..Limits::default()
+    };
+    assert_eq!(facts_of(&d, &cut, true), facts_of(&d, &cut, false));
+    assert!(RefAnalyzer::new().after().contains(&"normalized_text"));
+}

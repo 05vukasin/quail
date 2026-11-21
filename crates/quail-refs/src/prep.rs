@@ -3,8 +3,14 @@
 //! token's position in both texts. Patterns run over the key line (lowercase, Latin, no
 //! diacritics, no punctuation), values are read from the normalized text, and evidence is
 //! mapped back to the original page text.
+//!
+//! The normalized text, its map and the keyed tokens come from the `normalized_text`
+//! artifact when it holds the page, else from an own pass with the same options.
+
+use std::borrow::Cow;
 
 use quail_core::{BBox, Block, Evidence, Page, Span, Zone};
+use quail_text::NormalizedPage;
 use quail_text::fold::FoldOptions;
 use quail_text::normalize::{NormalizeOptions, OffsetMap, normalize_mapped};
 use quail_text::token::keyed_tokens;
@@ -22,8 +28,8 @@ pub(crate) struct Tok {
 /// A prepared page.
 pub(crate) struct Prepared<'p> {
     pub page: &'p Page,
-    pub norm: String,
-    pub map: OffsetMap,
+    pub norm: Cow<'p, str>,
+    pub map: Cow<'p, OffsetMap>,
     pub keys: String,
     pub toks: Vec<Tok>,
     /// Number of lines with at least one token.
@@ -32,55 +38,80 @@ pub(crate) struct Prepared<'p> {
     line_first: Vec<usize>,
 }
 
-impl<'p> Prepared<'p> {
-    pub fn new(page: &'p Page, text: &str) -> Self {
-        let mut norm = String::new();
-        let mut map = OffsetMap::new();
-        normalize_mapped(text, &NormalizeOptions::default(), &mut norm, &mut map);
-        let mut keys = String::with_capacity(norm.len());
-        let mut toks = Vec::with_capacity(norm.len() / 5);
-        let mut line = 0u32;
-        let mut prev_end: Option<usize> = None;
-        let mut line_first = Vec::new();
-        let mut it = keyed_tokens(&norm, &FoldOptions::KEY);
-        while let Some(t) = it.next_keyed() {
-            if let Some(pe) = prev_end {
-                let gap = norm.get(pe..t.token.start).unwrap_or("");
-                if gap.contains('\n') {
-                    line += 1;
-                    keys.push('\n');
-                } else {
-                    keys.push(' ');
-                }
+/// Builds the key line token by token.
+struct KeyLine {
+    keys: String,
+    toks: Vec<Tok>,
+    line: u32,
+    prev_end: Option<usize>,
+    line_first: Vec<usize>,
+}
+
+impl KeyLine {
+    fn push(&mut self, norm: &str, ns: usize, ne: usize, key: &str) {
+        if let Some(pe) = self.prev_end {
+            let gap = norm.get(pe..ns).unwrap_or("");
+            if gap.contains('\n') {
+                self.line += 1;
+                self.keys.push('\n');
+            } else {
+                self.keys.push(' ');
             }
-            if line_first.len() <= line as usize {
-                line_first.push(toks.len());
-            }
-            let ks = keys.len();
-            // Keys never hold separators: a stray space would split one token in two.
-            keys.extend(
-                t.key
-                    .chars()
-                    .map(|c| if c.is_whitespace() { '_' } else { c }),
-            );
-            toks.push(Tok {
-                ks,
-                ke: keys.len(),
-                ns: t.token.start,
-                ne: t.token.end,
-                line,
-            });
-            prev_end = Some(t.token.end);
         }
-        let lines = if toks.is_empty() { 0 } else { line + 1 };
+        if self.line_first.len() <= self.line as usize {
+            self.line_first.push(self.toks.len());
+        }
+        let ks = self.keys.len();
+        // Keys never hold separators: a stray space would split one token in two.
+        self.keys
+            .extend(key.chars().map(|c| if c.is_whitespace() { '_' } else { c }));
+        self.toks.push(Tok {
+            ks,
+            ke: self.keys.len(),
+            ns,
+            ne,
+            line: self.line,
+        });
+        self.prev_end = Some(ne);
+    }
+}
+
+impl<'p> Prepared<'p> {
+    /// Prepares `text` (a prefix of `page.text`, or all of it). `shared` is the page from
+    /// the `normalized_text` artifact, when it holds exactly this text normalized.
+    pub fn new(page: &'p Page, text: &str, shared: Option<&'p NormalizedPage>) -> Self {
+        let (norm, map) = if let Some(s) = shared {
+            (Cow::Borrowed(s.text()), Cow::Borrowed(s.map()))
+        } else {
+            let mut norm = String::new();
+            let mut map = OffsetMap::new();
+            normalize_mapped(text, &NormalizeOptions::default(), &mut norm, &mut map);
+            (Cow::Owned(norm), Cow::Owned(map))
+        };
+        let mut b = KeyLine {
+            keys: String::with_capacity(norm.len()),
+            toks: Vec::with_capacity(norm.len() / 5),
+            line: 0,
+            prev_end: None,
+            line_first: Vec::new(),
+        };
+        if let Some(s) = shared {
+            s.for_each_keyed(|t, key| b.push(&norm, t.start(), t.end(), key));
+        } else {
+            let mut it = keyed_tokens(&norm, &FoldOptions::KEY);
+            while let Some(t) = it.next_keyed() {
+                b.push(&norm, t.token.start, t.token.end, t.key);
+            }
+        }
+        let lines = if b.toks.is_empty() { 0 } else { b.line + 1 };
         Self {
             page,
             norm,
             map,
-            keys,
-            toks,
+            keys: b.keys,
+            toks: b.toks,
             lines,
-            line_first,
+            line_first: b.line_first,
         }
     }
 
