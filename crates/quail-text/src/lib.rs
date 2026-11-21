@@ -15,10 +15,18 @@
 //! | [`garbage`] | how broken a text layer looks: `Clean`, `Garbage` or `TooShort` |
 //! | [`lang`] | language identification with top candidates |
 //! | [`money`] | numbers and amounts as written (`1,200.50`, `1.200,50`, `1 200,50`, `(€1,200.50)`, `5 miliona din.`) as exact decimals; currency symbols, words and codes |
+//! | [`decode`] | bytes of a plain-text file to text: BOM, UTF-8, UTF-16, legacy encodings (`chardetng` + `encoding_rs`) |
 //! | [`normalized`] | the `normalized_text` artifact: pages normalized once, with offset maps and keyed tokens |
 //!
 //! Everything borrows where it can ([`std::borrow::Cow`] results, iterators over `&str`,
 //! `*_into` variants that append to a caller's buffer) and nothing keeps global state.
+//!
+//! # Extractor
+//!
+//! - [`TextExtractor`] (`text.extract@1`): plain-text files ([`quail_core::Format::Text`]) as
+//!   a document: encoding detection, line endings to LF, form-feed pages, paragraph and
+//!   heading blocks. Emits the `text.encoding*`, `text.line_endings` and
+//!   `text.decode_errors` keys.
 //!
 //! # Analyzers
 //!
@@ -29,6 +37,7 @@
 //! Both require the `document` artifact. Keys are in [`keys`]. [`TextStats`] also provides
 //! the [`NormalizedText`] artifact (`normalized_text`) for later text analyzers.
 
+pub mod decode;
 pub mod fold;
 pub mod garbage;
 pub mod lang;
@@ -41,9 +50,11 @@ pub mod token;
 pub mod translit;
 
 mod analyzers;
+mod plain;
 
 pub use analyzers::{TextLang, TextStats};
 pub use normalized::{NormalizedPage, NormalizedText};
+pub use plain::TextExtractor;
 
 /// Fact keys emitted by this crate.
 pub mod keys {
@@ -77,4 +88,18 @@ pub mod keys {
     pub const LANG_TOP: FactKey = FactKey::new("text.lang_top");
     /// Language of one page, with the page as evidence; `conf` is its score (Text).
     pub const PAGE_LANG: FactKey = FactKey::new("text.page_lang");
+    /// Plain-text files: lowercase WHATWG name of the detected encoding (`utf-8`,
+    /// `utf-16le`, `windows-1250`, `iso-8859-5`, ...); `conf` is its confidence (Text).
+    pub const ENCODING: FactKey = FactKey::new("text.encoding");
+    /// Plain-text files: confidence of the encoding, 1 for a BOM or valid UTF-8, a heuristic
+    /// in `[0.3, 0.9]` for a guessed legacy encoding, see [`crate::decode`] (Float).
+    pub const ENCODING_CONFIDENCE: FactKey = FactKey::new("text.encoding_confidence");
+    /// Plain-text files: the file starts with a byte-order mark (Bool).
+    pub const ENCODING_BOM: FactKey = FactKey::new("text.encoding_bom");
+    /// Plain-text files: byte sequences that could not be decoded and became U+FFFD; absent
+    /// when there were none (Int).
+    pub const DECODE_ERRORS: FactKey = FactKey::new("text.decode_errors");
+    /// Plain-text files: line endings before normalization to LF: `lf`, `crlf`, `cr`,
+    /// `mixed` or `none` (Text).
+    pub const LINE_ENDINGS: FactKey = FactKey::new("text.line_endings");
 }
