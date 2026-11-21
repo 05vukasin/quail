@@ -6,7 +6,7 @@
 //! currency, VAT), with top-3 category candidates from the EU CPV 2008 vocabulary and the
 //! evidence to check it.
 //!
-//! One analyzer, [`ItemLines`] (`item.lines@2`): requires `document`, runs after
+//! One analyzer, [`ItemLines`] (`item.lines@3`): requires `document`, runs after
 //! `revised_document`, `Profile::Fast` for the lines, categories from `Profile::Standard`.
 //!
 //! | key | value |
@@ -40,8 +40,14 @@
 //! 2. **PDF** (paragraph blocks with boxes): tables rebuilt from geometry, see `geom`.
 //! 3. **Text lines**: `description …… 2 x 3.500,00 = 7.000,00`, merged table rows, rate
 //!    cards (`Senior consultant – 85 EUR/h`).
-//! 4. **Categories**: [`CpvIndex`], TF-IDF over folded word stems and character trigrams of
-//!    the CPV labels (English and Serbian).
+//! 4. **Categories**: [`CpvIndex::categorize`]: a curated alias layer for common English and
+//!    Serbian service phrases (`consulting`, `project management`, `medical writing`,
+//!    `Phase III`, `SaaS subscription`, role titles) first, then TF-IDF over folded word
+//!    stems and character trigrams of the CPV labels (English and Serbian), service lines
+//!    preferring divisions 70–85.
+//!
+//! Summary rows (`Original SOW`, `Operations (E+F+G)`), credits and discounts (negative
+//! amounts, `credit`/`discount` lines) become `item.table_total`, not `item.line`.
 //!
 //! # Limits
 //!
@@ -60,6 +66,7 @@
 // Counting a byte in a short slice; not worth a dependency.
 #![allow(clippy::naive_bytecount)]
 
+mod alias;
 mod analyzer;
 mod geom;
 mod header;

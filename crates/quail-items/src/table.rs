@@ -142,6 +142,35 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
     }
     let kind = match best {
         Some((_, k)) => k,
+        // `Operations (E+F+G)`, `(C = A - B)`: a formula over other rows.
+        None if is_formula(label) => "subtotal",
+        // `Original SOW`, `Revised Professional Fees`, `Previous contract value`: the value
+        // before or after a change, not a line.
+        None if w.len() <= 5
+            && matches!(
+                w.first().map(String::as_str),
+                Some("original" | "revised" | "previous" | "prior" | "amended" | "updated")
+            )
+            && (w.len() <= 2
+                || w.iter().any(|x| {
+                    matches!(
+                        x.as_str(),
+                        "sow"
+                            | "contract"
+                            | "value"
+                            | "fees"
+                            | "fee"
+                            | "professional"
+                            | "budget"
+                            | "amount"
+                            | "price"
+                            | "estimate"
+                            | "po"
+                    )
+                })) =>
+        {
+            "subtotal"
+        }
         // `AIRTIME TOTAL :`, `Invoice total`, `Rep. Firm Commission`: a short label with a
         // total word anywhere.
         None if w.len() <= 5 => {
@@ -162,7 +191,17 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
                 }
             } else if has(&["tax", "vat", "pdv"]) && w.len() <= 3 {
                 "vat"
-            } else if has(&["commission", "provizija", "discount", "rabat", "popust"]) {
+            } else if has(&[
+                "commission",
+                "provizija",
+                "discount",
+                "rabat",
+                "popust",
+                "credit",
+                "credits",
+                "rebate",
+                "refund",
+            ]) {
                 "discount"
             } else if matches!(w.first().map(String::as_str), Some("gross" | "bruto")) {
                 "gross"
@@ -182,8 +221,6 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
         {
             "total"
         }
-        // `Operations (E+F+G)`, `(C = A - B)`: a formula over other rows.
-        None if is_formula(label) => "subtotal",
         None => return None,
     };
     // `ukupno sa PDV-om` is gross, `ukupno bez PDV-a` net, `Total incl. VAT` gross.
@@ -492,9 +529,17 @@ pub(crate) fn not_an_item(desc: &str, from_header: bool) -> bool {
     let currency_only = w.len() == 1 && num::currency_word(&w[0], false).is_some();
     let fragment = desc.trim_start().starts_with('(') && !desc.contains(')');
     // `8,690.71 GBP at VAT (20.0%)`: a description that opens with an amount is a summary.
-    let summary = num::scan(desc, num::Dec::Unknown, num::DateOrder::Dmy)
+    // `Duns #: 8,690.72 GBP 0.00 1,738.14 GBP 20`: several amounts inside the description
+    // are a merged summary row, not one priced line.
+    let amounts = num::scan(desc, num::Dec::Unknown, num::DateOrder::Dmy);
+    let summary = amounts
         .first()
-        .is_some_and(|t| t.start <= 1 && t.moneylike());
+        .is_some_and(|t| t.start <= 1 && t.moneylike())
+        || amounts
+            .iter()
+            .filter(|t| t.moneylike() && t.number().is_some_and(|n| n.scale == 2))
+            .count()
+            >= 2;
     let sentence = !from_header && w.iter().any(|x| SENTENCE_WORDS.contains(&x.as_str()));
     (legal && w.len() >= 2) || phone || currency_only || fragment || sentence || summary
 }
@@ -1447,5 +1492,21 @@ mod tests {
         assert_eq!(total_kind("Total incl. VAT"), Some("gross"));
         assert_eq!(total_kind("Grand Total"), Some("total"));
         assert_eq!(total_kind("Servis klima"), None);
+    }
+
+    #[test]
+    fn summary_and_credit_rows_are_totals() {
+        assert_eq!(total_kind("Operations E+F+G"), Some("subtotal"));
+        assert_eq!(total_kind("(C = A - B)"), Some("subtotal"));
+        assert_eq!(total_kind("Original SOW"), Some("subtotal"));
+        assert_eq!(total_kind("Revised Professional Fees"), Some("subtotal"));
+        assert_eq!(total_kind("Platform credit"), Some("discount"));
+        assert_eq!(total_kind("Original artwork design for the cover"), None);
+        assert_eq!(total_kind("Senior consultant"), None);
+        assert!(not_an_item(
+            "Duns #: 8,690.72 GBP 0.00 1,738.14 GBP 20",
+            true
+        ));
+        assert!(!not_an_item("Licence 2,000 users", true));
     }
 }

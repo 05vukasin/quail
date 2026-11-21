@@ -1,7 +1,7 @@
-//! The `item.lines@2` analyzer.
+//! The `item.lines@3` analyzer.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use quail_core::{
     Analyzer, AnalyzerId, BlockKind, Ctx, Document, Emitter, Evidence, Page, PageKind, Profile,
@@ -35,7 +35,8 @@ const MAX_COLS: usize = 64;
 /// (CPV top-3) are added from [`Profile::Standard`] on.
 #[derive(Clone)]
 pub struct ItemLines {
-    cpv: Arc<CpvIndex>,
+    /// Built on first use (only Standard and up categorize), shared by every clone.
+    cpv: Arc<OnceLock<Arc<CpvIndex>>>,
 }
 
 impl Default for ItemLines {
@@ -46,24 +47,34 @@ impl Default for ItemLines {
 
 impl ItemLines {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 3);
 
-    /// With the embedded CPV 2008 index (built here, about 100 ms; build once and clone).
+    /// With the embedded CPV 2008 index. The index is built lazily on the first file that
+    /// needs categories (about 0.2 s, about 15 MB), once for this value and all its clones; a
+    /// `Profile::Fast` run never builds it.
     pub fn new() -> Self {
-        Self::with_index(Arc::new(CpvIndex::embedded()))
+        Self {
+            cpv: Arc::new(OnceLock::new()),
+        }
     }
 
     /// With a given category index (shared).
     pub fn with_index(cpv: Arc<CpvIndex>) -> Self {
-        Self { cpv }
+        Self {
+            cpv: Arc::new(OnceLock::from(cpv)),
+        }
     }
 
-    /// The category index.
+    /// The category index (built now if it was not yet).
     pub fn index(&self) -> &CpvIndex {
-        &self.cpv
+        self.cpv.get_or_init(|| Arc::new(CpvIndex::embedded()))
+    }
+
+    /// Whether the category index has been built.
+    pub fn index_built(&self) -> bool {
+        self.cpv.get().is_some()
     }
 }
-
 impl Analyzer for ItemLines {
     fn id(&self) -> AnalyzerId {
         Self::ID
@@ -87,7 +98,7 @@ impl Analyzer for ItemLines {
         };
         let found = extract(doc, out);
         let categorize = ctx.profile >= Profile::Standard;
-        emit(&found, categorize.then_some(&*self.cpv), out);
+        emit(&found, categorize.then(|| self.index()), out);
         Ok(())
     }
 }
@@ -429,12 +440,55 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
             break;
         }
     }
+    credits_to_totals(&mut found);
     if full {
         out.problem(format!(
             "item.lines: more than {MAX_ITEMS} items, rest skipped"
         ));
     }
     found
+}
+
+/// Words that make a line a credit or a discount on other lines.
+const CREDIT_WORDS: &[&str] = &[
+    "credit",
+    "credits",
+    "discount",
+    "rebate",
+    "refund",
+    "popust",
+    "rabat",
+    "odobrenje",
+];
+
+/// Credits and discounts are not offered lines: a line with a negative price or total
+/// (`(1,200.00)`, `-15,00`), or a description with a credit word and no quantity
+/// (`Licenses 3% partnership discount`), becomes an `item.table_total` of kind `discount`.
+fn credits_to_totals(found: &mut Found) {
+    let items = std::mem::take(&mut found.items);
+    for it in items {
+        let amount = it.total.or(it.unit_price);
+        let negative = amount.is_some_and(Num::is_negative);
+        let credit_word = it.quantity.is_none()
+            && desc_key(&it.description)
+                .split(' ')
+                .any(|w| CREDIT_WORDS.contains(&w));
+        match amount {
+            Some(amount) if negative || credit_word => found.totals.push(TableTotal {
+                page: it.page,
+                label: it.description,
+                kind: "discount",
+                amount,
+                currency: it.currency,
+                table_index: it.table_index.unwrap_or(0),
+                row_index: it.row_index.unwrap_or(0),
+                conf: it.conf,
+                span: it.span,
+                bbox: it.bbox,
+            }),
+            _ => found.items.push(it),
+        }
+    }
 }
 
 /// The folded matching key of a description: lowercase, no diacritics, Latin script,
@@ -520,13 +574,8 @@ pub(crate) fn emit(found: &Found, cpv: Option<&CpvIndex>, out: &mut Emitter) {
             let cands = cache
                 .entry(key.clone())
                 .or_insert_with(|| {
-                    let mut q = it.description.clone();
-                    if let Some(s) = &it.section {
-                        q.push(' ');
-                        q.push_str(s);
-                    }
                     Value::List(
-                        ix.top_with(&q, TOP_K, crate::cpv::reads_as_service(&q, it.unit))
+                        ix.categorize(&it.description, it.section.as_deref(), it.unit, TOP_K)
                             .into_iter()
                             .filter_map(|c| {
                                 let e = ix.entries().get(c.entry)?;
