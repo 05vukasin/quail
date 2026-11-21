@@ -27,8 +27,9 @@
 //!
 //! # Cost
 //!
-//! About 16 bytes per token plus the normalized text, the folded keys and the map's
-//! checkpoints: roughly 4–5 bytes per byte of page text, held until the file is done.
+//! 16 bytes per token (about one token per 5–6 bytes of text), plus the normalized text,
+//! the keys that differ from their token, and 16 bytes per map checkpoint: about 4–5 bytes
+//! of heap per byte of page text, held until the file is done.
 //!
 //! [`keyed_tokens`]: crate::token::keyed_tokens
 
@@ -38,8 +39,10 @@ use crate::fold::{FoldOptions, fold_into};
 use crate::normalize::{NormalizeOptions, OffsetMap, normalize_mapped};
 use crate::token::{TokenKind, tokens_with_symbols};
 
-/// One token of a [`NormalizedPage`]: byte range in the normalized page text, kind, and the
-/// end of its key in the page's key buffer (the key starts where the previous one ended).
+/// One token of a [`NormalizedPage`]: byte range in the normalized page text and kind. Its
+/// key is the token text itself when folding does not change it (most lowercase words and
+/// every ASCII symbol), else a range of the page's key buffer that ends at `key_end` and
+/// starts where the previous token's range ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageToken {
     /// First byte in the normalized text.
@@ -49,6 +52,8 @@ pub struct PageToken {
     key_end: u32,
     /// Its kind ([`TokenKind::Punct`] and [`TokenKind::Symbol`] included).
     pub kind: TokenKind,
+    /// The key differs from the text and is stored in the key buffer.
+    own_key: bool,
 }
 
 impl PageToken {
@@ -96,18 +101,38 @@ impl NormalizedPage {
         );
         self.toks.clear();
         self.keys.clear();
-        self.keys.reserve(self.text.len());
-        self.toks.reserve(self.text.len() / 4);
+        self.toks.reserve(self.text.len() / 5);
         for t in tokens_with_symbols(&self.text) {
+            let k0 = self.keys.len();
             fold_into(t.text, &FoldOptions::KEY, &mut self.keys);
+            let own_key = self.keys.get(k0..) != Some(t.text);
+            if !own_key {
+                self.keys.truncate(k0);
+            }
             self.toks.push(PageToken {
                 start: to_u32(t.start),
                 end: to_u32(t.end),
                 key_end: to_u32(self.keys.len()),
                 kind: t.kind,
+                own_key,
             });
         }
         self.source_len = source.len();
+        // Kept for the rest of the file: no spare capacity.
+        self.text.shrink_to_fit();
+        self.keys.shrink_to_fit();
+        self.toks.shrink_to_fit();
+        self.map.shrink_to_fit();
+    }
+
+    /// Key of token `i` (`t`), whose stored key starts at `key_start`.
+    #[inline]
+    fn key_of(&self, t: &PageToken, key_start: usize) -> &str {
+        if t.own_key {
+            self.keys.get(key_start..t.key_end as usize).unwrap_or("")
+        } else {
+            self.text.get(t.start()..t.end()).unwrap_or("")
+        }
     }
 
     /// The normalized text.
@@ -134,7 +159,7 @@ impl NormalizedPage {
             Some(p) => self.toks[p].key_end as usize,
             None => 0,
         };
-        self.keys.get(start..t.key_end as usize).unwrap_or("")
+        self.key_of(t, start)
     }
 
     /// Normalized text of token `i`; empty out of range.
@@ -150,11 +175,10 @@ impl NormalizedPage {
     pub fn for_each_keyed(&self, mut f: impl FnMut(&PageToken, &str)) {
         let mut key_start = 0usize;
         for t in &self.toks {
-            let key_end = t.key_end as usize;
             if t.is_wordlike() {
-                f(t, self.keys.get(key_start..key_end).unwrap_or(""));
+                f(t, self.key_of(t, key_start));
             }
-            key_start = key_end;
+            key_start = t.key_end as usize;
         }
     }
 
