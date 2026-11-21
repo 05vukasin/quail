@@ -2775,6 +2775,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "quail-fuzz"
+version = "0.1.0"
+dependencies = [
+ "lopdf",
+ "miniz_oxide 0.8.9",
+ "quail-core",
+ "quail-docx",
+ "quail-engine",
+ "quail-hash",
+ "quail-parties",
+ "quail-pdf",
+ "quail-refs",
+ "quail-signals",
+ "quail-sketch",
+ "quail-text",
+ "rlimit",
+ "zip",
+]
+
+[[package]]
 name = "quail-hash"
 version = "0.1.0"
 dependencies = [
@@ -3171,6 +3191,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rlimit"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7043b63bd0cd1aaa628e476b80e6d4023a3b50eb32789f2728908107bd0c793a"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
