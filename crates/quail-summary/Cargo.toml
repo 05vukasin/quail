@@ -43,3 +43,7 @@ required-features = ["fetch"]
 [[example]]
 name = "llm_probe"
 required-features = ["llm"]
+
+[[example]]
+name = "llm_longdoc"
+required-features = ["llm"]

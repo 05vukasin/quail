@@ -3,8 +3,10 @@
 Per-file **cards** and **English summaries** for LLM agents. Namespace `summary.*`. A card is
 what an agent reads first about a file (~100–300 tokens); the summary says in 1–3 sentences what
 the document is. Both are built from the facts of the other crates and the start of the text,
-deterministically and without a model. An optional local LLM (feature `llm`, opt-in) writes a
-more fluent abstract, which is fact-checked before it is used.
+deterministically and without a model. For documents of **any length** (2 or 2,000 pages) the
+crate also builds the document's outline and a bounded **digest**: the input a small local model
+needs to summarize it. An optional local LLM (feature `llm`, opt-in) writes a more fluent
+abstract from the digest (or part by part, map-reduce), which is fact-checked before it is used.
 
 Summaries are always in English. Names, numbers and identifiers are copied verbatim, in their
 original script; a non-English subject sentence is quoted and marked with its language.
@@ -15,12 +17,19 @@ original script; a non-English subject sentence is quoted and marked with its la
 |---|---|---|---|
 | `summary.card@2` (`SummaryCard`) | Fast | `document` / `revised_document ocr_text raster normalized_text` | `summary.card`, `summary.card_text`, `summary.card_tokens` |
 | `summary.extractive@2` (`SummaryExtractive`) | Fast | same | `summary.extractive`, `summary.subject` |
-| `summary.llm@1` (`SummaryLlm`, feature `llm`) | Deep, opt-in | same | `summary.llm` |
+| `summary.outline@1` (`SummaryOutline`) | Fast | same | `summary.outline` |
+| `summary.digest@1` (`SummaryDigest`) | Standard | same | `summary.digest`, `summary.digest_tokens` |
+| `summary.llm@2` (`SummaryLlm`, feature `llm`) | Deep, opt-in | same | `summary.llm` |
 
-**Ordering.** They read `ctx.facts`, so they must run after every fact producer. All three are
+**Ordering.** They read `ctx.facts`, so they must run after every fact producer. All of them are
 finalizers (`Analyzer::finalizer`): the engine runs them after every non-finalizer step,
 whatever the registration order. They also declare `after` on every artifact a workspace step
 provides (`AFTER`), so they see OCR text when OCR is active (`tests/engine.rs` checks the plan).
+
+`quail-cli` registers `summary.outline@1` by default (cheap, see Measured). `summary.digest@1`
+is Standard and not in the CLI pipeline: it costs a few ms per file and adds ~6.5 KB to every
+record; a service that feeds a model registers it (`SummaryDigest::with_config` sets the
+budget and a minimum document size).
 
 ## Keys
 
@@ -31,7 +40,10 @@ provides (`AFTER`), so they see OCR text when OCR is active (`tests/engine.rs` c
 | `summary.card_tokens` | Int: estimated tokens of `card_text` |
 | `summary.extractive` | Text: template sentence + subject sentence |
 | `summary.subject` | record `text lang? method label?` (`method`: `clause` / `recital` / `operative` / `textrank`), evidence: page |
-| `summary.llm` | record `text subject? title_en? method model checked cached` (`method`: `llm` / `extractive_fallback`) |
+| `summary.outline` | record `method total pages sections truncated?`: `method` `headings` / `windows`, `total` headings found, `sections` list of `title level page end_page source` (pages zero-based; `source` `block` / `keyword` / `numbered` / `capitals` / `size` / `window`) |
+| `summary.digest` | Text: the bounded model input, at most 2,000 estimated tokens by default (below) |
+| `summary.digest_tokens` | Int: estimated tokens of `summary.digest` |
+| `summary.llm` | record `text subject? title_en? method model checked cached input calls` (`method`: `llm` / `extractive_fallback`; `input`: `digest` / `map_reduce`) |
 
 `summary.card` fields, in this order:
 
@@ -115,6 +127,74 @@ tokenizer is loaded.
   `GP, LLC`, `, Inc.`) is left out; an expiry date before the effective (else signed) date is
   left out; item categories need a top score ≥ 0.3; a role-less largest amount needs ≥ 100.
 
+## Outline (`summary.outline@1`)
+
+One pass over every line of every page (no model, linear time). A line is a heading when it is:
+
+- a DOCX heading block (`BlockKind::Heading`, its level);
+- a keyword heading: `PART II`, `CHAPTER 3`, `Article 5`, `Section 2.1`, `SCHEDULE A`, `Annex 1`,
+  `Appendix B`, `Exhibit C`, `Član 4` (capitalized; a bare one takes the short line after it as
+  its title: `CHAPTER 3` + `Storage and Retrieval`; `Part III.` ending a wrapped sentence is not);
+- a numbered heading: `1. Definitions`, `2.3 Payment Terms`, `IV. RESULTS`, or run in
+  (`7. TERM. This Agreement …` → `7. TERM`); a full sentence after a number is a list item;
+- a short line in capitals (not `IN WITNESS WHEREOF`, signature labels, code, or capitals set
+  smaller than the body);
+- larger type (PDF line boxes): at least 1.2× the median line height, in up to three size
+  classes that occur often enough (a cover page's one huge line is no class); only the largest
+  class when numbered headings dominate (a contract's larger lines are mostly emphasis).
+
+Left out: running headers and footers (the same line on ≥ 3 pages and a tenth of the document;
+the first occurrence of a numbered or keyword one stays, it marks where the chapter starts),
+`24 | Chapter 1: …` page furniture, table-of-contents pages (≥ 5 lines and 30 % ending in a page
+number or dot leaders). Kinds are ranked part > chapter / schedule > article > numbered by depth >
+capitals > type size by size; the ranks found become levels 1, 2, 3, …. At most 64 entries,
+whole levels first (all level 1, then level 2, …; a level that does not fit is sampled evenly).
+Each entry's pages run to the next heading of the same or a higher level. Fewer than 3
+headings: fixed page windows (`Pages 1-9`, at most 16, emitted from 4 pages on).
+
+## Digest (`summary.digest@1`)
+
+The model input for a document of any length, at most `DigestConfig::max_tokens` (default
+2,000) estimated tokens, deterministic:
+
+```
+FACTS:
+doc: contract "Master Supply Agreement" lang=en pages=85 pdf
+parties: …
+OUTLINE (48 of 120 headings, 85 pages):
+- Article I. DEFINITIONS (pp. 1-19)
+- Article II. GOVERNANCE (pp. 19-26)
+…
+START:
+<the first ~200 tokens of the text: title, parties, recitals>
+EXCERPTS (sentences copied from each section):
+## Article II. GOVERNANCE (pp. 19-26)
+<2-3 salient sentences, verbatim>
+## Article III. LICENSE (pp. 26-31)
+…
+```
+
+- A document whose whole text fits gets `FACTS` + `TEXT` (the whole normalized text).
+- Budget: card (≤ 300), outline (15 %, deepest levels dropped first), start (10 %), the rest
+  for excerpts. Sections are the outline entries at the deepest level that gives ≤ 16 of them
+  (one per 125 tokens of budget; one level deeper when that gives fewer than a third, merged
+  by size into `Title (+N more)`), plus `Opening pages` before the first heading. Each section
+  gets a floor of 40 tokens and a share of the rest proportional to its size; unused budget
+  passes to the next section.
+- Per section: at most 48 paragraphs and 12 KiB (its first paragraphs and an even sample of the
+  rest), sentences of 8–64 words that end with `.`, `!` or `?` and do not start in lower case
+  (a paragraph cut by a page break), no dot leaders, `|` furniture or signature lines. Score:
+  keyword coverage (the section's recurring words × their inverse section frequency in the
+  document, title words boosted: a linear stand-in for `TextRank`'s centrality) × position prior
+  (first paragraphs of a section) × cue bonus (who provides what) × penalties (boilerplate
+  clauses 0.2, definitions, list fragments, contact lines 0.3). Pick: maximal marginal
+  relevance (λ 0.7) against the sentences picked so far in the document; a sentence with Jaccard
+  ≥ 0.6 to a picked one is a repeat and skipped. Printed in document order.
+- **Verbatim**: every excerpt is a substring of its page's normalized text (whitespace
+  collapsed), so the digest adds no fact; `Digest::verbatim` checks it.
+- `digest::map_parts` splits the same selection into ≤ `MapReduceConfig::max_parts` (default
+  8) contiguous parts of similar size with `part_tokens` (1,500) each, for map-reduce.
+
 ## LLM summary (feature `llm`)
 
 - `LlmSummarizer` on `llama-cpp-2 =0.1.161` (`dynamic-backends`: one CPU backend per
@@ -124,15 +204,24 @@ tokenizer is loaded.
   loading, Apache-2.0): `default` = Qwen3.5-2B `Q4_K_M` (1.28 GB), `small` = Qwen3.5-0.8B `Q4_K_M`
   (0.53 GB). `cargo run -p quail-summary --features fetch --example fetch_models -- [small|default|all] [DIR]`;
   the directory is `$QUAIL_LLM_MODELS` or the user cache (`quail/llm-models`).
-- Prompt: fixed instructions first, then the card text and the first ~800 estimated tokens of
-  text; greedy decoding, thinking off, output constrained by a grammar compiled from the JSON
+- Prompt (version 2): fixed instructions first, then the card text and the digest body
+  (`LlmConfig::digest_tokens`, default 1,600 with the card): one call per document of any
+  length. Greedy decoding, thinking off, output constrained by a grammar compiled from the JSON
   schema `{summary ≤ 400 chars, subject ≤ 120, title_en ≤ 120}`.
+- Map-reduce (`LlmConfig::map_reduce = Some(MapReduceConfig)`, off by default): a document of
+  ≥ 60 pages whose text does not fit the digest is summarized in ≤ 8 map calls (one per part,
+  schema `{summary ≤ 360}`, ≤ 120 output tokens) and 1 reduce call over the card, the outline and
+  the part summaries. Each part summary is fact-checked against the card and that part's
+  excerpts and replaced by the part's first excerpt when it fails; the final summary is checked
+  against everything the map steps read (`mapreduce`, model-free and tested with a scripted
+  generator). `Summarizer::summarize_long` is the hook; its default is one call.
 - **Fact check** (`factcheck::check`) of every output: each date, number, identifier and name
   word must be found in the card text or the text the model saw; otherwise the extractive
   summary is emitted with `method = extractive_fallback` and a warning. Timeouts (60 s), bad JSON
   and load errors fall back the same way; a summary never fails the file.
-- Cache: `BLAKE3(card text ‖ text head ‖ summarizer id)`, the id carrying the model SHA-256, the
-  prompt version and the decoding settings (`MemoryCache`, or any `SummaryCache`).
+- Cache: `BLAKE3(card text ‖ digest body (‖ map-reduce marker) ‖ summarizer id)`, the id carrying
+  the model SHA-256, the prompt version, the budgets and the map-reduce settings (`MemoryCache`,
+  or any `SummaryCache`).
 - Opt-in: `SummaryLlm` applies only with `LlmConfig::enabled`; invoices and purchase orders are
   skipped (their card says everything); one generation at a time per model.
 
@@ -153,7 +242,11 @@ The fact check verifies that values are grounded, not that relations between the
 
 ## Limits
 
-- Reads the first 4 pages and at most 48 KiB of normalized text for the subject; the LLM sees at
-  most `head_tokens` of it. Checks the deadline before the subject search and during generation.
+- Reads the first 4 pages and at most 48 KiB of normalized text for the subject. The outline
+  reads every line once and checks the deadline every 16 pages (a cut outline is marked
+  `truncated` and the record partial). The digest reads at most 16 sections × 12 KiB of
+  paragraphs, whatever the length, and checks the deadline per section; its output is bounded
+  by its token budget, the outline by 64 entries. The LLM sees at most `digest_tokens` per call
+  and at most `max_parts + 1` calls per document. Checks the deadline during generation.
 - Card text: hard budget (default 300 estimated tokens, `SummaryCard::with_max_tokens`).
 - No panics on any fact shape: unexpected value types are skipped.
