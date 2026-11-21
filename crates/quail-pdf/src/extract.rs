@@ -59,6 +59,11 @@ impl Extractor for PdfExtractor {
         &[Format::Pdf]
     }
 
+    /// The `raster` artifact (`PdfRaster`), for page renders and embedded scans.
+    fn provides(&self) -> &'static [&'static str] {
+        &["raster"]
+    }
+
     fn extract(&self, blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> {
         extract(blob, limits, out)
     }

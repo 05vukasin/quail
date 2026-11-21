@@ -68,6 +68,7 @@ fn ids() {
     let e = PdfExtractor::new();
     assert_eq!(e.id().to_string(), "pdf.extract@1");
     assert_eq!(e.formats(), &[Format::Pdf]);
+    assert_eq!(e.provides(), &["raster"]);
 }
 
 #[test]
