@@ -67,7 +67,7 @@ impl Row {
 
 /// Most rows, columns and regions handled per page (hostile layouts).
 const MAX_LINES: usize = 20_000;
-const MAX_BANDS: usize = 24;
+const MAX_BANDS: usize = 40;
 
 fn numeric_line(t: &str) -> bool {
     let digits = t.chars().filter(char::is_ascii_digit).count();
@@ -234,12 +234,7 @@ fn has_money(r: &Row, hints: &DocHints) -> bool {
 /// A short all-text row with several cells: the column labels of a table whose header
 /// names no known role (`Title | Onshore | Offshore`).
 fn label_row(r: &Row) -> bool {
-    r.lines.len() >= 2
-        && r.lines.iter().all(|l| {
-            l.text.chars().count() <= 40
-                && l.text.chars().any(char::is_alphabetic)
-                && !l.text.chars().any(|c| c.is_ascii_digit())
-        })
+    r.lines.len() >= 2 && r.lines.iter().all(|l| crate::table::is_label_cell(&l.text))
 }
 
 fn has_amount(r: &Row, hints: &DocHints) -> bool {
