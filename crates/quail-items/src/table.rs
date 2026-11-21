@@ -482,8 +482,12 @@ pub(crate) fn not_an_item(desc: &str, from_header: bool) -> bool {
         .any(|(i, c)| c == '+' && desc[i + 1..].starts_with(|d: char| d.is_ascii_digit()));
     let currency_only = w.len() == 1 && num::currency_word(&w[0], false).is_some();
     let fragment = desc.trim_start().starts_with('(') && !desc.contains(')');
+    // `8,690.71 GBP at VAT (20.0%)`: a description that opens with an amount is a summary.
+    let summary = num::scan(desc, num::Dec::Unknown, num::DateOrder::Dmy)
+        .first()
+        .is_some_and(|t| t.start <= 1 && t.moneylike());
     let sentence = !from_header && w.iter().any(|x| SENTENCE_WORDS.contains(&x.as_str()));
-    (legal && w.len() >= 2) || phone || currency_only || fragment || sentence
+    (legal && w.len() >= 2) || phone || currency_only || fragment || sentence || summary
 }
 
 /// A first row of short labels over the columns, with no numbers.
@@ -1082,8 +1086,31 @@ pub(crate) fn parse(
                 desc_cols.contains(&i) || c.as_ref().is_none_or(|c| c.text.trim().is_empty())
             });
             if letters(&desc) >= 2 && only_desc {
+                let follows = ri.checked_sub(1).is_some_and(|p| last_item_row == Some(p));
                 if grid.source == Source::Layout
-                    && ri.checked_sub(1).is_some_and(|p| last_item_row == Some(p))
+                    && follows
+                    && let Some(kind) = total_kind(&desc)
+                {
+                    // `398,611.00 USD at TAX (0.0%)` + `Totals`: the line above was a total.
+                    if let Some(prev) = out.items.pop()
+                        && let Some(amount) = prev.total.or(prev.unit_price)
+                    {
+                        out.totals.push(TableTotal {
+                            page: grid.page,
+                            label: format!("{} {}", prev.description, desc.trim()),
+                            kind,
+                            amount,
+                            currency: prev.currency,
+                            table_index,
+                            row_index: prev.row_index.unwrap_or(0),
+                            conf: base_conf,
+                            span: span_union(prev.span, row_span),
+                            bbox: union(prev.bbox, row_box),
+                        });
+                    }
+                    last_item_row = None;
+                } else if grid.source == Source::Layout
+                    && follows
                     && !not_an_item(&desc, false)
                     && let Some(it) = out.items.last_mut()
                     && it.description.len() + desc.len() <= 160
