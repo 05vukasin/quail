@@ -100,13 +100,12 @@ impl Analyzer for TextStats {
                 garbage.merge(&g);
                 scripts.add(text);
                 // Words of the normalized text: "ugo-\nvor" is one word.
-                words += match &whole {
-                    Some(p) => p.words(),
-                    None => {
-                        norm.clear();
-                        normalize_into(text, &NormalizeOptions::default(), &mut norm);
-                        tokens(&norm).count()
-                    }
+                words += if let Some(p) = &whole {
+                    p.words()
+                } else {
+                    norm.clear();
+                    normalize_into(text, &NormalizeOptions::default(), &mut norm);
+                    tokens(&norm).count()
                 };
             }
             normalized.push(whole);
@@ -223,11 +222,11 @@ impl Analyzer for TextLang {
         let shared = ctx.get::<NormalizedText>();
         // `text` normalized with the defaults, appended to `out`: from the artifact when the
         // whole page is read and it has the page, else normalized here.
-        let append = |pos: usize, page: &Page, part: &str, out: &mut String| {
-            match shared.and_then(|n| n.page(pos, &page.text)) {
-                Some(p) if part.len() == page.text.len() => out.push_str(p.text()),
-                _ => normalize_into(part, &NormalizeOptions::default(), out),
-            }
+        let append = |pos: usize, page: &Page, part: &str, out: &mut String| match shared
+            .and_then(|n| n.page(pos, &page.text))
+        {
+            Some(p) if part.len() == page.text.len() => out.push_str(p.text()),
+            _ => normalize_into(part, &NormalizeOptions::default(), out),
         };
         let cap_chars = self.detector.options().max_marker_chars;
         // Bytes, not chars: 4 bytes per char at most.
@@ -480,7 +479,11 @@ mod tests {
     #[test]
     fn stats_provide_whole_pages_only() {
         let doc = Document {
-            pages: vec![page(0, "Ugo-\nvor  o zakupu"), page(1, "abcdefgh"), page(2, "x")],
+            pages: vec![
+                page(0, "Ugo-\nvor  o zakupu"),
+                page(1, "abcdefgh"),
+                page(2, "x"),
+            ],
         };
         let mut artifacts = Artifacts::new();
         artifacts.insert(doc.clone());
@@ -506,7 +509,12 @@ mod tests {
                   landlord\u{2019}s bank account, as agreed between the parties. ";
         // A long page (cut for the per-page sample) and short ones.
         let doc = Document {
-            pages: vec![page(0, &sr.repeat(40)), page(1, en), page(2, sr), page(3, "")],
+            pages: vec![
+                page(0, &sr.repeat(40)),
+                page(1, en),
+                page(2, sr),
+                page(3, ""),
+            ],
         };
         for profile in [Profile::Fast, Profile::Standard] {
             let mut alone = Artifacts::new();

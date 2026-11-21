@@ -234,12 +234,10 @@ impl OffsetMap {
     /// Normalized offset for a source offset, as a start (`end == false`) or exclusive end.
     fn map_back(&self, x: usize, end: bool) -> usize {
         // Last point whose source range starts at or before x (for an end: before x).
-        let i = self
-            .points
-            .partition_point(|p| {
-                let src = p.src as usize;
-                if end { src < x } else { src <= x }
-            });
+        let i = self.points.partition_point(|p| {
+            let src = p.src as usize;
+            if end { src < x } else { src <= x }
+        });
         let next_out = self.points.get(i).map_or(self.out_len, |p| p.out as usize);
         let Some(mut j) = i.checked_sub(1) else {
             return x.min(next_out);
