@@ -18,7 +18,7 @@ pub struct KeyDoc {
 pub const ENGINE: &[KeyDoc] = &[
     KeyDoc {
         key: quail_engine::keys::FORMAT,
-        doc: "Detected format, as `quail_core::Format::as_str` (`pdf`, `docx`, `zip`, `image`, `text`, `unknown`).",
+        doc: "Detected format, as `quail_core::Format::as_str` (`pdf`, `docx`, `xlsx`, `zip`, `image`, `text`, `unknown`).",
     },
     KeyDoc {
         key: quail_engine::keys::MIME,

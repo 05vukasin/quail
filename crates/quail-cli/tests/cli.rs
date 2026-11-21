@@ -568,7 +568,7 @@ fn keys_and_version() {
         .map(|s| s["id"].as_str().unwrap().to_owned())
         .collect();
     // Extractors in format order (PDF before DOCX), then the analyzers in registration order.
-    let mut expected = vec!["engine.sniff@1"];
+    let mut expected = vec!["engine.sniff@2"];
     if cfg!(feature = "pdf") {
         expected.push("pdf.extract@2");
     }

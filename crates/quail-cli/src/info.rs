@@ -9,9 +9,10 @@ use crate::cli::{KeysArgs, VersionArgs};
 use crate::registry::{self, STEPS};
 
 /// Formats an extractor can be registered for.
-const FORMATS: [Format; 6] = [
+const FORMATS: [Format; 7] = [
     Format::Pdf,
     Format::Docx,
+    Format::Xlsx,
     Format::Zip,
     Format::Image,
     Format::Text,

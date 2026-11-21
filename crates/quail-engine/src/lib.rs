@@ -46,8 +46,8 @@ pub use sniff::{Sniff, detect, sniff};
 pub mod keys {
     use quail_core::FactKey;
 
-    /// Detected format, as [`quail_core::Format::as_str`] (`pdf`, `docx`, `zip`, `image`,
-    /// `text`, `unknown`).
+    /// Detected format, as [`quail_core::Format::as_str`] (`pdf`, `docx`, `xlsx`, `zip`,
+    /// `image`, `text`, `unknown`).
     pub const FORMAT: FactKey = FactKey::new("engine.format");
     /// Most specific MIME type known from the bytes, e.g. `application/pdf`.
     pub const MIME: FactKey = FactKey::new("engine.mime");
