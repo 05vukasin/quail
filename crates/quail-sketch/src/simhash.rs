@@ -73,6 +73,11 @@ pub fn simhash_log_counted(hashes: &mut [u64]) -> u64 {
 pub fn text_simhash(normalized: &str) -> Option<(u64, usize)> {
     let mut hashes = Vec::new();
     shingle_hashes(normalized, &mut hashes);
+    shingles_simhash(hashes)
+}
+
+/// [`text_simhash`] of the text's shingle hashes.
+pub(crate) fn shingles_simhash(mut hashes: Vec<u64>) -> Option<(u64, usize)> {
     if hashes.is_empty() {
         return None;
     }

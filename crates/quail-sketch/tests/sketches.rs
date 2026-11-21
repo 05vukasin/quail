@@ -382,3 +382,58 @@ fn hostile_inputs_do_not_panic() {
         }
     }
 }
+
+/// Pages for the shared-artifact tests: hyphenation, typography, numbers, symbols, an empty
+/// page and one needing OCR.
+fn shared_doc() -> Document {
+    let mut pages = vec![
+        common::text_page(
+            0,
+            &format!("Ugo-\nvor „{}“ — 1\u{a0}200,50 RSD.", join(&prose(7, 300))),
+        ),
+        common::text_page(1, ""),
+        common::text_page(
+            2,
+            &format!("{}\n12.05.2023. Acme Doo, www.acme.rs", form(3, 4)),
+        ),
+        common::text_page(3, "garbage"),
+        common::text_page(4, &join(&prose(8, 200))),
+    ];
+    pages[3].needs_ocr = true;
+    Document { pages }
+}
+
+#[test]
+fn text_sketches_are_the_same_with_the_shared_artifact() {
+    let doc = shared_doc();
+    let analyzers: [&dyn quail_core::Analyzer; 4] =
+        [&MinHashAnalyzer, &SimHashText, &SimHashTemplate, &TextKey];
+    for a in analyzers {
+        let alone = run(a, doc.clone(), None);
+        assert!(!alone.is_empty(), "{}", a.id());
+        let mut extra = Artifacts::new();
+        extra.insert(quail_text::NormalizedText::of(&doc));
+        assert_eq!(run(a, doc.clone(), Some(extra)), alone, "{}", a.id());
+        assert!(a.after().contains(&"normalized_text"));
+    }
+}
+
+#[test]
+fn text_sketches_read_the_revised_document() {
+    // The extracted page needs OCR (nothing to sketch); OCR filled it in.
+    let mut scanned = common::text_page(0, "");
+    scanned.needs_ocr = true;
+    let extracted = Document {
+        pages: vec![scanned],
+    };
+    let revised = text_doc(&join(&prose(9, 400)));
+    for a in [&MinHashAnalyzer as &dyn quail_core::Analyzer, &TextKey] {
+        assert!(run(a, extracted.clone(), None).is_empty());
+        let mut e = Artifacts::new();
+        e.insert(quail_core::RevisedDocument(revised.clone()));
+        let got = run(a, extracted.clone(), Some(e));
+        assert_eq!(got, run(a, revised.clone(), None), "{}", a.id());
+        assert!(!got.is_empty());
+        assert!(a.after().contains(&"revised_document"));
+    }
+}

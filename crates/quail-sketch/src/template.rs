@@ -118,17 +118,35 @@ fn mask<'k>(token: &Token<'_>, key: &'k str, gap: &str, first: bool) -> Cow<'k, 
     class.map_or(Cow::Borrowed(key), Cow::Borrowed)
 }
 
+/// Masks a token stream: feed it every keyed token of the text in order.
+pub(crate) struct Masker {
+    first: bool,
+}
+
+impl Masker {
+    /// Before the first token.
+    pub fn new() -> Self {
+        Self { first: true }
+    }
+
+    /// The masked form of `token` (folded `key`), `gap` being the text since the previous
+    /// token (the whole prefix for the first one).
+    pub fn mask<'k>(&mut self, token: &Token<'_>, key: &'k str, gap: &str) -> Cow<'k, str> {
+        let m = mask(token, key, gap, self.first);
+        self.first = false;
+        m
+    }
+}
+
 /// Calls `f` with every masked token of already-normalized `text`, in order.
 pub fn for_each_masked(text: &str, mut f: impl FnMut(&str)) {
     let mut it = keyed_tokens(text, &FoldOptions::KEY);
     let mut prev_end = 0usize;
-    let mut first = true;
+    let mut m = Masker::new();
     while let Some(t) = it.next_keyed() {
         let gap = text.get(prev_end..t.token.start).unwrap_or("");
         prev_end = t.token.end;
-        let m = mask(&t.token, t.key, gap, first);
-        first = false;
-        f(&m);
+        f(&m.mask(&t.token, t.key, gap));
     }
 }
 
@@ -144,6 +162,11 @@ pub fn masked_tokens(text: &str) -> Vec<String> {
 pub fn template_simhash(text: &str) -> Option<(u64, usize)> {
     let mut hashes = Vec::new();
     for_each_masked(text, |m| hashes.push(hash_str(m)));
+    masked_simhash(hashes)
+}
+
+/// [`template_simhash`] of the masked-token hashes (`hash_str`, in any order).
+pub(crate) fn masked_simhash(mut hashes: Vec<u64>) -> Option<(u64, usize)> {
     hashes.sort_unstable();
     hashes.dedup();
     if hashes.is_empty() {

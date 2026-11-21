@@ -8,13 +8,13 @@
 //!
 //! | analyzer | profile | sketch | compare with |
 //! |---|---|---|---|
-//! | [`MinHashAnalyzer`] `sketch.minhash@1` | Fast | 128-row MinHash of word 3-shingles + 32 LSH band keys | [`jaccard_estimate`]: near-duplicate ≥ [`minhash::NEAR_DUP_JACCARD`], version ≥ [`minhash::VERSION_JACCARD`] |
-//! | [`SimHashText`] `sketch.simhash_text@1` | Fast | 64-bit SimHash of weighted word 3-shingles | [`hamming`] ≤ [`simhash::TEXT_HAMMING_MAX`] |
-//! | [`SimHashTemplate`] `sketch.simhash_template@1` | Fast | 64-bit SimHash of entity-masked words | [`hamming`] ≤ [`template::TEMPLATE_HAMMING_MAX`] |
-//! | [`LayoutAnalyzer`] `sketch.layout@1` | Fast | geometry SimHash (PDF), block-structure SimHash, heading skeleton | [`hamming`] ≤ [`layout::LAYOUT_HAMMING_MAX`] / [`layout::STRUCTURE_HAMMING_MAX`]; headings: equality |
-//! | [`InvoiceLayout`] `sketch.invoice_layout@1` | Fast | invoice labels + number-pattern digest | equality |
-//! | [`TextKey`] `sketch.text_key@1` | Fast | 128-bit key of the folded words | equality |
-//! | [`SadaMinHash`] `sketch.minhash_sada@1` | Standard | byte-compatible port of an existing Python service's sketches | as in that service, see [`sada`] |
+//! | [`MinHashAnalyzer`] `sketch.minhash@2` | Fast | 128-row MinHash of word 3-shingles + 32 LSH band keys | [`jaccard_estimate`]: near-duplicate ≥ [`minhash::NEAR_DUP_JACCARD`], version ≥ [`minhash::VERSION_JACCARD`] |
+//! | [`SimHashText`] `sketch.simhash_text@2` | Fast | 64-bit SimHash of weighted word 3-shingles | [`hamming`] ≤ [`simhash::TEXT_HAMMING_MAX`] |
+//! | [`SimHashTemplate`] `sketch.simhash_template@2` | Fast | 64-bit SimHash of entity-masked words | [`hamming`] ≤ [`template::TEMPLATE_HAMMING_MAX`] |
+//! | [`LayoutAnalyzer`] `sketch.layout@2` | Fast | geometry SimHash (PDF), block-structure SimHash, heading skeleton | [`hamming`] ≤ [`layout::LAYOUT_HAMMING_MAX`] / [`layout::STRUCTURE_HAMMING_MAX`]; headings: equality |
+//! | [`InvoiceLayout`] `sketch.invoice_layout@2` | Fast | invoice labels + number-pattern digest | equality |
+//! | [`TextKey`] `sketch.text_key@2` | Fast | 128-bit key of the folded words | equality |
+//! | [`SadaMinHash`] `sketch.minhash_sada@2` | Standard | byte-compatible port of an existing Python service's sketches | as in that service, see [`sada`] |
 //! | [`PagePHash`] `sketch.page_phash@1` | Standard | 64-bit DCT pHash per scanned page | [`hamming`] ≤ [`phash::PAGE_HAMMING_MAX`] per page |
 //!
 //! Everything builds on `quail-text`: its normalization, tokens, folding and pinned XXH3

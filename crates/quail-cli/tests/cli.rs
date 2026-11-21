@@ -583,13 +583,13 @@ fn keys_and_version() {
     }
     if cfg!(feature = "sketch") {
         expected.extend([
-            "sketch.minhash@1",
-            "sketch.simhash_text@1",
-            "sketch.simhash_template@1",
-            "sketch.layout@1",
-            "sketch.invoice_layout@1",
-            "sketch.text_key@1",
-            "sketch.minhash_sada@1",
+            "sketch.minhash@2",
+            "sketch.simhash_text@2",
+            "sketch.simhash_template@2",
+            "sketch.layout@2",
+            "sketch.invoice_layout@2",
+            "sketch.text_key@2",
+            "sketch.minhash_sada@2",
         ]);
     }
     if cfg!(all(feature = "sketch", feature = "pdf")) {

@@ -12,17 +12,17 @@ All require the `document` artifact.
 
 | analyzer | profile | keys | value | compare | bar |
 |---|---|---|---|---|---|
-| `sketch.minhash@1` | Fast | `sketch.minhash` | Bytes, 128 rows × u32 LE | `jaccard_estimate` (share of equal rows) | near-dup J ≥ 0.60, version J ≥ 0.90 |
+| `sketch.minhash@2` | Fast | `sketch.minhash` | Bytes, 128 rows × u32 LE | `jaccard_estimate` (share of equal rows) | near-dup J ≥ 0.60, version J ≥ 0.90 |
 | | | `sketch.minhash_bands` | List of 32 U64 (band index mixed in) | any shared key = candidate | P(hit) = 1 − (1 − J⁴)³² |
 | | | `sketch.minhash_shingles` | Int | gate | ≥ 40 or nothing is emitted |
-| `sketch.simhash_text@1` | Fast | `sketch.simhash_text` | U64 | `hamming` | ≤ 6 ≈ J ≥ 0.9 |
-| `sketch.simhash_template@1` | Fast | `sketch.simhash_template` | U64 | `hamming` | ≤ 8 same template |
-| `sketch.layout@1` | Fast | `sketch.layout`, `sketch.layout_blocks` | U64, Int | `hamming` | ≤ 6 same layout (PDF geometry) |
+| `sketch.simhash_text@2` | Fast | `sketch.simhash_text` | U64 | `hamming` | ≤ 6 ≈ J ≥ 0.9 |
+| `sketch.simhash_template@2` | Fast | `sketch.simhash_template` | U64 | `hamming` | ≤ 8 same template |
+| `sketch.layout@2` | Fast | `sketch.layout`, `sketch.layout_blocks` | U64, Int | `hamming` | ≤ 6 same layout (PDF geometry) |
 | | | `sketch.structure` | U64 | `hamming` | ≤ 8 same structure (headings, lists, tables) |
 | | | `sketch.headings` | U64 | equality | same heading skeleton |
-| `sketch.invoice_layout@1` | Fast | `sketch.invoice_layout`, `sketch.invoice_labels`, `sketch.invoice_number_patterns` | U64, Int, Int | equality | gate on `invoice_labels` ≥ 4 to treat the file as an invoice |
-| `sketch.text_key@1` | Fast | `sketch.text_key` | Bytes, 16 (XXH3-128) | equality | same words (≥ 400 chars) |
-| `sketch.minhash_sada@1` | Standard only (backtracking regexes, see Limits) | `sketch.sada_minhash`, `sketch.sada_minhash_bands`, `sketch.sada_shingles`, `sketch.sada_template` | Bytes 128 × u64 LE, List of Text, Int, U64 | as the Python service | see below |
+| `sketch.invoice_layout@2` | Fast | `sketch.invoice_layout`, `sketch.invoice_labels`, `sketch.invoice_number_patterns` | U64, Int, Int | equality | gate on `invoice_labels` ≥ 4 to treat the file as an invoice |
+| `sketch.text_key@2` | Fast | `sketch.text_key` | Bytes, 16 (XXH3-128) | equality | same words (≥ 400 chars) |
+| `sketch.minhash_sada@2` | Standard only (backtracking regexes, see Limits) | `sketch.sada_minhash`, `sketch.sada_minhash_bands`, `sketch.sada_shingles`, `sketch.sada_template` | Bytes 128 × u64 LE, List of Text, Int, U64 | as the Python service | see below |
 | `sketch.page_phash@1` | Standard (needs `raster`) | `sketch.page_phash`, `sketch.page_phash_pages` | List of U64, List of Int | `hamming` per page | ≤ 8 per page, all pages, equal counts |
 
 Pure helpers: `hamming(a, b)`, `jaccard_estimate(sig_a, sig_b)` (works on both signature
@@ -50,8 +50,13 @@ layouts), `minhash::band_collision_probability(j)`, and every sketch as a functi
 
 ## Definitions (stable)
 
-- **Text** = page texts (pages needing OCR skipped) joined by `\n`, normalized with the
-  `quail-text` defaults; at most `Limits::max_text_bytes` (problem recorded when cut).
+- **Text** = page texts of the best document (`Ctx::document`: the OCR-revised one when OCR
+  ran, else the extracted one; pages needing OCR skipped) joined by `\n`, normalized with the
+  `quail-text` defaults; at most `Limits::max_text_bytes` (problem recorded when cut). Pages
+  `text.stats` already normalized (its `normalized_text` artifact, with their keyed tokens)
+  are taken from there when read whole; the result is the same, so the analyzers declare it
+  as a soft `after` only. `sketch.page_phash` keeps reading the extracted document: it hashes
+  the pages the extractor flagged as scans or OCR candidates.
 - **Shingles** = `quail_text::shingle::text_shingles(text, 3, &FoldOptions::KEY)` (folded
   word 3-shingles; Latin and Cyrillic spellings agree).
 - **MinHash** = 128 permutations `(a·x + b) mod (2^61 − 1)` over the 64-bit shingle hashes
@@ -74,7 +79,7 @@ sample. **A golden diff means stored sketches change: bump that analyzer's versi
 (`sketch.<name>@N+1`). The crates that decide the values are pinned with `=` versions
 (`xxhash-rust`, `blake2b_simd`, `regex`, `fancy-regex`, plus `quail-text`'s own pins).
 
-## Python compatibility (`sketch.minhash_sada@1`, `sketch.invoice_layout@1`, `sketch.headings`)
+## Python compatibility (`sketch.minhash_sada@2`, `sketch.invoice_layout@2`, `sketch.headings`)
 
 A port of the fingerprints an existing Python service stores (tokens `<\w+>|\w+` over
 `lower()`, BLAKE2b-64 personalized `sada-fp-v1`, the same 128 permutations and 32 × 4 bands,
