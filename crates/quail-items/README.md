@@ -6,11 +6,13 @@ later service can answer "who is cheapest for X" across suppliers. Namespace `it
 The crate reports each line as written plus normalized fields and top-3 category candidates
 (EU CPV 2008). It never decides that two suppliers' lines are the same service.
 
-- Analyzer: `item.lines@2` (`ItemLines`), requires `document`, runs after `revised_document`,
+- Analyzer: `item.lines@3` (`ItemLines`), requires `document`, runs after `revised_document`,
   reads `Ctx::document()`. Line extraction is `Profile::Fast`; category candidates are added
-  from `Profile::Standard` on.
-- Public API: `ItemLines` (`new`, `with_index`), `CpvIndex` (`embedded`, `from_tsv`, `top`,
-  `top_with`), `desc_key`, `keys::*`, `MAX_ITEMS`, `TOP_K`.
+  from `Profile::Standard` on. The CPV index is built lazily on the first file that needs
+  categories (about 0.16 s, about 9 MB RSS) and shared by every clone of the analyzer.
+- Public API: `ItemLines` (`new`, `with_index`, `index`, `index_built`), `CpvIndex`
+  (`embedded`, `from_tsv`, `top`, `top_with`, `categorize`, `entry_of_code`, `heap_bytes`),
+  `cpv::{ALIAS_SCORE, ALIAS_STEP, MIN_SCORE}`, `desc_key`, `keys::*`, `MAX_ITEMS`, `TOP_K`.
 
 ## Keys
 
@@ -66,9 +68,17 @@ line) in the page text, the row's box when the format has geometry. `conf` refle
 3. **Text lines**: `description …… 2 x 3.500,00 = 7.000,00 RSD`, merged table rows checked by
    arithmetic, rate cards (`Senior consultant – 85 EUR/h`). Sentences (verbs, `iznosi`,
    `shall not exceed`, long tails) are rejected.
-4. **Categories**: `CpvIndex`, TF-IDF cosine over folded word stems and character trigrams of
-   the CPV labels (English and Serbian), the better label per code, top 3 above 0.12; lines
-   billed by time or reading as a role/service prefer service divisions (50–98).
+4. **Categories**: `CpvIndex::categorize`. First a small curated alias layer (`src/alias.rs`,
+   about 60 English and Serbian phrases): `consulting`, `project management`, `medical
+   writing`, `Phase III`, `TFLs`, `SDTM`, `SaaS subscription`, `software licence`, `legal`,
+   `travel`, `T&E`, role titles (`Senior Consultant`, `Principal – Onshore`), and others, each
+   mapped to the CPV service codes a buyer would pick (score 0.8, then 0.78, 0.76). Then
+   TF-IDF cosine over folded word stems and character trigrams of the CPV labels (English
+   and Serbian), the better label per code, top 3 above 0.12. Lines billed by time or
+   reading as a role or service prefer business, IT, research and health services
+   (divisions 70–85, ×1.15; other services ×1.05; goods and works ×0.85), and their query
+   leaves out billing words (`onshore`, `senior`, `fees`, months, `Phase`).
+   The index keeps postings in compressed sparse rows with terms packed into integers.
 
 Numbers and currencies are read by `quail_text::money` (shared with `quail-signals`): `1,200.50`,
 `1.200,50`, `1 200,50` (also no-break spaces), `1'200.50`, up to four decimals resolved by the
@@ -91,7 +101,21 @@ page and per table. Scanned pages without a text layer produce nothing unless OC
 Document-level amounts, dates and VAT numbers (`quail-signals`), parties (`quail-parties`),
 cross-supplier matching of services (the service, at query time).
 
+## Summary and credit rows
+
+Not offered lines, so they go to `item.table_total`, not `item.line`: subtotal/VAT/total rows,
+formula rows (`Operations (E+F+G)`, `(C = A - B)`), the value before or after a change
+(`Original SOW`, `Revised Professional Fees`), and credits and discounts (`SalesIQ Credit`,
+`3% partnership discount`, any line with a negative amount; kind `discount`). Descriptions
+holding two or more amounts (`Duns #: 8,690.72 GBP 0.00 1,738.14 GBP`) are dropped. In
+documents that write `1,200.50`, a plain space never groups thousands (`88 131 131` are
+numbers of adjacent cells).
+
 ## Versions
+
+- `item.lines@3`: summary, formula, before/after-change and credit rows go to
+  `item.table_total`; multi-amount descriptions dropped; CPV alias layer and stronger service
+  preference; compact, lazily built index (same TF-IDF scores).
 
 - `item.lines@2`: numbers via `quail_text::money`; credits in parentheses are negative;
   amounts grouped with no-break spaces are read; `km.` is never a currency.

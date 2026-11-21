@@ -47,8 +47,26 @@ pub struct CpvIndex {
     entries: Vec<CpvEntry>,
     /// Label document → entry.
     doc_entry: Vec<u32>,
+    /// Code as an 8-digit number → entry.
+    codes: HashMap<u32, u32>,
     words: Space,
     grams: Space,
+}
+
+/// Score given to the first category of the alias layer (`crate::alias`); later alias
+/// codes get [`ALIAS_STEP`] less each. A TF-IDF candidate scoring higher still wins.
+pub const ALIAS_SCORE: f32 = 0.8;
+/// Score step between alias codes.
+pub const ALIAS_STEP: f32 = 0.02;
+
+/// The 8-digit number of a code (`79411000-8` → 79411000).
+fn code_number(code: &str) -> Option<u32> {
+    let digits: String = code.chars().take_while(char::is_ascii_digit).collect();
+    if digits.len() == 8 {
+        digits.parse().ok()
+    } else {
+        None
+    }
 }
 
 /// A term packed into an integer: up to six characters of 21 bits each (stems are cut to
@@ -308,12 +326,62 @@ impl CpvIndex {
         let grams = Space::build(keys(gram_terms));
         entries.shrink_to_fit();
         doc_entry.shrink_to_fit();
+        let codes = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| Some((code_number(&e.code)?, u32::try_from(i).ok()?)))
+            .collect();
         Self {
             entries,
             doc_entry,
+            codes,
             words,
             grams,
         }
+    }
+
+    /// The entry of a code (`79411000` or `79411000-8`).
+    pub fn entry_of_code(&self, code: &str) -> Option<usize> {
+        self.codes.get(&code_number(code)?).map(|&e| e as usize)
+    }
+
+    /// The best `k` categories of a price line: the alias layer (common service phrases,
+    /// see `alias`, on the description only) first, then TF-IDF over the description and
+    /// `context` (the table section above the line). `unit` is the line's normalized unit;
+    /// a line billed by time, or reading as a role or a service, prefers the service
+    /// divisions.
+    pub fn categorize(
+        &self,
+        description: &str,
+        context: Option<&str>,
+        unit: Option<&str>,
+        k: usize,
+    ) -> Vec<Candidate> {
+        let text = match context {
+            Some(c) => format!("{description} {c}"),
+            None => description.to_owned(),
+        };
+        let text = text.as_str();
+        let mut service = reads_as_service(text, unit);
+        let aliases = crate::alias::codes(description, service);
+        service |= !aliases.is_empty();
+        let mut out: Vec<Candidate> = Vec::new();
+        let mut score = ALIAS_SCORE;
+        for c in aliases {
+            if let Some(entry) = self.entry_of_code(c) {
+                out.push(Candidate { entry, score });
+                score -= ALIAS_STEP;
+            }
+        }
+        for c in self.top_with(text, k, service) {
+            match out.iter_mut().find(|x| x.entry == c.entry) {
+                Some(x) => x.score = x.score.max(c.score),
+                None => out.push(c),
+            }
+        }
+        out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.entry.cmp(&b.entry)));
+        out.truncate(k);
+        out
     }
 
     /// Approximate heap bytes held by the index (entries, postings, term tables).
@@ -326,6 +394,7 @@ impl CpvIndex {
         entries
             + self.entries.capacity() * std::mem::size_of::<CpvEntry>()
             + self.doc_entry.capacity() * 4
+            + self.codes.capacity() * 9
             + self.words.heap_bytes()
             + self.grams.heap_bytes()
     }
@@ -341,9 +410,15 @@ impl CpvIndex {
     }
 
     /// Like [`CpvIndex::top`]; with `service` (the line is billed by time, or reads as a role
-    /// or a service), service codes (divisions 50–98) are preferred over goods and works.
+    /// or a service), business, IT, research, education and health services (divisions
+    /// 70–85) are preferred, other services (50–69, 90–98) kept, goods and works (03–48)
+    /// pushed down; words that say how a service is billed rather than what it is
+    /// (`onshore`, `senior`, `fees`, months) are left out of the query.
     pub fn top_with(&self, text: &str, k: usize, service: bool) -> Vec<Candidate> {
-        let w = folded_words(text);
+        let mut w = folded_words(text);
+        if service {
+            w.retain(|x| !BILLING_WORDS.contains(&x.as_str()));
+        }
         if w.is_empty() {
             return Vec::new();
         }
@@ -361,11 +436,15 @@ impl CpvIndex {
             }
             if let Some(&e) = self.doc_entry.get(doc as usize) {
                 let s = if service {
-                    let services = self
+                    let first = self
                         .entries
                         .get(e as usize)
-                        .is_some_and(|x| x.code.as_bytes().first().is_some_and(|d| *d >= b'5'));
-                    if services { s * 1.15 } else { s * 0.85 }
+                        .and_then(|x| x.code.as_bytes().first().copied());
+                    match first {
+                        Some(b'7' | b'8') => s * 1.15,
+                        Some(b'5' | b'6' | b'9') => s * 1.05,
+                        _ => s * 0.85,
+                    }
                 } else {
                     s
                 };
@@ -386,8 +465,110 @@ impl CpvIndex {
     }
 }
 
+/// Words that say how a service line is billed or staffed, not what it is; left out of the
+/// TF-IDF query of service lines (`Consultant – Onshore` is not an oil-field service).
+const BILLING_WORDS: &[&str] = &[
+    "onshore",
+    "offshore",
+    "nearshore",
+    "sr",
+    "snr",
+    "jr",
+    "senior",
+    "junior",
+    "assoc",
+    "fte",
+    "ftes",
+    "fee",
+    "fees",
+    "cost",
+    "costs",
+    "charge",
+    "charges",
+    "monthly",
+    "annual",
+    "annually",
+    "month",
+    "months",
+    "year",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "sept",
+    "oct",
+    "nov",
+    "dec",
+    "january",
+    "february",
+    "march",
+    "april",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+    "phase",
+    "ph",
+    "ii",
+    "iii",
+    "iv",
+    "tier",
+    "additional",
+    "remaining",
+    "final",
+    "original",
+    "revised",
+];
+
 /// Words that make a line read as a service or a role billed by time.
 const SERVICE_WORDS: &[&str] = &[
+    "professional",
+    "project",
+    "programme",
+    "program",
+    "study",
+    "analysis",
+    "analytics",
+    "license",
+    "licence",
+    "licenses",
+    "licences",
+    "subscription",
+    "implementation",
+    "configuration",
+    "integration",
+    "hosting",
+    "writing",
+    "writer",
+    "monitoring",
+    "reporting",
+    "strategy",
+    "planning",
+    "clinical",
+    "statistics",
+    "stats",
+    "onshore",
+    "offshore",
+    "fte",
+    "travel",
+    "legal",
+    "marketing",
+    "translation",
+    "coordinator",
+    "officer",
+    "scientist",
+    "statistician",
+    "programmer",
+    "leader",
+    "assoc",
     "service",
     "services",
     "fee",

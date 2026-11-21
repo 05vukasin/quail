@@ -440,12 +440,55 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
             break;
         }
     }
+    credits_to_totals(&mut found);
     if full {
         out.problem(format!(
             "item.lines: more than {MAX_ITEMS} items, rest skipped"
         ));
     }
     found
+}
+
+/// Words that make a line a credit or a discount on other lines.
+const CREDIT_WORDS: &[&str] = &[
+    "credit",
+    "credits",
+    "discount",
+    "rebate",
+    "refund",
+    "popust",
+    "rabat",
+    "odobrenje",
+];
+
+/// Credits and discounts are not offered lines: a line with a negative price or total
+/// (`(1,200.00)`, `-15,00`), or a description with a credit word and no quantity
+/// (`Licenses 3% partnership discount`), becomes an `item.table_total` of kind `discount`.
+fn credits_to_totals(found: &mut Found) {
+    let items = std::mem::take(&mut found.items);
+    for it in items {
+        let amount = it.total.or(it.unit_price);
+        let negative = amount.is_some_and(Num::is_negative);
+        let credit_word = it.quantity.is_none()
+            && desc_key(&it.description)
+                .split(' ')
+                .any(|w| CREDIT_WORDS.contains(&w));
+        match amount {
+            Some(amount) if negative || credit_word => found.totals.push(TableTotal {
+                page: it.page,
+                label: it.description,
+                kind: "discount",
+                amount,
+                currency: it.currency,
+                table_index: it.table_index.unwrap_or(0),
+                row_index: it.row_index.unwrap_or(0),
+                conf: it.conf,
+                span: it.span,
+                bbox: it.bbox,
+            }),
+            _ => found.items.push(it),
+        }
+    }
 }
 
 /// The folded matching key of a description: lowercase, no diacritics, Latin script,
@@ -531,13 +574,8 @@ pub(crate) fn emit(found: &Found, cpv: Option<&CpvIndex>, out: &mut Emitter) {
             let cands = cache
                 .entry(key.clone())
                 .or_insert_with(|| {
-                    let mut q = it.description.clone();
-                    if let Some(s) = &it.section {
-                        q.push(' ');
-                        q.push_str(s);
-                    }
                     Value::List(
-                        ix.top_with(&q, TOP_K, crate::cpv::reads_as_service(&q, it.unit))
+                        ix.categorize(&it.description, it.section.as_deref(), it.unit, TOP_K)
                             .into_iter()
                             .filter_map(|c| {
                                 let e = ix.entries().get(c.entry)?;

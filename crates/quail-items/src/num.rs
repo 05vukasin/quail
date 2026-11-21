@@ -168,7 +168,9 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
                 && chars.get(j + 1).is_some_and(|(_, d)| d.is_ascii_digit())
             {
                 j += 1;
-            } else if is_group_space(cj) {
+            // A plain space groups thousands only where the document does not write
+            // `1,200.50` (there `88 131 131` are numbers of adjacent cells).
+            } else if is_group_space(cj) && !(dec == Dec::Dot && cj == ' ') {
                 let run = chars.get(j + 1..).map_or(0, |r| {
                     r.iter().take_while(|(_, d)| d.is_ascii_digit()).count()
                 });
