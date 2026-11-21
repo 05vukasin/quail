@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Patched third-party sources (see vendor/README.md); not workspace members.
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -44,3 +46,11 @@ codegen-units = 16
 # Dev builds keep dependencies optimized so tests over real files stay fast.
 [profile.dev.package."*"]
 opt-level = 2
+
+# Hardened hayro crates for hostile PDFs: per-file decode budget, image size checks before
+# allocation, JBIG2 bitmap caps. Every change is marked `// quail:`; see vendor/README.md.
+[patch.crates-io]
+hayro = { path = "vendor/hayro" }
+hayro-syntax = { path = "vendor/hayro-syntax" }
+hayro-interpret = { path = "vendor/hayro-interpret" }
+hayro-jbig2 = { path = "vendor/hayro-jbig2" }
