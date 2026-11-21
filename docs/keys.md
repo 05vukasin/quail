@@ -41,6 +41,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `item.lines@5` | analyzer | any | fast | Price items from tables and rate lines: description, quantity, unit, prices, CPV top-3. |
 | `summary.card@2` | analyzer | any | fast | File card from all facts (finalizer): kind, parties, dates, amounts, ids, items, flags. |
 | `summary.extractive@2` | analyzer | any | fast | 1-3 sentence English summary without a model: card template + subject clause. |
+| `summary.outline@1` | analyzer | any | fast | Document outline: headings (numbered, keyword, capitals, type size) with page ranges, bounded. |
 
 <a id="engine"></a>
 
@@ -316,7 +317,7 @@ Declared by `quail-items`. 3 keys.
 
 ## summary: file card and summaries
 
-Declared by `quail-summary`. 6 keys.
+Declared by `quail-summary`. 9 keys.
 
 | key | documentation |
 |---|---|
@@ -325,4 +326,7 @@ Declared by `quail-summary`. 6 keys.
 | `summary.card_tokens` | Estimated tokens of `CARD_TEXT` (Int, see `crate::tokens`). |
 | `summary.extractive` | 1–3 sentence English summary without a model (Text). |
 | `summary.subject` | The subject sentence, verbatim (Record: `text`, `lang`?, `method` = `clause`, `recital`, `operative` or `textrank`, `label`?), evidence: its page. |
-| `summary.llm` | The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`). Feature `llm`. |
+| `summary.outline` | The document's headings with page ranges (Record: `method` = `headings` or `windows`, `total`, `pages`, `sections` = list of `title level page end_page source`, pages zero-based; `truncated`?). |
+| `summary.digest` | The bounded summary input of a document of any length (Text: `FACTS` = the card, then the whole `TEXT` when it fits, else `OUTLINE`, `START` and per-section `EXCERPTS` copied verbatim). |
+| `summary.digest_tokens` | Estimated tokens of `DIGEST` (Int, see `crate::tokens`). |
+| `summary.llm` | The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or `map_reduce`, `calls`). Feature `llm`. |

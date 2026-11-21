@@ -212,6 +212,13 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "1-3 sentence English summary without a model: card template + subject clause.",
     },
+    #[cfg(feature = "summary")]
+    StepDoc {
+        id: quail_summary::SummaryOutline::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Document outline: headings (numbered, keyword, capitals, type size) with page ranges, bounded.",
+    },
 ];
 
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
@@ -264,7 +271,8 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     #[cfg(feature = "summary")]
     let b = b
         .analyzer(Box::new(quail_summary::SummaryCard::new()))
-        .analyzer(Box::new(quail_summary::SummaryExtractive));
+        .analyzer(Box::new(quail_summary::SummaryExtractive))
+        .analyzer(Box::new(quail_summary::SummaryOutline::new()));
     b
 }
 

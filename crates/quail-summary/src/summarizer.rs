@@ -6,6 +6,7 @@ use std::time::Instant;
 use quail_core::Result;
 
 use crate::card::FileCard;
+use crate::digest::MapPart;
 use crate::extractive::{self, Subject};
 
 /// Name, version and fingerprint of a summarizer. Part of the cache key, so a new model file
@@ -35,7 +36,9 @@ pub struct SummaryInput<'a> {
     pub card_text: &'a str,
     /// The subject sentence found in the text, if any.
     pub subject: Option<&'a Subject>,
-    /// The start of the document text, normalized, within a token budget.
+    /// What the summarizer reads of the document: the body of its
+    /// [digest](crate::digest::Digest::body) (the whole text of a short document; outline,
+    /// start and per-section excerpts of a long one), within a token budget.
     pub text_head: &'a str,
     /// Document language, ISO 639-1.
     pub lang: Option<&'a str>,
@@ -83,6 +86,16 @@ pub struct Summary {
     pub warnings: Vec<String>,
 }
 
+/// The parts of a very long document for a hierarchical summary
+/// ([`Summarizer::summarize_long`]).
+#[derive(Clone, Copy, Debug)]
+pub struct LongInput<'a> {
+    /// The outline, rendered ([`crate::outline::Outline::render`]).
+    pub outline: &'a str,
+    /// Contiguous parts with their excerpts ([`crate::digest::map_parts`]).
+    pub parts: &'a [MapPart],
+}
+
 /// Writes one English summary per file.
 pub trait Summarizer: Send + Sync {
     /// Name, version, fingerprint.
@@ -91,6 +104,18 @@ pub trait Summarizer: Send + Sync {
     /// Summarizes one file. An error means "no summary": callers fall back to the extractive
     /// one and record the error as a warning.
     fn summarize(&self, input: &SummaryInput<'_>) -> Result<Summary>;
+
+    /// Summarizes a very long file part by part, then the parts together (map-reduce,
+    /// [`crate::mapreduce`]); returns the summary and the number of model calls. The default
+    /// is one [`Self::summarize`] call over `input`.
+    fn summarize_long(
+        &self,
+        input: &SummaryInput<'_>,
+        long: &LongInput<'_>,
+    ) -> Result<(Summary, usize)> {
+        let _ = long;
+        self.summarize(input).map(|s| (s, 1))
+    }
 }
 
 /// The model-free summarizer: [`extractive::summary`]. Checked by construction (it copies
@@ -122,6 +147,16 @@ impl Summarizer for ExtractiveSummarizer {
 /// The checked summary of `summarizer`, or the extractive one with a warning when it failed
 /// or its output did not pass the fact check.
 pub fn checked_or_extractive(summarizer: &dyn Summarizer, input: &SummaryInput<'_>) -> Summary {
+    checked_or_fallback(summarizer, input, summarizer.summarize(input))
+}
+
+/// [`checked_or_extractive`] of an attempt `got` made for `input` (for example by
+/// [`Summarizer::summarize_long`]).
+pub fn checked_or_fallback(
+    summarizer: &dyn Summarizer,
+    input: &SummaryInput<'_>,
+    got: Result<Summary>,
+) -> Summary {
     let fallback = |why: String| {
         let mut s = ExtractiveSummarizer
             .summarize(input)
@@ -137,7 +172,7 @@ pub fn checked_or_extractive(summarizer: &dyn Summarizer, input: &SummaryInput<'
         s.warnings.push(why);
         s
     };
-    match summarizer.summarize(input) {
+    match got {
         Ok(s) if s.checked => s,
         Ok(s) => fallback(s.warnings.join("; ")),
         Err(e) => fallback(format!("{}: {e}", summarizer.id())),

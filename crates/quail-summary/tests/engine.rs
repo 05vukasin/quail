@@ -6,7 +6,9 @@ use quail_core::{
     PageKind, Profile, RevisedDocument, SourceItem, TextSource, Value,
 };
 use quail_engine::EngineBuilder;
-use quail_summary::{SummaryCard, SummaryExtractive, keys};
+use std::fmt::Write as _;
+
+use quail_summary::{SummaryCard, SummaryDigest, SummaryExtractive, SummaryOutline, keys};
 
 struct TextExtractor;
 
@@ -103,4 +105,56 @@ fn summary_steps_registered_last_run_last() {
         .to_owned();
     assert!(card.starts_with("doc: invoice #3 lang=en"), "{card}");
     assert!(rec.facts_for(keys::EXTRACTIVE.as_str()).next().is_some());
+}
+
+#[test]
+fn outline_and_digest_of_a_long_text() {
+    let engine = EngineBuilder::new()
+        .profile(Profile::Standard)
+        .quiet_panics(true)
+        .extractor(Box::new(TextExtractor))
+        .analyzer(Box::new(Producer("text.lang", Value::text("en"))))
+        .analyzer(Box::new(SummaryCard::new()))
+        .analyzer(Box::new(SummaryOutline::new()))
+        .analyzer(Box::new(SummaryDigest::new()))
+        .build()
+        .unwrap();
+    let mut text = String::new();
+    for c in 1..=30 {
+        let _ = writeln!(text, "ARTICLE {c}\nTOPIC NUMBER {c}");
+        for s in 0..40 {
+            let _ = writeln!(
+                text,
+                "Clause {s} of article {c} makes the depot number {c} keep its ledger {s} \
+                 current for the auditors every quarter."
+            );
+        }
+    }
+    let rec = engine.process(SourceItem {
+        locator: "long.txt".into(),
+        blob: Blob::new(text.into_bytes()),
+        modified: None,
+    });
+    let method = rec
+        .facts_for(keys::OUTLINE.as_str())
+        .next()
+        .and_then(|f| f.value.field("method").and_then(Value::as_text))
+        .map(str::to_owned);
+    assert_eq!(method.as_deref(), Some("headings"));
+    let digest = rec
+        .facts_for(keys::DIGEST.as_str())
+        .next()
+        .and_then(|f| f.value.as_text())
+        .unwrap()
+        .to_owned();
+    assert!(digest.starts_with("FACTS:\n"), "{digest}");
+    assert!(digest.contains("## ARTICLE 30 TOPIC NUMBER 30"), "{digest}");
+    let tokens = rec
+        .facts_for(keys::DIGEST_TOKENS.as_str())
+        .next()
+        .map(|f| f.value.clone());
+    assert!(
+        matches!(tokens, Some(Value::Int(n)) if n > 500 && n <= 2000),
+        "{tokens:?}"
+    );
 }

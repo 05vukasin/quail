@@ -1,10 +1,15 @@
-//! `summary.llm@1`: a local GGUF model (llama.cpp through `llama-cpp-2`) writes
+//! `summary.llm@2`: a local GGUF model (llama.cpp through `llama-cpp-2`) writes
 //! `{summary, subject, title_en}`; every output is fact-checked and falls back to the
 //! extractive summary when it fails. Feature `llm`, `Profile::Deep`, and opt-in: the analyzer
 //! applies only when [`LlmConfig::enabled`] is set.
 //!
-//! - Input: the card text plus the first [`LlmConfig::head_tokens`] estimated tokens of the
-//!   document; the fixed instructions come first ([`crate::prompt`]).
+//! - Input: the document's [digest](crate::digest) within [`LlmConfig::digest_tokens`]
+//!   estimated tokens (the card, then the whole text of a short document or the outline,
+//!   start and per-section excerpts of a long one); the fixed instructions come first
+//!   ([`crate::prompt`]). One call per document, whatever its length.
+//! - Very long documents, when [`LlmConfig::map_reduce`] is set: one call per part (at most
+//!   [`MapReduceConfig::max_parts`]) and one over the part summaries ([`crate::mapreduce`]),
+//!   each fact-checked.
 //! - Decoding: greedy (temperature 0), thinking off, output constrained by a grammar compiled
 //!   from [`crate::prompt::SCHEMA`].
 //! - Memory: one model (mmapped weights) per [`LlmSummarizer`], one context per call, and one
@@ -29,15 +34,17 @@ use quail_core::{Analyzer, AnalyzerId, Ctx, Emitter, Error, Profile, Result, Val
 
 use crate::analyzer::{AFTER, card_of};
 use crate::cache::{CacheKey, SummaryCache};
+use crate::digest::{self, DigestConfig, DigestMethod, MapReduceConfig};
 use crate::extractive;
 use crate::factcheck;
 use crate::keys;
+use crate::mapreduce::{self, Step};
 use crate::models::{self, ModelFile};
+use crate::outline::{self, OutlineConfig};
 use crate::prompt;
 use crate::summarizer::{
-    Method, Summarizer, SummarizerId, Summary, SummaryInput, checked_or_extractive,
+    LongInput, Method, Summarizer, SummarizerId, Summary, SummaryInput, checked_or_fallback,
 };
-use crate::tokens;
 
 /// Settings of the LLM step.
 #[derive(Clone, Debug)]
@@ -48,12 +55,16 @@ pub struct LlmConfig {
     pub threads: u16,
     /// Context size in tokens.
     pub n_ctx: u32,
-    /// Estimated tokens of document text in the prompt.
-    pub head_tokens: usize,
+    /// Estimated tokens of the digest in the prompt (card included).
+    pub digest_tokens: usize,
     /// Token budget of the card in the prompt.
     pub card_tokens: usize,
     /// Generated tokens at most.
     pub max_output_tokens: u32,
+    /// Map-reduce for very long documents (`None`: one call over the digest).
+    pub map_reduce: Option<MapReduceConfig>,
+    /// Generated tokens at most per map call.
+    pub map_output_tokens: u32,
     /// Wall time per file at most (prefill and generation).
     pub timeout: Duration,
     /// Instrument kinds whose card already says everything (no model call).
@@ -61,16 +72,19 @@ pub struct LlmConfig {
 }
 
 impl Default for LlmConfig {
-    /// Disabled; 4 threads, 4,096-token context, 800 text tokens, 300 card tokens, 200 output
-    /// tokens, 60 s, invoices and purchase orders skipped.
+    /// Disabled; 4 threads, 4,096-token context, a 1,600-token digest, 300 card tokens, 200
+    /// output tokens, no map-reduce (120 tokens per map call when set), 60 s per call,
+    /// invoices and purchase orders skipped.
     fn default() -> Self {
         Self {
             enabled: false,
             threads: 4,
             n_ctx: 4096,
-            head_tokens: 800,
+            digest_tokens: 1600,
             card_tokens: 300,
             max_output_tokens: 200,
+            map_reduce: None,
+            map_output_tokens: 120,
             timeout: Duration::from_mins(1),
             skip_kinds: vec!["invoice".to_owned(), "po".to_owned()],
         }
@@ -117,6 +131,7 @@ pub struct LlmSummarizer {
     model: LlamaModel,
     file: &'static ModelFile,
     grammar: String,
+    map_grammar: String,
     cfg: LlmConfig,
     lock: Mutex<()>,
 }
@@ -135,10 +150,13 @@ impl LlmSummarizer {
             .map_err(|e| Error::Resource(format!("{}: {e}", path.display())))?;
         let grammar = llama_cpp_2::json_schema_to_grammar(prompt::SCHEMA)
             .map_err(|e| Error::Resource(format!("output grammar: {e}")))?;
+        let map_grammar = llama_cpp_2::json_schema_to_grammar(prompt::MAP_SCHEMA)
+            .map_err(|e| Error::Resource(format!("map grammar: {e}")))?;
         Ok(Self {
             model,
             file,
             grammar,
+            map_grammar,
             cfg,
             lock: Mutex::new(()),
         })
@@ -160,12 +178,26 @@ impl LlmSummarizer {
     /// Runs `prompt` (special tokens parsed) under the output grammar until end of generation,
     /// `max_output_tokens` or `deadline`; returns the text and its stats.
     pub fn generate(&self, prompt: &str, deadline: Instant) -> Result<(String, GenStats)> {
+        self.generate_with(prompt, Step::Reduce, deadline)
+    }
+
+    /// [`Self::generate`] under the grammar and output budget of `step`: the summary schema
+    /// for [`Step::Reduce`] (and single calls), the part schema for [`Step::Map`].
+    pub fn generate_with(
+        &self,
+        prompt: &str,
+        step: Step,
+        deadline: Instant,
+    ) -> Result<(String, GenStats)> {
         let _one_at_a_time = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
         let res = |e: String| Error::Resource(e);
         let backend = backend()?;
         let vocab = self.model.vocab();
         let toks = vocab.tokenize(prompt.as_bytes(), false, true);
-        let max_out = self.cfg.max_output_tokens as usize;
+        let (grammar_src, max_out) = match step {
+            Step::Reduce => (&self.grammar, self.cfg.max_output_tokens as usize),
+            Step::Map => (&self.map_grammar, self.cfg.map_output_tokens as usize),
+        };
         if toks.len() + max_out >= self.cfg.n_ctx as usize {
             return Err(res(format!(
                 "prompt of {} tokens does not fit a context of {}",
@@ -213,7 +245,7 @@ impl LlmSummarizer {
         stats.prefill = t0.elapsed();
 
         let t1 = Instant::now();
-        let grammar = LlamaSampler::grammar(&self.model, &self.grammar, "root")
+        let grammar = LlamaSampler::grammar(&self.model, grammar_src, "root")
             .map_err(|e| res(format!("grammar: {e}")))?;
         let mut sampler = LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()]);
         let mut out: Vec<u8> = Vec::new();
@@ -283,15 +315,21 @@ impl LlmSummarizer {
 
 impl Summarizer for LlmSummarizer {
     fn id(&self) -> SummarizerId {
+        let mr = self.cfg.map_reduce.map_or_else(String::new, |m| {
+            format!(
+                " mr={}x{}@{} map_out={}",
+                m.max_parts, m.part_tokens, m.min_pages, self.cfg.map_output_tokens
+            )
+        });
         SummarizerId {
             name: self.file.id.to_owned(),
-            version: 1,
+            version: 2,
             fingerprint: format!(
-                "sha256={} prompt={} greedy ctx={} head={} card={} out={}",
+                "sha256={} prompt={} greedy ctx={} digest={} card={} out={}{mr}",
                 self.file.sha256,
                 prompt::PROMPT_VERSION,
                 self.cfg.n_ctx,
-                self.cfg.head_tokens,
+                self.cfg.digest_tokens,
                 self.cfg.card_tokens,
                 self.cfg.max_output_tokens
             ),
@@ -301,10 +339,41 @@ impl Summarizer for LlmSummarizer {
     fn summarize(&self, input: &SummaryInput<'_>) -> Result<Summary> {
         self.summarize_with_stats(input).map(|(s, _)| s)
     }
+
+    fn summarize_long(
+        &self,
+        input: &SummaryInput<'_>,
+        long: &LongInput<'_>,
+    ) -> Result<(Summary, usize)> {
+        if long.parts.len() < 2 {
+            return self.summarize(input).map(|s| (s, 1));
+        }
+        let calls = u32::try_from(long.parts.len() + 1).unwrap_or(u32::MAX);
+        let deadline = Instant::now() + self.cfg.timeout * calls;
+        let deadline = input.deadline.map_or(deadline, |d| d.min(deadline));
+        let mut generate = |step: Step, user: &str| -> Result<String> {
+            let p = prompt::chatml(prompt::SYSTEM, user);
+            let per_call = (Instant::now() + self.cfg.timeout).min(deadline);
+            self.generate_with(&p, step, per_call).map(|(raw, _)| raw)
+        };
+        let r = mapreduce::map_reduce(
+            input.card_text,
+            long.outline,
+            long.parts,
+            input.lang,
+            &mut generate,
+        )?;
+        Ok((r.summary, r.calls))
+    }
 }
 
-/// `summary.llm@1`: the [`LlmSummarizer`] (or any [`Summarizer`]) as an analyzer. Deep and
+/// `summary.llm@2`: the [`LlmSummarizer`] (or any [`Summarizer`]) as an analyzer. Deep and
 /// opt-in ([`LlmConfig::enabled`]); never part of the default pipeline.
+///
+/// Reads the digest of the document ([`crate::digest`], [`LlmConfig::digest_tokens`]); with
+/// [`LlmConfig::map_reduce`] set, a document of at least
+/// [`MapReduceConfig::min_pages`] pages whose text does not fit the digest is summarized part
+/// by part ([`Summarizer::summarize_long`]).
 pub struct SummaryLlm {
     summarizer: Arc<dyn Summarizer>,
     cfg: LlmConfig,
@@ -313,7 +382,7 @@ pub struct SummaryLlm {
 
 impl SummaryLlm {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.llm", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.llm", 2);
 
     /// The step for `summarizer` with `cfg` (which must have `enabled` set to do anything)
     /// and an optional result cache.
@@ -365,35 +434,64 @@ impl Analyzer for SummaryLlm {
             return Ok(());
         }
         let card_text = card.render(self.cfg.card_tokens).text;
-        let pages = ctx
-            .document()
-            .map(extractive::head_pages)
-            .unwrap_or_default();
+        let Some(doc) = ctx.document() else {
+            return Ok(());
+        };
+        let pages = extractive::head_pages(doc);
         let subject = extractive::subject(&pages);
-        let joined: String = pages
-            .iter()
-            .map(|(_, t)| t.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let text_head = tokens::head(&joined, self.cfg.head_tokens);
-        if text_head.split_whitespace().count() < 20 {
+        out.check_deadline()?;
+        let o = outline::outline(doc, &OutlineConfig::default(), out.deadline());
+        let dcfg = DigestConfig {
+            max_tokens: self.cfg.digest_tokens,
+            card_tokens: self.cfg.card_tokens,
+            ..DigestConfig::default()
+        };
+        let d = digest::build(doc, &card_text, &o, &dcfg, out.deadline());
+        if d.body.split_whitespace().count() < 20 {
             return Ok(()); // nothing for a model to read; the extractive summary stands
         }
         out.check_deadline()?;
+        let parts = match self.cfg.map_reduce {
+            Some(mr) if d.method == DigestMethod::Excerpts => {
+                digest::map_parts(doc, &o, &dcfg, &mr, out.deadline())
+            }
+            _ => Vec::new(),
+        };
+        let outline_text = o.render(dcfg.max_tokens / 4);
         let input = SummaryInput {
             card: &card,
             card_text: &card_text,
             subject: subject.as_ref(),
-            text_head,
+            text_head: &d.body,
             lang: card.lang.as_deref(),
-            deadline: None,
+            deadline: out.deadline(),
         };
         let id = self.summarizer.id();
-        let key = CacheKey::new(&card_text, text_head, &id);
+        let long = parts.len() >= 2;
+        let cache_text = if long {
+            format!("{}\u{0}map_reduce:{}", d.body, parts.len())
+        } else {
+            d.body.clone()
+        };
+        let key = CacheKey::new(&card_text, &cache_text, &id);
+        let mut calls = 0usize;
         let (summary, cached) = if let Some(s) = self.cache.as_ref().and_then(|c| c.get(&key)) {
             ((*s).clone(), true)
         } else {
-            let s = checked_or_extractive(self.summarizer.as_ref(), &input);
+            let got = if long {
+                let li = LongInput {
+                    outline: &outline_text,
+                    parts: &parts,
+                };
+                self.summarizer.summarize_long(&input, &li).map(|(s, n)| {
+                    calls = n;
+                    s
+                })
+            } else {
+                calls = 1;
+                self.summarizer.summarize(&input)
+            };
+            let s = checked_or_fallback(self.summarizer.as_ref(), &input, got);
             if let Some(c) = &self.cache {
                 c.put(key, Arc::new(s.clone()));
             }
@@ -413,6 +511,14 @@ impl Analyzer for SummaryLlm {
         f.push(("model", Value::text(id.name)));
         f.push(("checked", Value::Bool(summary.checked)));
         f.push(("cached", Value::Bool(cached)));
+        f.push((
+            "input",
+            Value::text(if long { "map_reduce" } else { "digest" }),
+        ));
+        f.push((
+            "calls",
+            Value::Int(i64::try_from(calls).unwrap_or(i64::MAX)),
+        ));
         let conf = if summary.method == Method::Llm {
             0.8
         } else {

@@ -775,8 +775,20 @@ pub const SUMMARY: &[KeyDoc] = &[
         doc: "The subject sentence, verbatim (Record: `text`, `lang`?, `method` = `clause`, `recital`, `operative` or `textrank`, `label`?), evidence: its page.",
     },
     KeyDoc {
+        key: quail_summary::keys::OUTLINE,
+        doc: "The document's headings with page ranges (Record: `method` = `headings` or `windows`, `total`, `pages`, `sections` = list of `title level page end_page source`, pages zero-based; `truncated`?).",
+    },
+    KeyDoc {
+        key: quail_summary::keys::DIGEST,
+        doc: "The bounded summary input of a document of any length (Text: `FACTS` = the card, then the whole `TEXT` when it fits, else `OUTLINE`, `START` and per-section `EXCERPTS` copied verbatim).",
+    },
+    KeyDoc {
+        key: quail_summary::keys::DIGEST_TOKENS,
+        doc: "Estimated tokens of `DIGEST` (Int, see `crate::tokens`).",
+    },
+    KeyDoc {
         key: quail_summary::keys::LLM,
-        doc: "The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`). Feature `llm`.",
+        doc: "The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or `map_reduce`, `calls`). Feature `llm`.",
     },
 ];
 

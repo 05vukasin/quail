@@ -56,7 +56,7 @@ fn main() -> ExitCode {
     let card_text = card.text().text;
     let pages = vec![(0, text.clone())];
     let subject = extractive::subject(&pages);
-    let head = tokens::head(&text, llm.config().head_tokens);
+    let head = tokens::head(&text, llm.config().digest_tokens);
     let input = SummaryInput {
         card: &card,
         card_text: &card_text,

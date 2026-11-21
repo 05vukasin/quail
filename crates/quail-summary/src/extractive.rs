@@ -120,7 +120,7 @@ const LABELS: &[(&str, u8)] = &[
 const ARTICLE_WORDS: &[&str] = &["article", "clan", "section", "clause", "tacka", "odeljak"];
 
 /// Abbreviations a period does not end a sentence after (folded).
-const ABBREVIATIONS: &[&str] = &[
+pub(crate) const ABBREVIATIONS: &[&str] = &[
     "no", "nr", "br", "art", "cl", "st", "str", "tel", "mr", "mrs", "ms", "dr", "inc", "ltd", "co",
     "corp", "e.g", "i.e", "etc", "vs", "sec", "para", "pp", "approx", "d.o.o", "a.d", "ul", "god",
     "tj", "npr", "sl", "itd", "dipl", "ing", "prof", "jan", "feb", "mar", "apr", "jun", "jul",
@@ -159,7 +159,7 @@ const BOILERPLATE: &[&str] = &[
 ];
 
 /// Short function words (folded) left out of `TextRank` similarity, English and Serbian.
-const STOP: &[&str] = &[
+pub(crate) const STOP: &[&str] = &[
     "the",
     "and",
     "for",
@@ -486,7 +486,7 @@ pub fn summary(card: &FileCard, subject: Option<&Subject>) -> String {
 }
 
 /// Folds a line into words: lowercase, no diacritics, Latin, punctuation as spaces.
-fn words_of(line: &str) -> Vec<String> {
+pub(crate) fn words_of(line: &str) -> Vec<String> {
     let f = fold(line, &FoldOptions::KEY);
     f.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
@@ -663,7 +663,7 @@ fn limit_words(s: &str, max: usize) -> String {
 /// Splits `text` into sentences at `.`, `!`, `?` (and `;` far into a long sentence) followed by
 /// whitespace and an upper-case letter, a digit or a quote, except after abbreviations, single
 /// letters and numbers.
-fn sentences(text: &str) -> Vec<String> {
+pub(crate) fn sentences(text: &str) -> Vec<String> {
     let text = one_line(text);
     let mut out = Vec::new();
     let mut start = 0;
@@ -710,7 +710,7 @@ fn sentences(text: &str) -> Vec<String> {
 }
 
 /// A sentence worth ranking: 8–60 words, mostly letters, not shouting, no boilerplate.
-fn rankable(s: &str) -> bool {
+pub(crate) fn rankable(s: &str) -> bool {
     let n = s.split_whitespace().count();
     if !(8..=60).contains(&n) {
         return false;
@@ -729,54 +729,110 @@ fn rankable(s: &str) -> bool {
     {
         return false;
     }
-    let f = format!(" {} ", words_of(s).join(" "));
-    !BOILERPLATE.iter().any(|b| f.contains(&format!(" {b} ")))
+    !contactish_folded(&folded(s))
+}
+
+/// `s` folded into words joined by single spaces, with a space at both ends: the form the
+/// phrase checks below search.
+pub(crate) fn folded(s: &str) -> String {
+    if s.is_ascii() {
+        // Folding ASCII is lower-casing it.
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push(' ');
+        for w in s
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+        {
+            out.extend(w.chars().map(|c| c.to_ascii_lowercase()));
+            out.push(' ');
+        }
+        if out.len() == 1 {
+            out.push(' ');
+        }
+        return out;
+    }
+    let f = fold(s, &FoldOptions::KEY);
+    let mut out = String::with_capacity(f.len() + 2);
+    out.push(' ');
+    for w in f
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
+        out.push_str(w);
+        out.push(' ');
+    }
+    if out.len() == 1 {
+        out.push(' ');
+    }
+    out
+}
+
+/// `f` (from [`folded`]) contains `phrase` starting at a word, and ending at one with
+/// `whole`.
+pub(crate) fn has_phrase(f: &str, phrase: &str, whole: bool) -> bool {
+    f.match_indices(phrase)
+        .any(|(i, _)| f[..i].ends_with(' ') && (!whole || f[i + phrase.len()..].starts_with(' ')))
+}
+
+/// A parties block, an address, a contact or signature line (the [`BOILERPLATE`] words).
+pub(crate) fn contactish_folded(f: &str) -> bool {
+    BOILERPLATE.iter().any(|b| has_phrase(f, b, true))
 }
 
 /// Headings set in capitals, filing notes and "referred to herein" recitals.
-fn is_filler(s: &str) -> bool {
+pub(crate) fn is_filler(s: &str) -> bool {
     let letters = s.chars().filter(|c| c.is_alphabetic()).count();
     let upper = s.chars().filter(|c| c.is_uppercase()).count();
     if letters == 0 || upper * 2 > letters {
         return true;
     }
-    let f = format!(" {} ", words_of(s).join(" "));
-    [
-        " referred to herein ",
-        " referred to individually ",
-        " text omitted ",
-        " confidential treatment ",
-        " filed separately ",
-        " redacted ",
-    ]
-    .iter()
-    .any(|d| f.contains(d))
+    filler_folded(&folded(s))
 }
 
-/// A definition ("\"Affiliate\" shall mean ...") says nothing about the subject.
-fn is_definition(s: &str) -> bool {
-    let f = format!(" {} ", words_of(s).join(" "));
-    [
-        " shall mean ",
-        " means ",
-        " shall have the meaning",
-        " respective meanings ",
-        " have the meanings ",
-        " is defined ",
-        " are defined ",
-        " terms defined ",
-        " for the purposes of this ",
-        " for purposes of this ",
-        " as used in this ",
-        " as used herein ",
-        " indicates that ",
-        " shall not include ",
-        " shall include ",
-        " defined term",
-    ]
-    .iter()
-    .any(|d| f.contains(d))
+/// The phrase part of [`is_filler`].
+pub(crate) fn filler_folded(f: &str) -> bool {
+    FILLERS.iter().any(|d| f.contains(d))
 }
+
+/// Folded phrases (space-delimited) of filing notes and cross-reference recitals.
+const FILLERS: &[&str] = &[
+    " referred to herein ",
+    " referred to individually ",
+    " text omitted ",
+    " confidential treatment ",
+    " filed separately ",
+    " redacted ",
+];
+
+/// A definition ("\"Affiliate\" shall mean ...") says nothing about the subject.
+pub(crate) fn is_definition(s: &str) -> bool {
+    definition_folded(&folded(s))
+}
+
+/// [`is_definition`] of a [`folded`] sentence.
+pub(crate) fn definition_folded(f: &str) -> bool {
+    DEFINITIONS.iter().any(|d| f.contains(d))
+}
+
+/// Folded phrases (space-delimited) of a definition.
+const DEFINITIONS: &[&str] = &[
+    " shall mean ",
+    " means ",
+    " shall have the meaning",
+    " respective meanings ",
+    " have the meanings ",
+    " is defined ",
+    " are defined ",
+    " terms defined ",
+    " for the purposes of this ",
+    " for purposes of this ",
+    " as used in this ",
+    " as used herein ",
+    " indicates that ",
+    " shall not include ",
+    " shall include ",
+    " defined term",
+];
 
 /// Folded phrases of sentences that state what a document does: who provides what to whom.
 const CUES: &[&str] = &[
@@ -804,13 +860,17 @@ const CUES: &[&str] = &[
 ];
 
 fn has_cue(s: &str) -> bool {
-    let f = format!(" {} ", words_of(s).join(" "));
-    CUES.iter().any(|c| f.contains(&format!(" {c}")))
+    cue_folded(&folded(s))
+}
+
+/// A [`folded`] sentence with a cue of who provides what ([`CUES`]).
+pub(crate) fn cue_folded(f: &str) -> bool {
+    CUES.iter().any(|c| has_phrase(f, c, false))
 }
 
 /// Drops leading clause numbers and labels: "1.1 ", "12.2.3 ", "(v) ", "Exhibit 10.39 ",
 /// "Section 2. ", "ARTICLE I ".
-fn strip_enumerator(s: &str) -> String {
+pub(crate) fn strip_enumerator(s: &str) -> String {
     let mut ws: Vec<&str> = s.split_whitespace().collect();
     let mut i = 0;
     while i < ws.len().min(4) {
@@ -1027,7 +1087,7 @@ fn strip_heading(s: &str) -> String {
 }
 
 /// A list item cut out of its sentence: it opens in lower case or with `(xi)`, `or`, `and`.
-fn fragment(s: &str) -> bool {
+pub(crate) fn fragment(s: &str) -> bool {
     let t = s.trim_start_matches(['"', '“', '(', ' ']);
     t.starts_with(|c: char| c.is_lowercase())
         || s.trim_start().starts_with('(')
@@ -1075,11 +1135,13 @@ const BOILERPLATE_CLAUSES: &[&str] = &[
 
 /// A boilerplate clause: notices, counterparts, governing law, severability, entire
 /// agreement, redaction notes and the like.
-fn boilerplate(s: &str) -> bool {
-    let f = format!(" {} ", words_of(s).join(" "));
-    BOILERPLATE_CLAUSES
-        .iter()
-        .any(|b| f.contains(&format!(" {b}")))
+pub(crate) fn boilerplate(s: &str) -> bool {
+    boilerplate_folded(&folded(s))
+}
+
+/// [`boilerplate`] of a [`folded`] sentence.
+pub(crate) fn boilerplate_folded(f: &str) -> bool {
+    BOILERPLATE_CLAUSES.iter().any(|b| has_phrase(f, b, false))
 }
 
 fn textrank(pages: &[(u32, String)]) -> Option<Subject> {
@@ -1186,6 +1248,83 @@ pub fn kind_title(kind: &str) -> String {
     capitalize(kind_name(kind))
 }
 
+/// What a sentence is, by the folded phrases it contains ([`PhraseIndex::flags`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // independent flags
+pub(crate) struct Flags {
+    /// States who provides what ([`CUES`]).
+    pub cue: bool,
+    /// A boilerplate clause ([`BOILERPLATE_CLAUSES`]).
+    pub boilerplate: bool,
+    /// A definition ([`DEFINITIONS`]).
+    pub definition: bool,
+    /// A parties block, address or contact line ([`BOILERPLATE`]).
+    pub contact: bool,
+    /// A filing note or cross-reference recital ([`FILLERS`]).
+    pub filler: bool,
+}
+
+/// All phrase lists in one index by first byte, so a sentence is checked in one pass over
+/// its word starts instead of one substring search per phrase.
+pub(crate) struct PhraseIndex {
+    /// `(phrase without its leading space, flag, must end at a word end)` by first byte.
+    buckets: Vec<Vec<(&'static str, u8, bool)>>,
+}
+
+impl PhraseIndex {
+    /// Builds the index of every list.
+    pub(crate) fn new() -> Self {
+        let mut buckets: Vec<Vec<(&'static str, u8, bool)>> = vec![Vec::new(); 256];
+        let mut add = |list: &[&'static str], flag: u8, whole: Option<bool>| {
+            for &p in list {
+                let t = p.strip_prefix(' ').unwrap_or(p);
+                let (t, w) = match whole {
+                    Some(w) => (t, w),
+                    None => match t.strip_suffix(' ') {
+                        Some(x) => (x, true),
+                        None => (t, false),
+                    },
+                };
+                if let Some(&b) = t.as_bytes().first() {
+                    buckets[usize::from(b)].push((t, flag, w));
+                }
+            }
+        };
+        add(CUES, 0, Some(false));
+        add(BOILERPLATE_CLAUSES, 1, Some(false));
+        add(DEFINITIONS, 2, None);
+        add(BOILERPLATE, 3, Some(true));
+        add(FILLERS, 4, None);
+        Self { buckets }
+    }
+
+    /// The flags of a [`folded`] sentence `f`.
+    pub(crate) fn flags(&self, f: &str) -> Flags {
+        let mut bits = 0u8;
+        let b = f.as_bytes();
+        for i in 0..b.len() {
+            if (i > 0 && b[i - 1] != b' ') || b[i] == b' ' {
+                continue;
+            }
+            for &(p, flag, whole) in &self.buckets[usize::from(b[i])] {
+                if bits & (1 << flag) != 0 || !b[i..].starts_with(p.as_bytes()) {
+                    continue;
+                }
+                if !whole || b.get(i + p.len()) == Some(&b' ') {
+                    bits |= 1 << flag;
+                }
+            }
+        }
+        Flags {
+            cue: bits & 1 != 0,
+            boilerplate: bits & 2 != 0,
+            definition: bits & 4 != 0,
+            contact: bits & 8 != 0,
+            filler: bits & 16 != 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1289,5 +1428,39 @@ mod tests {
         );
         assert!(heading("Article").is_none());
         assert_eq!(heading("ČLAN 1").map(|h| h.0), Some("article 1"));
+    }
+
+    #[test]
+    fn folding_ascii_fast() {
+        for t in [
+            "The Supplier d.o.o. AGREES to 4,200.00 (EUR).",
+            "  ",
+            "Ugovor o Zakupu",
+        ] {
+            assert_eq!(folded(t), format!(" {} ", words_of(t).join(" ")), "{t}");
+        }
+        assert_eq!(folded("Član 1 Ђорђе"), " clan 1 djordje ");
+    }
+
+    #[test]
+    fn phrase_index_agrees_with_the_phrase_checks() {
+        let idx = PhraseIndex::new();
+        for s in [
+            "The Supplier agrees to deliver the goods under this Agreement.",
+            "All notices shall be sent to the registered office of the Company.",
+            "\"Affiliate\" shall mean any entity that controls a party.",
+            "This Agreement is governed by the laws of the State of New York.",
+            "Certain portions were redacted and filed separately with the Commission.",
+            "Rivers and lakes are mapped every spring by the survey team.",
+            "Contact us by e-mail or by tel during office hours.",
+        ] {
+            let f = folded(s);
+            let fl = idx.flags(&f);
+            assert_eq!(fl.cue, cue_folded(&f), "{s}");
+            assert_eq!(fl.boilerplate, boilerplate_folded(&f), "{s}");
+            assert_eq!(fl.definition, definition_folded(&f), "{s}");
+            assert_eq!(fl.contact, contactish_folded(&f), "{s}");
+            assert_eq!(fl.filler, filler_folded(&f), "{s}");
+        }
     }
 }
