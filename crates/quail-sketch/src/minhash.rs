@@ -31,7 +31,7 @@
 //! signature: too short to judge.
 
 use quail_text::fold::FoldOptions;
-use quail_text::shingle::{hash_bytes, text_shingles};
+use quail_text::shingle::{Shingles, hash_bytes, text_shingles};
 
 use crate::coeffs::{A, B};
 
@@ -160,6 +160,12 @@ impl MinHash {
 /// definition), appended to `out`.
 pub fn shingle_hashes(text: &str, out: &mut Vec<u64>) {
     out.extend(text_shingles(text, SHINGLE_WORDS, &FoldOptions::KEY));
+}
+
+/// [`shingle_hashes`] from the token key hashes of the text (`hash_str` of each folded key,
+/// in order) instead of the text.
+pub(crate) fn shingle_hashes_of_keys(key_hashes: Vec<u64>, out: &mut Vec<u64>) {
+    out.extend(Shingles::from_hashes(key_hashes.into_iter(), SHINGLE_WORDS));
 }
 
 /// MinHash of a text: normalizes it, shingles it and signs the set. `None` without any

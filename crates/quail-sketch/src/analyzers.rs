@@ -3,21 +3,43 @@
 // The analyzers are unit structs; their helpers take `self` for uniformity.
 #![allow(clippy::unused_self)]
 
-use quail_core::{Analyzer, AnalyzerId, Ctx, Document, Emitter, Profile, Raster, Result, Value};
+use quail_core::{
+    Analyzer, AnalyzerId, Artifact, Ctx, Document, Emitter, Profile, Raster, Result, Value,
+};
+use quail_text::NormalizedText;
 use quail_text::fold::FoldOptions;
+use quail_text::shingle::hash_str;
 use quail_text::token::keyed_tokens;
 
 use crate::keys;
-use crate::minhash::{MIN_SHINGLES, MinHash, shingle_hashes};
-use crate::text::document_text;
+use crate::minhash::{MIN_SHINGLES, MinHash, shingle_hashes_of_keys};
+use crate::text::{DocText, raw_text};
 use crate::{invoice, layout, phash, sada, simhash, template};
 
 fn int(n: usize) -> Value {
     Value::Int(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
+/// Soft ordering of the analyzers that read the best document (OCR text when present).
+const AFTER_REVISED: &[&str] = &["revised_document"];
+/// Same, plus the shared normalized pages of `text.stats`.
+const AFTER_NORMALIZED: &[&str] = &["revised_document", NormalizedText::NAME];
+
+/// The best available document: the revised one (OCR) when present, else the extracted one.
+fn revised<'c>(ctx: &'c Ctx<'_>) -> Option<&'c Document> {
+    ctx.document()
+}
+
+/// The document as extracted (page images and the extractor's OCR flags).
+fn extracted<'c>(ctx: &'c Ctx<'_>) -> Option<&'c Document> {
+    ctx.get::<Document>()
+}
+
 macro_rules! analyzer {
-    ($ty:ident, $name:literal, $version:literal, $profile:expr, $requires:expr) => {
+    (
+        $ty:ident, $name:literal, $version:literal, $profile:expr, $requires:expr,
+        $after:expr, $source:ident
+    ) => {
         impl $ty {
             /// Analyzer id.
             pub const ID: AnalyzerId = AnalyzerId::new($name, $version);
@@ -32,6 +54,10 @@ macro_rules! analyzer {
                 $requires
             }
 
+            fn after(&self) -> &'static [&'static str] {
+                $after
+            }
+
             fn profile(&self) -> Profile {
                 $profile
             }
@@ -41,7 +67,7 @@ macro_rules! analyzer {
             }
 
             fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
-                let Some(doc) = ctx.get::<Document>() else {
+                let Some(doc) = $source(ctx) else {
                     return Ok(());
                 };
                 self.sketch(ctx, doc, out)
@@ -51,11 +77,11 @@ macro_rules! analyzer {
 }
 
 fn has_text(ctx: &Ctx<'_>) -> bool {
-    ctx.get::<Document>()
+    ctx.document()
         .is_some_and(|d| d.pages.iter().any(|p| !p.needs_ocr && !p.text.is_empty()))
 }
 
-/// `sketch.minhash@1`: MinHash signature, LSH band keys and shingle count of the word
+/// `sketch.minhash@2`: MinHash signature, LSH band keys and shingle count of the word
 /// 3-shingles (see [`crate::minhash`]). Emits [`keys::MINHASH`], [`keys::MINHASH_BANDS`],
 /// [`keys::MINHASH_SHINGLES`]; nothing below [`MIN_SHINGLES`] distinct shingles.
 #[derive(Clone, Copy, Debug, Default)]
@@ -64,9 +90,11 @@ pub struct MinHashAnalyzer;
 analyzer!(
     MinHashAnalyzer,
     "sketch.minhash",
-    1,
+    2,
     Profile::Fast,
-    &["document"]
+    &["document"],
+    AFTER_NORMALIZED,
+    revised
 );
 
 impl MinHashAnalyzer {
@@ -75,9 +103,9 @@ impl MinHashAnalyzer {
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
-        let text = document_text(doc, ctx.limits, true, out)?;
+        let text = DocText::read(doc, ctx.get::<NormalizedText>(), ctx.limits, out)?;
         let mut hashes = Vec::new();
-        shingle_hashes(&text, &mut hashes);
+        shingle_hashes_of_keys(text.key_hashes(), &mut hashes);
         out.check_deadline()?;
         let Some(m) = MinHash::from_hashes(&mut hashes) else {
             return Ok(());
@@ -95,7 +123,7 @@ impl MinHashAnalyzer {
     }
 }
 
-/// `sketch.simhash_text@1`: 64-bit SimHash of the weighted word 3-shingles
+/// `sketch.simhash_text@2`: 64-bit SimHash of the weighted word 3-shingles
 /// ([`keys::SIMHASH_TEXT`], see [`crate::simhash`]). Nothing below
 /// [`MIN_SHINGLES`] shingles.
 #[derive(Clone, Copy, Debug, Default)]
@@ -104,9 +132,11 @@ pub struct SimHashText;
 analyzer!(
     SimHashText,
     "sketch.simhash_text",
-    1,
+    2,
     Profile::Fast,
-    &["document"]
+    &["document"],
+    AFTER_NORMALIZED,
+    revised
 );
 
 impl SimHashText {
@@ -115,8 +145,10 @@ impl SimHashText {
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
-        let text = document_text(doc, ctx.limits, true, out)?;
-        if let Some((h, n)) = simhash::text_simhash(&text)
+        let text = DocText::read(doc, ctx.get::<NormalizedText>(), ctx.limits, out)?;
+        let mut hashes = Vec::new();
+        shingle_hashes_of_keys(text.key_hashes(), &mut hashes);
+        if let Some((h, n)) = simhash::shingles_simhash(hashes)
             && n >= MIN_SHINGLES
         {
             out.fact(keys::SIMHASH_TEXT, Value::U64(h));
@@ -128,7 +160,7 @@ impl SimHashText {
 /// Fewest distinct masked words for a template sketch.
 const MIN_TEMPLATE_WORDS: usize = 20;
 
-/// `sketch.simhash_template@1`: SimHash of the entity-masked words
+/// `sketch.simhash_template@2`: SimHash of the entity-masked words
 /// ([`keys::SIMHASH_TEMPLATE`], see [`crate::template`]). Nothing below 20 distinct masked
 /// words.
 #[derive(Clone, Copy, Debug, Default)]
@@ -137,9 +169,11 @@ pub struct SimHashTemplate;
 analyzer!(
     SimHashTemplate,
     "sketch.simhash_template",
-    1,
+    2,
     Profile::Fast,
-    &["document"]
+    &["document"],
+    AFTER_NORMALIZED,
+    revised
 );
 
 impl SimHashTemplate {
@@ -148,8 +182,13 @@ impl SimHashTemplate {
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
-        let text = document_text(doc, ctx.limits, true, out)?;
-        if let Some((h, n)) = template::template_simhash(&text)
+        let text = DocText::read(doc, ctx.get::<NormalizedText>(), ctx.limits, out)?;
+        let mut hashes = Vec::new();
+        let mut masker = template::Masker::new();
+        text.for_each_keyed(|token, key, gap| {
+            hashes.push(hash_str(&masker.mask(token, key, gap)));
+        });
+        if let Some((h, n)) = template::masked_simhash(hashes)
             && n >= MIN_TEMPLATE_WORDS
         {
             out.fact(keys::SIMHASH_TEMPLATE, Value::U64(h));
@@ -158,7 +197,7 @@ impl SimHashTemplate {
     }
 }
 
-/// `sketch.layout@1`: geometry sketch ([`keys::LAYOUT`], [`keys::LAYOUT_BLOCKS`]) for
+/// `sketch.layout@2`: geometry sketch ([`keys::LAYOUT`], [`keys::LAYOUT_BLOCKS`]) for
 /// documents with block boxes, block-structure sketch ([`keys::STRUCTURE`]) and heading
 /// skeleton ([`keys::HEADINGS`]) for any document with blocks (see [`crate::layout`]). Reads
 /// no text except headings.
@@ -168,15 +207,17 @@ pub struct LayoutAnalyzer;
 analyzer!(
     LayoutAnalyzer,
     "sketch.layout",
-    1,
+    2,
     Profile::Fast,
-    &["document"]
+    &["document"],
+    AFTER_REVISED,
+    revised
 );
 
 impl LayoutAnalyzer {
     #[allow(clippy::unused_self)]
     fn applies_to(self, ctx: &Ctx<'_>) -> bool {
-        ctx.get::<Document>()
+        ctx.document()
             .is_some_and(|d| d.pages.iter().any(|p| !p.blocks.is_empty()))
     }
 
@@ -201,7 +242,7 @@ impl LayoutAnalyzer {
     }
 }
 
-/// `sketch.invoice_layout@1`: the invoice layout fingerprint ([`keys::INVOICE_LAYOUT`],
+/// `sketch.invoice_layout@2`: the invoice layout fingerprint ([`keys::INVOICE_LAYOUT`],
 /// [`keys::INVOICE_LABELS`], [`keys::INVOICE_NUMBER_PATTERNS`]; see [`crate::invoice`]),
 /// emitted when at least one invoice label occurs. Use the label count to decide whether the
 /// document is an invoice at all.
@@ -211,9 +252,11 @@ pub struct InvoiceLayout;
 analyzer!(
     InvoiceLayout,
     "sketch.invoice_layout",
-    1,
+    2,
     Profile::Fast,
-    &["document"]
+    &["document"],
+    AFTER_REVISED,
+    revised
 );
 
 impl InvoiceLayout {
@@ -222,7 +265,7 @@ impl InvoiceLayout {
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
-        let text = document_text(doc, ctx.limits, false, out)?;
+        let text = raw_text(doc, ctx.limits, out)?;
         match invoice::features(&text) {
             Ok(f) if !f.labels.is_empty() => {
                 out.fact(keys::INVOICE_LAYOUT, Value::U64(f.fingerprint()));
@@ -239,12 +282,20 @@ impl InvoiceLayout {
 /// Fewest characters of folded words for a text key.
 const MIN_TEXT_KEY_CHARS: usize = 400;
 
-/// `sketch.text_key@1`: XXH3-128 of the folded words joined by one space
+/// `sketch.text_key@2`: XXH3-128 of the folded words joined by one space
 /// ([`keys::TEXT_KEY`]): equal keys, the same words. Nothing below 400 characters.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TextKey;
 
-analyzer!(TextKey, "sketch.text_key", 1, Profile::Fast, &["document"]);
+analyzer!(
+    TextKey,
+    "sketch.text_key",
+    2,
+    Profile::Fast,
+    &["document"],
+    AFTER_NORMALIZED,
+    revised
+);
 
 impl TextKey {
     fn applies_to(self, ctx: &Ctx<'_>) -> bool {
@@ -252,8 +303,10 @@ impl TextKey {
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
-        let text = document_text(doc, ctx.limits, true, out)?;
-        if let Some(k) = text_key(&text) {
+        let text = DocText::read(doc, ctx.get::<NormalizedText>(), ctx.limits, out)?;
+        let mut joined = String::new();
+        text.for_each_key(|key| join_key(&mut joined, key));
+        if let Some(k) = text_key_of_joined(&joined) {
             out.fact(keys::TEXT_KEY, Value::Bytes(k.to_vec().into()));
         }
         Ok(())
@@ -266,18 +319,28 @@ pub fn text_key(normalized: &str) -> Option<[u8; 16]> {
     let mut joined = String::with_capacity(normalized.len());
     let mut it = keyed_tokens(normalized, &FoldOptions::KEY);
     while let Some(t) = it.next_keyed() {
-        if !joined.is_empty() {
-            joined.push(' ');
-        }
-        joined.push_str(t.key);
+        join_key(&mut joined, t.key);
     }
+    text_key_of_joined(&joined)
+}
+
+/// Appends a folded key to the words joined by one space.
+fn join_key(joined: &mut String, key: &str) {
+    if !joined.is_empty() {
+        joined.push(' ');
+    }
+    joined.push_str(key);
+}
+
+/// [`text_key`] of the folded words joined by one space.
+fn text_key_of_joined(joined: &str) -> Option<[u8; 16]> {
     (joined.chars().count() >= MIN_TEXT_KEY_CHARS).then(|| {
         xxhash_rust::xxh3::xxh3_128_with_seed(joined.as_bytes(), quail_text::shingle::SEED)
             .to_be_bytes()
     })
 }
 
-/// `sketch.minhash_sada@1`: the Python-compatible sketches of [`crate::sada`]: version
+/// `sketch.minhash_sada@2`: the Python-compatible sketches of [`crate::sada`]: version
 /// signature [`keys::SADA_MINHASH`] with its buckets [`keys::SADA_MINHASH_BANDS`] and
 /// [`keys::SADA_SHINGLES`] (nothing below 40 shingles), and the template fingerprint
 /// [`keys::SADA_TEMPLATE`]. Reads the text as extracted (not normalized), as the original.
@@ -290,9 +353,11 @@ pub struct SadaMinHash;
 analyzer!(
     SadaMinHash,
     "sketch.minhash_sada",
-    1,
+    2,
     Profile::Standard,
-    &["document"]
+    &["document"],
+    AFTER_REVISED,
+    revised
 );
 
 impl SadaMinHash {
@@ -301,7 +366,7 @@ impl SadaMinHash {
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
-        let text = document_text(doc, ctx.limits, false, out)?;
+        let text = raw_text(doc, ctx.limits, out)?;
         if let Some((sig, n)) = sada::raw_minhash(&text) {
             let bytes: Vec<u8> = sig.iter().flat_map(|r| r.to_le_bytes()).collect();
             out.fact(keys::SADA_MINHASH, Value::Bytes(bytes.into()));
@@ -344,7 +409,9 @@ analyzer!(
     "sketch.page_phash",
     1,
     Profile::Standard,
-    &["document", "raster"]
+    &["document", "raster"],
+    &[],
+    extracted
 );
 
 impl PagePHash {
