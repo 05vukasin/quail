@@ -17,11 +17,10 @@ original script; a non-English subject sentence is quoted and marked with its la
 | `summary.extractive@2` (`SummaryExtractive`) | Fast | same | `summary.extractive`, `summary.subject` |
 | `summary.llm@1` (`SummaryLlm`, feature `llm`) | Deep, opt-in | same | `summary.llm` |
 
-**Ordering.** They read `ctx.facts`, so they must run after every fact producer. The engine
-orders analyzers only by artifacts and keeps registration order among equals; the fact producers
-provide no artifacts. The summary steps therefore declare `after` on every artifact a workspace
-step provides (`AFTER`) and must be **registered last** (`tests/engine.rs` checks the plan). A
-core "finalizer" flag that makes this explicit is requested in the PR.
+**Ordering.** They read `ctx.facts`, so they must run after every fact producer. All three are
+finalizers (`Analyzer::finalizer`): the engine runs them after every non-finalizer step,
+whatever the registration order. They also declare `after` on every artifact a workspace step
+provides (`AFTER`), so they see OCR text when OCR is active (`tests/engine.rs` checks the plan).
 
 ## Keys
 

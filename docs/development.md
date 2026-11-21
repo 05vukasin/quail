@@ -1,23 +1,35 @@
 # Development
 
-How quail is built, and the rules every change follows. They exist so that many people (and
-coding agents) can work in parallel without stepping on each other.
+How quail is built, and the rules every change follows. They exist so that many people can
+work on it in parallel without stepping on each other.
 
 ## Layout
 
 ```
 crates/
   quail-core     the contract: types and traits only. Every crate depends on it.
-  quail-hash     identity: digests, content-defined chunks          namespace hash.*
-  quail-text     text utilities + text-level analyzers              namespace text.*
-  quail-pdf      PDF extractor                                      namespace pdf.*
-  quail-docx     DOCX extractor                                     namespace docx.*
-  quail-engine   format sniffing, DAG, limits, panics, parallelism  namespace engine.*
-  quail-io       sources (filesystem) and sinks (JSONL)
+  quail-engine   format sniffing, DAG, limits, panics, parallelism, dedup   namespace engine.*
+  quail-hash     identity: digests, content-defined chunks                  namespace hash.*
+  quail-pdf      PDF extractor (vendored, hardened hayro)                   namespace pdf.*
+  quail-docx     DOCX extractor                                             namespace docx.*
+  quail-text     text utilities + text-level analyzers                      namespace text.*
+  quail-signals  identifiers, dates, amounts, contacts                      namespace signal.*
+  quail-refs     own numbers, cited documents, titles, instrument kind      namespace ref.*
+  quail-parties  company and role candidates                                namespace party.*
+  quail-clauses  governing law, term, notice, survival, termination         namespace clause.*
+  quail-items    price lines with CPV categories                            namespace item.*
+  quail-sketch   similarity sketches                                        namespace sketch.*
+  quail-summary  file card, extractive and optional LLM summary             namespace summary.*
+  quail-ocr      OCR of pages without a text layer (optional backend)       namespace ocr.*
+  quail-io       sources (filesystem, manifest) and sinks (JSONL)
+  quail-worker   process isolation (supervisor, workers, rlimits, watchdog)
   quail-cli      the `quail` binary (wires everything)
+  quail-eval     evaluation harness and the `quail-eval` binary
+  quail-fuzz     stable-Rust mutation fuzzer
+vendor/          patched third-party crates (see "Vendored crates" below)
 assets/          logo
 docs/            documentation
-tools/           scripts (dataset fetchers, model fetchers)
+tools/           scripts (dataset fetchers, CPV index, key reference)
 ```
 
 ## Dependency rules
@@ -26,8 +38,9 @@ tools/           scripts (dataset fetchers, model fetchers)
 - A leaf crate (hash, text, pdf, docx, io, ...) depends on `quail-core` and, when it needs
   text utilities, on `quail-text`. Never on another leaf crate.
 - Only `quail-engine` and `quail-cli` know concrete extractors and analyzers.
-- A crate that pulls a native library (PDFium, ONNX Runtime) puts it behind a cargo feature,
-  so the default build is pure Rust and builds anywhere `cargo build` does.
+- A crate that pulls a native library (ONNX Runtime, llama.cpp, the C zstd library) puts it
+  behind a cargo feature, so the default build is pure Rust and builds anywhere `cargo build`
+  does.
 
 ## Ownership rules
 
@@ -76,6 +89,8 @@ tools/           scripts (dataset fetchers, model fetchers)
 - Unit tests build their inputs in code (generated PDFs/DOCX, synthetic text). No real
   documents in the repository, ever: corpora live outside it (`../testdata`).
 - Tests that need a corpus read its path from `QUAIL_TESTDATA` and skip when it is unset.
+- Public benchmark datasets are fetched with the scripts in `tools/datasets/` (see its
+  README); they are never committed.
 
 ## Workflow
 
@@ -83,3 +98,91 @@ tools/           scripts (dataset fetchers, model fetchers)
 2. Keep `make check` green (fmt, clippy with `-D warnings`, tests).
 3. Open a pull request: what changed, which keys and analyzer ids were added, measured numbers.
 4. Review, then squash-merge. `Cargo.lock` conflicts are resolved by the merger.
+
+On a shared or small machine, `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0` keeps memory and the
+size of `target/` down.
+
+### Adding or changing a fact key
+
+1. Declare it in the crate's `keys` module with a doc comment: the first paragraph is the
+   one-line documentation `quail keys` prints.
+2. Regenerate the CLI's key table and the reference page:
+
+   ```sh
+   python3 crates/quail-cli/tools/genkeys.py && cargo fmt -p quail-cli
+   make keys
+   ```
+
+   `make keys` builds the CLI and rewrites [keys.md](keys.md) from `quail keys --json`;
+   `make keys-check` fails when the page is out of date. A unit test in `quail-cli` fails when a
+   crate declares a key that the table does not document.
+3. Bump the analyzer's version if existing output changes.
+
+## Evaluation gate
+
+Any change that can move a quality number (rules, dictionaries, models, extraction) comes with
+a before/after comparison on the public dev splits ([evaluation.md](evaluation.md)):
+
+```sh
+quail scan --manifest kleister-nda.dev.manifest --sorted -o before.jsonl   # on master
+quail scan --manifest kleister-nda.dev.manifest --sorted -o after.jsonl    # on the branch
+quail-eval score --records before.jsonl --gold ~/quail-gold --label before --quiet
+quail-eval score --records after.jsonl  --gold ~/quail-gold --label after --quiet
+quail-eval compare eval/runs/before/scoreboard.json eval/runs/after/scoreboard.json --max-f1-drop 1.0
+```
+
+- `compare` exits 1 when any task's F1 drops by more than the threshold or failed records
+  rise, and 2 when the two scoreboards were scored on different gold. A PR with exit 1
+  explains the drop or does not merge.
+- Paste `report.md` and the `compare` output into the PR. Both contain aggregates and BLAKE3
+  prefixes only, never document text, so they are safe to publish even for a private corpus.
+- Score `dev` only. The holdout (`--allow-holdout`) is for releases; tuning against it makes
+  it worthless.
+- Look at the files: `quail-eval inspect --where mismatch` shows the page text with every
+  fact's evidence marked, next to the gold.
+
+## Fuzzing
+
+`quail-fuzz` runs the whole pipeline on mutated inputs, each case in a child process with
+memory, CPU and wall-clock limits ([security.md](security.md#how-it-is-tested)). Build it with
+the `fuzz` profile (optimized, with debug assertions and overflow checks on):
+
+```sh
+cargo build --profile fuzz -p quail-fuzz
+B=target/fuzz/quail-fuzz
+$B fuzz --out ../fuzz-out --jobs 2 --time 3600 --seed 1    # or --iterations N
+$B run ../fuzz-out/crashes/*-min.*                         # re-classify saved findings
+$B exec FILE                                               # in-process, e.g. under gdb
+$B minimize FILE OUT
+$B seeds DIR                                               # write the generated seeds
+```
+
+- Each new crash signature (`class@where`, e.g. `stack-overflow@docx.extract@1`) is saved under
+  `<out>/crashes/` with a minimized copy and a line in `crashes/summary.tsv`.
+- A fix comes with a regression test that builds the minimized input in code (the
+  `tests/hostile.rs` suites of `quail-pdf` and `quail-docx`), not with the file itself.
+- Run the fuzzer for at least an hour on any change to an extractor, a decoder or the
+  vendored crates, and report the iterations and findings in the PR.
+- Child-process limits are Unix-only; CPU limits and peak-RSS measurement are Linux-only.
+
+## Vendored crates
+
+`vendor/` holds copies of published crates with small patches: the hayro PDF crates
+(hardening against hostile PDFs) and lingua (speed, identical output). The root `Cargo.toml`
+routes their crates.io versions there with `[patch.crates-io]`; they are not workspace members,
+so workspace lints and `cargo fmt` do not apply to them.
+
+- **Only when a caller cannot fix it from outside.** Vendor a crate only for a problem that must
+  be solved inside it: an allocation that has to be refused before it happens, a recursion that
+  overflows the stack, a hot loop. Prefer an upstream fix; send the patch upstream too.
+- **Pin the exact version** in the crate that uses it (`hayro = "=0.9.0"`), so the patches
+  always apply to the code they were written for.
+- **Mark every change** with a `// quail:` comment and describe it in `vendor/README.md`,
+  file by file.
+- **No change in output unless it is the point.** A speed patch must leave records
+  byte-identical: compare `quail scan` records, minus `timings`, before and after on a corpus,
+  at `-j1` and `-j4`.
+- **Updating to a new upstream version:** copy the new sources over the directory, re-apply
+  every `// quail:` change, run `cargo test -p quail-pdf` (its `tests/hostile.rs` regenerates
+  the hostile inputs and fails if any gets through) or `cargo test -p quail-text` for lingua,
+  and compare records as above.
