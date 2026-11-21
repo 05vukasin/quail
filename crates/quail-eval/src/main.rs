@@ -149,7 +149,7 @@ enum Cmd {
     },
     /// Convert a public dataset into gold files.
     Convert {
-        /// Adapter: kleister-nda or cuad.
+        /// Adapter: kleister-nda, cuad or realkie-fcc.
         #[arg(long)]
         adapter: String,
         /// Dataset root (default: $QUAIL_TESTDATA/<adapter>).
