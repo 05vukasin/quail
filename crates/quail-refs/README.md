@@ -93,6 +93,10 @@ Latin, punctuation dropped, line breaks kept), so one pattern covers "UGOVOR", "
 "ugovor". Patterns are `regex` automata over the key line (linear time); values are read from the
 normalized text. Pages 1–2 are prepared first (title, instrument kind), the rest one at a time.
 
+The normalization, offset map and keyed tokens of a page come from `text.stats`'s
+`normalized_text` artifact when it has the page and the page is read whole (soft
+`after(["normalized_text"])`); otherwise the analyzer computes them itself, with the same result.
+
 ## Limits
 
 - Reads at most `Limits::max_text_bytes` of text (problem when it stops), checks the deadline per

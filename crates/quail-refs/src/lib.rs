@@ -58,6 +58,11 @@
 //! covers "UGOVOR", "Ugovor", "Уговор" and "ugovor". Patterns are `regex` automata over the key
 //! line (linear time); values are read from the normalized text, evidence is mapped back to
 //! the original page text (with the block's zone and box).
+//!
+//! The normalized page, its offset map and its keyed tokens are taken from `text.stats`'s
+//! `normalized_text` artifact ([`quail_text::NormalizedText`]) when it holds the page and the
+//! page is read whole (the analyzer declares a soft `after(&["normalized_text"])`); else they
+//! are computed here. The output is the same either way.
 
 // Token indices are `a`/`b` (first/last token) and `i`/`j` throughout, by design.
 #![allow(clippy::many_single_char_names)]

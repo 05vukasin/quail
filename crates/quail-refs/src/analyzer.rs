@@ -1,8 +1,10 @@
-//! `ref.references@1`.
+//! `ref.references@2`.
 
 use quail_core::{
-    Analyzer, AnalyzerId, Ctx, Date, Document, Emitter, Evidence, Profile, Result, Value,
+    Analyzer, AnalyzerId, Artifact, Ctx, Date, Document, Emitter, Evidence, Page, Profile, Result,
+    Value,
 };
+use quail_text::{NormalizedPage, NormalizedText};
 
 use crate::keys;
 use crate::kind::{Kind, Relation, record};
@@ -61,7 +63,7 @@ impl Analyzer for RefAnalyzer {
     }
 
     fn after(&self) -> &'static [&'static str] {
-        &["revised_document"]
+        &["revised_document", NormalizedText::NAME]
     }
 
     fn profile(&self) -> Profile {
@@ -73,8 +75,21 @@ impl Analyzer for RefAnalyzer {
             return Ok(());
         };
         let budget = usize::try_from(ctx.limits.max_text_bytes).unwrap_or(usize::MAX);
-        run_document(&self.pats, doc, budget, out)
+        run_document(&self.pats, doc, ctx.get::<NormalizedText>(), budget, out)
     }
+}
+
+/// The shared normalized page at position `pos` when `text` is the whole page.
+fn whole<'a>(
+    shared: Option<&'a NormalizedText>,
+    pos: usize,
+    page: &Page,
+    text: &str,
+) -> Option<&'a NormalizedPage> {
+    if text.len() != page.text.len() {
+        return None;
+    }
+    shared?.page(pos, &page.text)
 }
 
 fn within(text: &str, budget: usize) -> &str {
@@ -119,12 +134,18 @@ struct Acc {
     capped: [bool; 5],
 }
 
-fn run_document(p: &Patterns, doc: &Document, mut budget: usize, out: &mut Emitter) -> Result<()> {
+fn run_document(
+    p: &Patterns,
+    doc: &Document,
+    shared: Option<&NormalizedText>,
+    mut budget: usize,
+    out: &mut Emitter,
+) -> Result<()> {
     // The first two pages are prepared first: they hold the title, which decides how every
     // number is read (own or cited). Later pages are prepared one at a time.
     let mut first: Vec<Prepared<'_>> = Vec::new();
     let mut stopped = None;
-    for page in doc.pages.iter().take(2) {
+    for (pos, page) in doc.pages.iter().enumerate().take(2) {
         out.check_deadline()?;
         if page.needs_ocr {
             continue;
@@ -138,7 +159,7 @@ fn run_document(p: &Patterns, doc: &Document, mut budget: usize, out: &mut Emitt
         if text.len() < page.text.len() {
             stopped = Some(page.index);
         }
-        first.push(Prepared::new(page, text));
+        first.push(Prepared::new(page, text, whole(shared, pos, page, text)));
     }
     let title = title::find(p, &first);
     let mut acc = Acc::default();
@@ -189,7 +210,7 @@ fn run_document(p: &Patterns, doc: &Document, mut budget: usize, out: &mut Emitt
     }
     drop(first);
     if stopped.is_none() {
-        for page in doc.pages.iter().skip(2) {
+        for (pos, page) in doc.pages.iter().enumerate().skip(2) {
             out.check_deadline()?;
             if page.needs_ocr {
                 continue;
@@ -203,7 +224,7 @@ fn run_document(p: &Patterns, doc: &Document, mut budget: usize, out: &mut Emitt
             if text.len() < page.text.len() {
                 stopped = Some(page.index);
             }
-            let pp = Prepared::new(page, text);
+            let pp = Prepared::new(page, text, whole(shared, pos, page, text));
             let ms = mentions(p, &pp);
             page_pass(p, &pp, &ms, &ctx, &mut acc, out);
         }
