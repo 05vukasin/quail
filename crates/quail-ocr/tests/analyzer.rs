@@ -247,7 +247,7 @@ fn contract() {
     let a = OcrPages::unavailable("x");
     assert_eq!(a.id().to_string(), "ocr.pages@1");
     assert_eq!(a.requires(), &["document", "raster"]);
-    assert_eq!(a.provides(), &["ocr_text"]);
+    assert_eq!(a.provides(), &["ocr_text", "revised_document"]);
     assert_eq!(a.profile(), Profile::Deep);
     assert!(!a.is_available());
 }
@@ -301,6 +301,18 @@ fn scan_uses_embedded_image_and_render_retries_at_300() {
         .get::<OcrText>()
         .unwrap_or_else(|| panic!("no ocr_text"));
     assert_eq!(t.pages.len(), 2);
+    // The revised document carries the OCR text for consumers (`Ctx::document`).
+    let revised = out
+        .artifacts
+        .get::<quail_core::RevisedDocument>()
+        .unwrap_or_else(|| panic!("no revised_document"));
+    assert!(
+        revised
+            .0
+            .pages
+            .iter()
+            .any(|p| p.text.contains("Ugovor br. 7"))
+    );
     let p0 = &t.pages[0];
     assert_eq!(p0.source, PixelSource::EmbeddedScan);
     assert!((p0.dpi - 300.0).abs() < 1.0);

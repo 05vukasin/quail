@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use quail_core::{
     Analyzer, AnalyzerId, Ctx, Document, Emitter, Error, Evidence, Image, Limits, Page, PageKind,
-    PageRaster, Profile, Raster, Result, Value,
+    PageRaster, Profile, Raster, Result, RevisedDocument, Value,
 };
 
 use crate::cache::{CacheKey, OcrCache};
@@ -161,7 +161,7 @@ impl Analyzer for OcrPages {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["ocr_text"]
+        &["ocr_text", "revised_document"]
     }
 
     fn profile(&self) -> Profile {
@@ -223,10 +223,15 @@ impl Analyzer for OcrPages {
             }
         }
         emit(&pages, out);
-        out.provide(OcrText {
+        let ocr = OcrText {
             engine: pool.id().short(),
             pages,
-        });
+        };
+        if !ocr.pages.is_empty() {
+            // Text consumers read it through `Ctx::document()` (they run `after` it).
+            out.provide(RevisedDocument(ocr.apply_to(doc)));
+        }
+        out.provide(ocr);
         Ok(())
     }
 }
