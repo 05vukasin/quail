@@ -2,7 +2,7 @@
 //! its start, often in capitals), else the largest line, else a short upper-case line; then the
 //! instrument kind and ordinal it names.
 
-use quail_core::BlockKind;
+use quail_core::{BBox, BlockKind};
 
 use crate::kind::Kind;
 use crate::patterns::{Patterns, ordinal_word, roman};
@@ -117,6 +117,7 @@ fn find_on(p: &Patterns, pp: &Prepared<'_>, pi: usize) -> Option<Title> {
     }
     let c = best?;
     let (a, b) = join(pp, &lines, c.a, c.b);
+    let (a, b) = join_split(p, pp, &lines, &heights, (a, b), c.b);
     let text = title_text(pp, a, b);
     if text.is_empty() {
         return None;
@@ -133,7 +134,7 @@ fn find_on(p: &Patterns, pp: &Prepared<'_>, pi: usize) -> Option<Title> {
             } else {
                 k
             };
-            let near_start = s - a <= 3;
+            let near_start = s.saturating_sub(c.a) <= 3;
             Some((
                 k,
                 if near_start {
@@ -245,7 +246,12 @@ fn candidate(
         // "Prvobitna vrednost ugovora", "Уговорена вредност": a field label naming a
         // contract in an oblique case is no title unless the line is set in capitals.
         let oblique = pos > 0 && upper < 0.8 && !heading && oblique_case(pp.key(s));
-        !field_before(s) && !oblique && (pos <= 3 || (n <= 10 && (upper >= 0.8 || heading)))
+        // "Garden Design, Planting and Upkeep Agreement": a short title-case line that
+        // ends on its noun names the instrument however long its modifiers are.
+        let ends_on_noun = n <= 8 && HEAD_NOUNS.contains(&pp.key(b)) && title_case(pp, a, b);
+        !field_before(s)
+            && !oblique
+            && (pos <= 3 || (n <= 10 && (upper >= 0.8 || heading)) || ends_on_noun)
     });
     if in_header && !(pp.page.index == 0 && kind_at == Some(a) && upper >= 0.8) {
         return None;
@@ -358,6 +364,256 @@ fn join(pp: &Prepared<'_>, lines: &[(usize, usize)], a: usize, b: usize) -> (usi
         end = nb;
     }
     (a, end)
+}
+
+/// Nouns a title ends on: the head of "MASTER SERVICES AGREEMENT", "SUPPLY CONTRACT".
+const HEAD_NOUNS: &[&str] = &[
+    "agreement",
+    "agreements",
+    "contract",
+    "license",
+    "licence",
+    "lease",
+    "plan",
+    "addendum",
+    "amendment",
+    "memorandum",
+    "understanding",
+    "deed",
+    "guarantee",
+    "guaranty",
+    "order",
+    "ugovor",
+    "sporazum",
+];
+
+/// Words of a company name's legal form: a line holding one is a party, not a title.
+const LEGAL_FORMS: &[&str] = &[
+    "inc",
+    "incorporated",
+    "corp",
+    "corporation",
+    "llc",
+    "ltd",
+    "limited",
+    "plc",
+    "gmbh",
+    "company",
+    "co",
+    "lp",
+    "llp",
+    "doo",
+    "d.o.o",
+    "ad",
+    "a.d",
+    "s.a",
+    "b.v",
+    "n.v",
+    "dba",
+];
+
+/// Words of a sentence running on into the title line ("... LISTED ON SCHEDULE A" /
+/// "HERETO").
+const RUN_ON_WORDS: &[&str] = &["hereto", "hereof", "herein", "hereunder", "thereto"];
+
+/// Lines of a split title joined before the line that names the kind.
+const MAX_LINES_BEFORE: usize = 2;
+/// Tokens of one line of a split title.
+const MAX_SPLIT_TOKENS: usize = 8;
+
+/// Joins a title split over short lines in the same style: the lines before a tail line
+/// that ends on its noun ("WIDGET POLISHING" / "OUTSOURCING AGREEMENT", "THIRD AMENDED AND
+/// RESTATED" / "EXCLUSIVE BROKERAGE AND" / "LOGISTICS AGREEMENT"), and the line after a head
+/// line that breaks after its link ("AMENDMENT NO. 4 TO THE NONEXCLUSIVE" / "GADGET
+/// RESELLER AGREEMENT"). A party line (a legal form), a field, a label, an exhibit tag or prose never
+/// joins. `first_end` is the end of the line the title was found on.
+fn join_split(
+    p: &Patterns,
+    pp: &Prepared<'_>,
+    lines: &[(usize, usize)],
+    heights: &[Option<f32>],
+    (a, b): (usize, usize),
+    first_end: usize,
+) -> (usize, usize) {
+    let Some(li) = lines.iter().position(|&(x, _)| x == a) else {
+        return (a, b);
+    };
+    let Some(style) = split_style(pp, lines[li], heights.get(li).copied().flatten()) else {
+        return (a, b);
+    };
+    let mut start = a;
+    // Before: the found line must end on its head noun.
+    if HEAD_NOUNS.contains(&pp.key(first_end)) && kind_in(p, pp, a, first_end).is_some() {
+        for k in 1..=MAX_LINES_BEFORE {
+            let Some(&(pa, pb)) = li.checked_sub(k).and_then(|i| lines.get(i)) else {
+                break;
+            };
+            let h = heights.get(li - k).copied().flatten();
+            if !split_line(pp, pa, pb) || split_style(pp, (pa, pb), h) != Some(style) {
+                break;
+            }
+            // A line naming its own instrument is a title of its own, not a modifier.
+            if kind_in(p, pp, pa, pb).is_some_and(|(_, s)| s == pa) {
+                break;
+            }
+            if !same_zone(pp, pa, a) || !stacked(pp, pa, start) {
+                break;
+            }
+            start = pa;
+        }
+    }
+    // After: the found line links on (`... TO THE NONEXCLUSIVE`) and the next ends on a noun.
+    let mut end = b;
+    let linked = (a..=b).any(|i| matches!(pp.key(i), "to" | "uz"));
+    if start == a
+        && b == first_end
+        && linked
+        && !HEAD_NOUNS.contains(&pp.key(b))
+        && let Some(&(na, nb)) = lines.get(li + 1)
+    {
+        let h = heights.get(li + 1).copied().flatten();
+        if split_line(pp, na, nb)
+            && split_style(pp, (na, nb), h) == Some(style)
+            && HEAD_NOUNS.contains(&pp.key(nb))
+            && same_zone(pp, na, a)
+            && stacked(pp, a, na)
+        {
+            end = nb;
+        }
+    }
+    (start, end)
+}
+
+/// The style of a split-title line: `Some(true)` set in capitals, `Some(false)` large type
+/// (its height when known), `None` neither (body text does not join).
+fn split_style(pp: &Prepared<'_>, (a, b): (usize, usize), height: Option<f32>) -> Option<bool> {
+    let text = pp.norm.get(pp.toks[a].ns..pp.toks[b].ne)?;
+    if upper_ratio(text) >= 0.8 {
+        return Some(true);
+    }
+    let src = pp.source_span(pp.toks[a].ns, pp.toks[a].ne);
+    let heading = pp.block_at(src.start).is_some_and(|bl| {
+        matches!(bl.kind, BlockKind::Heading { .. }) || bl.zone == quail_core::Zone::Title
+    });
+    (heading && height.is_some()).then_some(false)
+}
+
+/// Can line `a..=b` be one line of a split title? Short, words only (no field, label,
+/// number, exhibit tag, party, prose or note).
+fn split_line(pp: &Prepared<'_>, a: usize, b: usize) -> bool {
+    if b - a + 1 > MAX_SPLIT_TOKENS {
+        return false;
+    }
+    let Some(keys) = pp.keys.get(pp.toks[a].ks..pp.toks[b].ke) else {
+        return false;
+    };
+    // The whole line, with the punctuation around its tokens (`DENOTED WITH "***"`).
+    let start = pp
+        .norm
+        .get(..pp.toks[a].ns)
+        .map_or(0, |s| s.rfind('\n').map_or(0, |i| i + 1));
+    let end = pp.norm.get(pp.toks[b].ne..).map_or(pp.toks[b].ne, |s| {
+        pp.toks[b].ne + s.find('\n').unwrap_or(s.len())
+    });
+    let Some(text) = pp.norm.get(start..end) else {
+        return false;
+    };
+    let words_only = text.chars().all(|c| {
+        c.is_alphanumeric()
+            || c.is_whitespace()
+            || matches!(c, ',' | '&' | '-' | '\'' | '’' | '®' | '/')
+    });
+    let alphabetic = text.chars().filter(|c| c.is_alphabetic()).count() >= 3;
+    let first = pp.key(a);
+    words_only
+        && alphabetic
+        && !NOT_TITLES.contains(&keys)
+        && !keys.starts_with("exhibit")
+        && !keys.starts_with("schedule")
+        && !keys.starts_with("annex")
+        && !keys.starts_with("appendix")
+        && !first.starts_with(|c: char| c.is_ascii_digit())
+        && !PROSE_START.contains(&first)
+        && (a..=b).all(|i| {
+            let k = pp.key(i);
+            !PROSE_WORDS.contains(&k) && !LEGAL_FORMS.contains(&k) && !RUN_ON_WORDS.contains(&k)
+        })
+}
+
+/// Small words a title-case line keeps in lower case.
+const SMALL_WORDS: &[&str] = &[
+    "and", "of", "for", "the", "to", "on", "in", "a", "an", "or", "with", "by", "i", "o", "za",
+    "na", "u", "sa",
+];
+
+/// Is every word of tokens `a..=b` capitalised, small words aside (`Garden Design,
+/// Planting and Upkeep Agreement`)?
+fn title_case(pp: &Prepared<'_>, a: usize, b: usize) -> bool {
+    let mut words = 0;
+    for i in a..=b {
+        let t = pp.text(i);
+        let Some(c) = t.chars().next() else {
+            continue;
+        };
+        if !c.is_alphabetic() {
+            continue;
+        }
+        words += 1;
+        if !c.is_uppercase() && !SMALL_WORDS.contains(&pp.key(i)) {
+            return false;
+        }
+    }
+    words >= 2
+}
+
+/// The box of the visual line holding token `i`: its measured line, else its block when
+/// that is one line; `None` without geometry.
+fn line_box(pp: &Prepared<'_>, i: usize) -> Option<BBox> {
+    let src = pp.source_span(pp.toks[i].ns, pp.toks[i].ne);
+    let block = pp.block_at(src.start)?;
+    if let Some(l) = block
+        .lines
+        .iter()
+        .find(|l| l.span.start <= src.start && src.start < l.span.end.max(l.span.start + 1))
+    {
+        return Some(l.bbox);
+    }
+    let text = block.span.slice(&pp.page.text);
+    if text.trim().contains('\n') {
+        return None;
+    }
+    block.bbox
+}
+
+/// Does the line of token `upper` sit right above the line of token `lower`, as one title
+/// set in lines: no more than half a line of space between them, heights within a factor of
+/// 1.6, and centred on the same axis or flush on the same left edge? A company name
+/// over a gap, `EXECUTION VERSION` in the right margin and a party named far above do not
+/// join. True when either line has no geometry.
+fn stacked(pp: &Prepared<'_>, upper: usize, lower: usize) -> bool {
+    let (Some(u), Some(l)) = (line_box(pp, upper), line_box(pp, lower)) else {
+        return true;
+    };
+    let (hu, hl) = ((u.y1 - u.y0).abs(), (l.y1 - l.y0).abs());
+    let h = hu.max(hl);
+    if h <= 0.0 || hu.min(hl) < h / 1.6 {
+        return false;
+    }
+    let gap = l.y0.min(l.y1) - u.y0.max(u.y1);
+    let centre = |b: &BBox| f32::midpoint(b.x0, b.x1);
+    let width = (u.x1 - u.x0).abs().max((l.x1 - l.x0).abs());
+    let centred = (centre(&u) - centre(&l)).abs() <= (0.05 * width).max(6.0);
+    let flush = (u.x0.min(u.x1) - l.x0.min(l.x1)).abs() <= 3.0;
+    (-0.5 * h..=0.6 * h).contains(&gap) && (centred || flush)
+}
+
+/// Are tokens `x` and `y` in blocks of the same zone?
+fn same_zone(pp: &Prepared<'_>, x: usize, y: usize) -> bool {
+    let zone = |i: usize| {
+        let src = pp.source_span(pp.toks[i].ns, pp.toks[i].ne);
+        pp.block_at(src.start).map(|bl| bl.zone)
+    };
+    zone(x) == zone(y)
 }
 
 fn title_text(pp: &Prepared<'_>, a: usize, b: usize) -> String {

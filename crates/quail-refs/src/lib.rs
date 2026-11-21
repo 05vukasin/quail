@@ -1,7 +1,7 @@
 //! Document references: the candidates a service needs to link documents into contract
 //! families (MSA → SOW / annex / amendment → PO → invoice) and multi-part documents.
 //!
-//! Namespace: `ref.*`. One analyzer, [`RefAnalyzer`] (`ref.references@1`, `Fast`, requires
+//! Namespace: `ref.*`. One analyzer, [`RefAnalyzer`] (`ref.references@3`, `Fast`, requires
 //! `document`). Keys are in [`keys`]; the number rules are in [`number`].
 //!
 //! # What it finds

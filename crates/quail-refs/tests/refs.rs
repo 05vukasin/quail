@@ -810,3 +810,99 @@ fn same_facts_with_the_shared_artifact() {
     assert_eq!(facts_of(&d, &cut, true), facts_of(&d, &cut, false));
     assert!(RefAnalyzer::new().after().contains(&"normalized_text"));
 }
+
+#[test]
+fn title_split_over_short_lines() {
+    for (text, want) in [
+        (
+            "Exhibit 10.4\nWIDGET POLISHING\nOUTSOURCING AGREEMENT\nBetween:\nFoo Corp.",
+            "WIDGET POLISHING OUTSOURCING AGREEMENT",
+        ),
+        (
+            "Exhibit 10.9\nTHIRD AMENDED AND RESTATED\nEXCLUSIVE BROKERAGE AND\nLOGISTICS AGREEMENT\nby and between\nFOO LLC",
+            "THIRD AMENDED AND RESTATED EXCLUSIVE BROKERAGE AND LOGISTICS AGREEMENT",
+        ),
+        (
+            "Exhibit 2.1\nFORM OF\nPATENT LICENSE AGREEMENT\nTHIS PATENT LICENSE AGREEMENT is made",
+            "FORM OF PATENT LICENSE AGREEMENT",
+        ),
+        (
+            "AMENDMENT NO. 4 TO THE NONEXCLUSIVE\nGADGET RESELLER AGREEMENT\nThis Amendment is made",
+            "AMENDMENT NO. 4 TO THE NONEXCLUSIVE GADGET RESELLER AGREEMENT",
+        ),
+        // A party line, an exhibit tag, a note or prose above never joins.
+        (
+            "QUUX INCORPORATED\nMULTI-UNIT\nDISTRIBUTOR AGREEMENT\nThis Agreement",
+            "MULTI-UNIT DISTRIBUTOR AGREEMENT",
+        ),
+        (
+            "PORTIONS DENOTED WITH \"***\"\nHOSTING AGREEMENT\nBETWEEN\nFOO B.V.",
+            "HOSTING AGREEMENT",
+        ),
+        (
+            "Execution Copy\nCONSULTING AGREEMENT\nThis Consulting Agreement is made",
+            "CONSULTING AGREEMENT",
+        ),
+        // A head line that names its own instrument stays the title.
+        (
+            "ADDENDUM TO\nGIZMO PARTNER AGREEMENT\nThis Addendum is made",
+            "ADDENDUM TO GIZMO PARTNER AGREEMENT",
+        ),
+        // Mixed-case body lines do not join.
+        (
+            "Foo Systems and Bar Labs\nSupply Agreement\nThis Agreement is made",
+            "Supply Agreement",
+        ),
+    ] {
+        let f = run(&[text]);
+        assert_eq!(
+            single_text(&f, &keys::TITLE).as_deref(),
+            Some(want),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn split_title_lines_must_stack() {
+    // Line boxes: (y0, x0, x1) per line, 8 pt high.
+    let title = |boxes: [(f32, f32, f32); 3]| {
+        let mut d = doc(&["GIZMO WORKS\nSERVICE AGREEMENT\nThis Agreement is made"]);
+        for (b, (y, x0, x1)) in d.pages[0].blocks.iter_mut().zip(boxes) {
+            b.bbox = Some(quail_core::BBox {
+                x0,
+                y0: y,
+                x1,
+                y1: y + 8.0,
+            });
+        }
+        let mut out = Emitter::new(RefAnalyzer::ID);
+        run_with(d, &Limits::default(), &mut out).unwrap();
+        single_text(&out.into_parts().0, &keys::TITLE)
+    };
+    // Centred, one line apart: one title.
+    assert_eq!(
+        title([
+            (80.0, 250.0, 340.0),
+            (90.0, 240.0, 350.0),
+            (120.0, 72.0, 520.0)
+        ])
+        .as_deref(),
+        Some("GIZMO WORKS SERVICE AGREEMENT")
+    );
+    // A name far above the title, or in the margin, stays out.
+    for boxes in [
+        [
+            (80.0, 250.0, 340.0),
+            (300.0, 240.0, 350.0),
+            (320.0, 72.0, 520.0),
+        ],
+        [
+            (80.0, 480.0, 560.0),
+            (90.0, 240.0, 350.0),
+            (120.0, 72.0, 520.0),
+        ],
+    ] {
+        assert_eq!(title(boxes).as_deref(), Some("SERVICE AGREEMENT"));
+    }
+}
