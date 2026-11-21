@@ -562,3 +562,58 @@ Acme Sample Inc.";
     let v = by_key(&ms, "vertexsample pharmaceuticals")[0];
     assert!(!v.surface.contains('\n'), "{}", v.surface);
 }
+
+/// Facts of `party.candidates` over `doc`, with the `normalized_text` artifact when `shared`.
+fn facts_with_shared(doc: &Document, limits: &Limits, shared: bool) -> Vec<Fact> {
+    let mut artifacts = Artifacts::new();
+    artifacts.insert(doc.clone());
+    if shared {
+        artifacts.insert(quail_text::NormalizedText::of(doc));
+    }
+    let blob = Blob::from(Vec::new());
+    let ctx = Ctx {
+        blob: &blob,
+        format: Format::Pdf,
+        locator: "mem://test",
+        artifacts: &artifacts,
+        facts: &[],
+        limits,
+        profile: Profile::Fast,
+    };
+    let mut out = Emitter::new(PartyCandidates::ID);
+    PartyCandidates.run(&ctx, &mut out).unwrap();
+    out.into_parts().0
+}
+
+#[test]
+fn same_facts_with_the_shared_artifact() {
+    let mut doc = plain(&[
+        "SERVICES AGREEMENT\nThis Agreement is made between Brenwick Dalton Ltd., a company \
+         incorporated in England (\u{201c}Supplier\u{201d}), and Ostvale Pharma GmbH \
+         (the \u{201c}Customer\u{201d}).",
+        "",
+        "Kupac: Zelenkor d.o.o. Beo-\ngrad, PIB 100000001 — prodavac „Marvic Trade“ AD.\n\
+         formerly known as Marvic Holdings plc; www.marvic.example",
+        "IN WITNESS WHEREOF\nBRENWICK DALTON LTD.\nBy: ____\nName: Ana Petrović\nTitle: Director",
+    ]);
+    doc.pages.push(page_of(
+        4,
+        &[
+            ("Ostvale Pharma GmbH", Zone::Header),
+            ("Signed for Ostvale Pharma GmbH", Zone::Body),
+        ],
+    ));
+    let all = facts_with_shared(&doc, &Limits::default(), false);
+    assert!(!all.is_empty());
+    assert_eq!(facts_with_shared(&doc, &Limits::default(), true), all);
+    // A limit that cuts page 2: that page is normalized by the analyzer itself.
+    let cut = Limits {
+        max_text_bytes: 260,
+        ..Limits::default()
+    };
+    assert_eq!(
+        facts_with_shared(&doc, &cut, true),
+        facts_with_shared(&doc, &cut, false)
+    );
+    assert!(PartyCandidates.after().contains(&"normalized_text"));
+}

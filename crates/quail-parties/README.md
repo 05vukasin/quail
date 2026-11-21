@@ -19,7 +19,9 @@ document numbers, references and titles (`quail-refs`).
 ## How it works
 
 Per page, on the normalized text (`quail_text::normalize_mapped`, spans mapped back to the page
-text), tokens with folded keys (`quail_text` fold: Serbian Cyrillic → Latin, no diacritics):
+text), tokens with folded keys (`quail_text` fold: Serbian Cyrillic → Latin, no diacritics).
+Both come from `text.stats`'s `normalized_text` artifact when it holds the page and the page is
+read whole (soft `after(["normalized_text"])`), else they are computed here, with the same result:
 
 1. **Legal forms** anchor a name: `d.o.o.`/`doo`/`DOO`/`д.о.о.`, `a.d.`, `d.d.`, `DOOEL`, `JP`,
    `JKP`, `PR`/`preduzetnik`, `Javno preduzeće`, `Akcionarsko društvo`, `LLC`, `Inc.`, `Corp.`,

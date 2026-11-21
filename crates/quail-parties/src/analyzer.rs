@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 
 use quail_core::{
-    Analyzer, AnalyzerId, Ctx, Document, Emitter, Evidence, Profile, Result, Value, Zone,
+    Analyzer, AnalyzerId, Artifact, Ctx, Document, Emitter, Evidence, Profile, Result, Value, Zone,
 };
+use quail_text::NormalizedText;
 
 use crate::keys;
 use crate::names::{core_key, key_tokens, normalized_key};
@@ -47,7 +48,7 @@ impl Analyzer for PartyCandidates {
     }
 
     fn after(&self) -> &'static [&'static str] {
-        &["revised_document"]
+        &["revised_document", NormalizedText::NAME]
     }
 
     fn profile(&self) -> Profile {
@@ -59,7 +60,12 @@ impl Analyzer for PartyCandidates {
             return Ok(());
         };
         let budget = usize::try_from(ctx.limits.max_text_bytes).unwrap_or(usize::MAX);
-        let found = collect(doc, budget.min(MAX_SCAN_BYTES), out);
+        let found = collect_with(
+            doc,
+            ctx.get::<NormalizedText>(),
+            budget.min(MAX_SCAN_BYTES),
+            out,
+        );
         emit(&found, out);
         Ok(())
     }
@@ -120,6 +126,17 @@ pub struct Found {
 
 /// Scans every page of `doc` within `budget` bytes of text.
 pub fn collect(doc: &Document, budget: usize, out: &mut Emitter) -> Found {
+    collect_with(doc, None, budget, out)
+}
+
+/// [`collect`], taking normalized pages from `shared` (the `normalized_text` artifact) where
+/// it holds them; the result is the same.
+pub fn collect_with(
+    doc: &Document,
+    shared: Option<&NormalizedText>,
+    budget: usize,
+    out: &mut Emitter,
+) -> Found {
     let mut found = Found::default();
     let mut left = budget;
     let n = doc.pages.len();
@@ -146,7 +163,7 @@ pub fn collect(doc: &Document, budget: usize, out: &mut Emitter) -> Found {
         if page.needs_ocr || page.text.trim().is_empty() {
             continue;
         }
-        let w = PageWords::new(page, left);
+        let w = PageWords::with_shared(page, left, shared.and_then(|n| n.page(i, &page.text)));
         if page.text.len() > left {
             out.problem(format!(
                 "party: text limit reached inside page {}",
