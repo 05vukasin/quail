@@ -1,4 +1,4 @@
-//! The `signal.scan@1` analyzer: runs every family over each page and collects candidates.
+//! The `signal.scan@3` analyzer: runs every family over each page and collects candidates.
 
 use std::collections::HashMap;
 
@@ -74,7 +74,7 @@ pub struct SignalScan;
 
 impl SignalScan {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("signal.scan", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("signal.scan", 3);
 }
 
 impl Analyzer for SignalScan {
@@ -255,6 +255,11 @@ fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
     }
     let mut ds: Vec<DateCand> = dates.iter().map(|(d, _)| *d).collect();
     date::resolve(&mut ds);
+    let early: Vec<bool> = dates
+        .iter()
+        .map(|(_, ev)| ev.page.is_some_and(|p| p <= 1))
+        .collect();
+    date::calibrate(&mut ds, &early);
     for (d, (_, ev)) in ds.iter().zip(dates) {
         if let Some((role, rc)) = d.role {
             col.add(role.key(), Value::Date(d.date), d.conf * rc, ev.clone());

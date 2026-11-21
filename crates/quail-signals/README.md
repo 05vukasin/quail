@@ -4,7 +4,7 @@ Rule-based **candidates** (not verdicts) for formatted business data: identifier
 dates, money and contacts. Namespace `signal.*`. Contract and document numbers, cross-document
 references and titles belong to `quail-refs`; company names, legal forms and parties to `quail-parties`.
 
-One analyzer: **`signal.scan@1`** (`SignalScan`), profile `Fast`, requires the `document` artifact.
+One analyzer: **`signal.scan@3`** (`SignalScan`), profile `Fast`, requires the `document` artifact.
 
 Every fact carries a calibrated `conf` and `Evidence { page, zone, span, bbox }`: the span is a byte
 range of the **original** page text (scanning runs on normalized text and maps back through
@@ -69,6 +69,12 @@ One fact per distinct (key, value) per file, with the evidence of its most confi
   3. a date alone on its line in the first 25 lines of the first page (a letter or cover-page date, a
      place before it and `godine` after it allowed) → `date_signed`.
 
+  **Per document**, once every page is read (`signal.scan@3`): the first `date_effective` phrase on
+  the first two pages is the agreement's own (role conf 0.92 instead of 0.78), and so is the first
+  signing phrase there (0.85 instead of 0.65). Against the most confident effective date, an
+  expiry before it keeps 0.3 of its role conf, and a signing date two years or more before it
+  keeps 0.5 (a cited agreement, a prior term, a typo).
+
   **Cited agreements** get no role: for `date_effective` / `date_signed` phrases the sentence before the
   phrase is searched for the nearest agreement noun (`agreement`, `contract`, `plan`, `letter`, `ugovor`,
   `sporazum`, ...; defined terms in quotes skipped) and its determiner. `this` / `ovaj` (and a bare `the
@@ -106,7 +112,9 @@ Kleister-NDA leaves about half of its letter agreements without an effective dat
 |---|---|---|---|---|
 | `date` (unambiguous) | 3 940 | 40 | 1.00 | 0.95–0.97 |
 | `date` ambiguous, by evidence / default | — | — | prior | 0.85 / 0.6 |
+| `date_effective` (first phrase on pages 1–2, as the eval's effective-date pick) | 155 / 176 | Kleister-NDA / CUAD dev gold, absent-gold docs counted wrong | 0.89 / 0.86 | 0.89 |
 | `date_effective` (phrase) | 353 on dev gold docs | Kleister-NDA + CUAD dev gold | 0.77 (0.90 / 0.72) | 0.76 |
+| `date_signed` (first phrase on pages 1–2) | — | Kleister-NDA + CUAD dev gold (as the pick) | about 0.9 | 0.82 |
 | `date_expiry` (end of term/period) | 208 | 30 | 0.93 | 0.78 |
 | `date_signed` (phrase) | 209 on dev gold docs | Kleister-NDA + CUAD dev gold | 0.65 | 0.63 |
 | `date_signed` (`Date:` / `dana` label) | 140 on dev gold docs | Kleister-NDA + CUAD + serbian-public silver dev | 0.48 | 0.49 |
