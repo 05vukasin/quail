@@ -2854,6 +2854,7 @@ dependencies = [
  "quail-hash",
  "quail-io",
  "quail-items",
+ "quail-ocr",
  "quail-parties",
  "quail-pdf",
  "quail-refs",

@@ -21,6 +21,7 @@ pub fn run(args: &InspectArgs) -> Result<(String, ExitCode), String> {
     let limits = args.limits.limits();
     let read = ReadOptions::new().max_file_bytes(Some(limits.max_bytes));
     let item = read_file(&args.file, &read).map_err(|e| e.to_string())?;
+    crate::scan::warn_without_ocr(args.profile.into());
     let engine = registry::builder(args.profile.into(), limits)
         .build()
         .map_err(|e| e.to_string())?;

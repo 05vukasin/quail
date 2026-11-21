@@ -128,6 +128,43 @@ every step id in run order (sniffing, the extractor of each format, the analyzer
 changes exactly when a step's version changes or a step is added or removed, which is when
 stored records may be stale. Limits are not part of it.
 
+## OCR (`ocr` feature, not default)
+
+Scanned pages and garbled text layers are read by `ocr.pages@1` from
+[quail-ocr](../quail-ocr/README.md). It uses PP-OCRv6 on ONNX Runtime, and the Cyrillic recognizer
+re-reads Serbian Cyrillic lines. The default build stays pure Rust. The `ocr` feature links
+ONNX Runtime (prebuilt binaries for Linux x64/arm64, macOS arm64 and Windows, downloaded by the
+`ort` build script) and an HTTPS client for the model download.
+
+```sh
+cargo build --release -p quail-cli --features ocr
+quail models fetch                 # about 45 MiB into $QUAIL_OCR_MODELS or the user cache dir;
+                                   # every file's SHA-256 is checked before it is moved into place
+quail models list                  # each file: size, ok / missing / bad sha-256, license
+quail scan --profile deep -j 2 contracts/ -o records.jsonl
+```
+
+- OCR runs only under `--profile deep`. Under other profiles the step is inactive, and no model is
+  loaded or checked.
+- It reads the pages that quail-pdf flags `needs_ocr`:
+  - image-only scans;
+  - mostly-image pages with a thin text layer;
+  - pages whose text layer is garbage, including Cyrillic OCR'd as Latin look-alikes. For these
+    pages the OCR text replaces the layer.
+- Text analyzers (`text.*`, `signal.*`, `ref.*`, `party.*`, `item.*`, the summary) run after it
+  and read the revised document.
+- Per file: at most 200 pages, under the file's `--timeout`. The same OCR text counts against
+  `max_text_bytes`.
+- Each worker thread keeps one engine, and ONNX Runtime runs one intra-op thread per engine. So
+  `-j N` means N concurrent OCR pages. Budget roughly 250–400 MB per worker, see the numbers in
+  the pull request.
+- Under `--profile deep` without models (or without the feature), `scan` and `inspect` print one
+  warning. Every file with a page needing OCR then gets the problem `ocr.pages@1: ocr models: …`
+  and is `partial`.
+
+Models: `quail models fetch --dir DIR` or `QUAIL_OCR_MODELS=DIR`. They are the PaddleOCR ONNX
+exports under Apache-2.0, listed with URL, size and SHA-256 in `quail_ocr::models::MANIFEST`.
+
 ## Registry
 
 `src/registry.rs` is the only place that names concrete crates: `builder(profile, limits)`
@@ -145,6 +182,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `parties` (default) | quail-parties | `party.candidates@1` |
 | `clauses` (default) | quail-clauses | `clause.terms@1` |
 | `sketch` (default) | quail-sketch | `sketch.minhash@1`, `sketch.simhash_text@1`, `sketch.simhash_template@1`, `sketch.layout@1`, `sketch.invoice_layout@1`, `sketch.text_key@1` (Fast); `sketch.minhash_sada@1` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@3` (Standard, runs only on documents with a scanned page or a page needing OCR) |
+| `ocr` | quail-ocr | `ocr.pages@1` (Deep only; PP-OCRv6 on ONNX Runtime, native, not default) and `quail models` |
 | `zstd` | (quail-io) | `--zstd` output |
 | `test-hooks` | - | test-only: `QUAIL_TEST_CRASH_ON=<substring>` makes `--isolate` workers abort on matching locators. Never ship it |
 

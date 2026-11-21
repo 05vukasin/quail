@@ -139,6 +139,15 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Under `--profile deep`, says once why pages needing OCR will not be read.
+pub(crate) fn warn_without_ocr(profile: quail_core::Profile) {
+    if profile == quail_core::Profile::Deep
+        && let Some(why) = registry::ocr_unavailable()
+    {
+        eprintln!("quail: warning: no OCR: {why}");
+    }
+}
+
 /// How the files are processed.
 enum Mode {
     /// Engine threads in this process.
@@ -154,6 +163,7 @@ fn mode(args: &ScanArgs, limits: Limits, read: ReadOptions) -> Result<Mode, Stri
         profile: args.profile.into(),
         limits,
     };
+    warn_without_ocr(spec.profile);
     if args.isolate {
         let cap = spec.limits.max_bytes;
         let paths = path_source(args, read)?;

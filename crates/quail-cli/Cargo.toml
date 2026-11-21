@@ -24,6 +24,10 @@ clauses = ["dep:quail-clauses"]
 sketch = ["dep:quail-sketch"]
 items = ["dep:quail-items"]
 summary = ["dep:quail-summary"]
+# OCR of pages that need it (`ocr.pages@1`, under `--profile deep`) and `quail models`.
+# Pulls ONNX Runtime (prebuilt native binaries downloaded by the `ort` build script) and an
+# HTTPS client, so it is not in the default build. Needs `pdf` for page pixels.
+ocr = ["pdf", "dep:quail-ocr", "quail-ocr/paddle", "quail-ocr/fetch"]
 # zstd-compressed output (`--zstd`). Links the C zstd library, so it is not in the default build.
 zstd = ["quail-io/zstd"]
 # Test-only crash injection in `--isolate` workers (`QUAIL_TEST_CRASH_ON`). Never ship it.
@@ -45,6 +49,7 @@ quail-clauses = { path = "../quail-clauses", optional = true }
 quail-items = { path = "../quail-items", optional = true }
 quail-summary = { path = "../quail-summary", optional = true }
 quail-sketch = { path = "../quail-sketch", optional = true }
+quail-ocr = { path = "../quail-ocr", optional = true }
 serde.workspace = true
 # `float_roundtrip`: `--isolate` records cross the worker pipe as JSON and are parsed back;
 # without exact float parsing a value can come back one ULP off and differ from in-process.
