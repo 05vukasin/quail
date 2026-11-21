@@ -63,6 +63,7 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
         opts.max_in_flight_bytes = b.max(1);
     }
     opts.ordered = args.ordered;
+    opts.dedup_by_content = args.dedup;
     opts.cancel = Some(Arc::clone(&cancel));
     opts.on_artifacts = dump.as_ref().map(DocumentDump::hook);
 

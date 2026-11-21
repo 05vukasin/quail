@@ -157,6 +157,12 @@ pub struct ScanArgs {
     /// Print the final stats as one JSON object on stderr instead of the summary.
     #[arg(long)]
     pub json_stats: bool,
+    /// Analyze each distinct content once: a file with the same bytes (BLAKE3) as an earlier
+    /// one of this run gets that file's facts plus `engine.duplicate_of` (the first file's
+    /// locator), without running any step. Such files are not in `--dump-documents`. Not
+    /// with `--isolate`.
+    #[arg(long, conflicts_with = "isolate")]
+    pub dedup: bool,
     /// Process every file in a worker child process: an abort, an out-of-memory, a stack
     /// overflow or a hang costs that file a `failed` record ("worker crashed: ..."), not the
     /// run. Workers read the files themselves (`-j` workers, each loads its own models).

@@ -272,6 +272,13 @@ pub fn summary(
     if stats.stalls > 0 {
         let _ = writeln!(s, "  ordered-mode stalls: {}", stats.stalls);
     }
+    if stats.duplicates > 0 {
+        let _ = writeln!(
+            s,
+            "  duplicates reused (--dedup): {} ({} evicted from the cache)",
+            stats.duplicates, stats.dedup_evicted
+        );
+    }
     let top = tally.top(TOP);
     if !top.is_empty() {
         let _ = writeln!(s, "  top problems:");
@@ -306,6 +313,8 @@ pub fn json(
         "stalls": stats.stalls,
         "writer_panicked": stats.writer_panicked,
         "hook_panics": stats.hook_panics,
+        "duplicates": stats.duplicates,
+        "dedup_evicted": stats.dedup_evicted,
         "first_hook_panic": stats.first_hook_panic,
         "elapsed_secs": stats.elapsed.as_secs_f64(),
         "files_per_sec": stats.files_per_sec(),

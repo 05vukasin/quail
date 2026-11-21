@@ -155,6 +155,49 @@ fn filters_and_human_summary() {
 }
 
 #[test]
+fn dedup_reuses_records_of_identical_files() {
+    let t = tempfile::tempdir().unwrap();
+    write(t.path(), "a.txt", b"the same agreement text\n");
+    write(t.path(), "b.txt", b"another text\n");
+    write(t.path(), "c/a-copy.txt", b"the same agreement text\n");
+    let root = t.path().to_str().unwrap();
+    let o = run(&[
+        "scan",
+        root,
+        "--sorted",
+        "--ordered",
+        "-j",
+        "1",
+        "--dedup",
+        "--json-stats",
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let recs = records(&stdout(&o));
+    assert_eq!(recs.len(), 3);
+    let first = recs.iter().find(|r| name(r) == "a.txt").unwrap();
+    let copy = recs.iter().find(|r| name(r) == "a-copy.txt").unwrap();
+    let of = copy
+        .facts_for("engine.duplicate_of")
+        .next()
+        .expect("duplicate_of");
+    assert_eq!(of.value, Value::text(first.locator.as_str()));
+    assert_eq!(copy.facts.len(), first.facts.len() + 1);
+    assert!(copy.steps.iter().any(|s| s.name == "engine.dedup"));
+    assert_eq!(copy.timings.len(), 1);
+    assert_eq!(first.facts_for("engine.duplicate_of").count(), 0);
+    assert_eq!(json_stats(&o)["duplicates"], 1);
+
+    // Off without the flag.
+    let o = run(&["scan", root, "--sorted", "--json-stats"]);
+    assert!(
+        records(&stdout(&o))
+            .iter()
+            .all(|r| r.facts_for("engine.duplicate_of").count() == 0)
+    );
+    assert_eq!(json_stats(&o)["duplicates"], 0);
+}
+
+#[test]
 fn ordered_mode_keeps_source_order() {
     let t = tempfile::tempdir().unwrap();
     let mut expected = Vec::new();

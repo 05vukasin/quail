@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
 use quail_core::{Artifacts, FileRecord, RecordSink, Source, SourceItem, Status};
 
+use crate::dedup::{Claim, Dedup, Owner, digest, duplicate_record};
 use crate::engine::{Engine, failed_record};
 use crate::panic::contain;
 
@@ -67,7 +68,39 @@ pub struct RunOptions {
     /// record. A panic in it is caught and counted in [`RunStats::hook_panics`]; the record
     /// is written as usual.
     pub on_artifacts: Option<ArtifactsHook>,
+    /// Process each distinct content once per run. Every file is hashed (BLAKE3) on its
+    /// worker first; a file whose bytes equal an earlier file's gets that file's record
+    /// (same facts, steps, format, pages, status and warnings) under its own locator, plus
+    /// an [`engine.duplicate_of`](crate::keys::DUPLICATE_OF) fact naming the first file and
+    /// the [`engine.dedup`](crate::DEDUP_ID) step, whose time (hashing and lookup) is the
+    /// record's only timing. No step runs for it and `on_artifacts` is not called.
+    ///
+    /// A copy that arrives while the first is still being processed waits for it, up to
+    /// twice [`Limits::timeout`](quail_core::Limits), then is processed normally. A first
+    /// copy that ends `Failed` (or panics) is not reused: the next copy is processed.
+    /// Finished records are kept in an LRU cache bounded by `dedup_max_records` and
+    /// `dedup_max_bytes`; a copy whose first record was evicted is processed again.
+    ///
+    /// Assumes facts depend on the bytes only: an analyzer that reads
+    /// [`Ctx::locator`](quail_core::Ctx) would see the first file's locator in the facts
+    /// of every copy. Off by default.
+    ///
+    /// Only [`Engine::run`]: `quail-worker`'s `IsolatedRunner` ignores it (with path jobs its
+    /// supervisor never holds the bytes to hash).
+    pub dedup_by_content: bool,
+    /// Records kept for [`dedup_by_content`](Self::dedup_by_content), at most.
+    pub dedup_max_records: usize,
+    /// Approximate heap bytes of the records kept for
+    /// [`dedup_by_content`](Self::dedup_by_content), at most. A record bigger than this is
+    /// not kept.
+    pub dedup_max_bytes: u64,
 }
+
+/// Default of [`RunOptions::dedup_max_records`].
+pub const DEFAULT_DEDUP_MAX_RECORDS: usize = 10_000;
+
+/// Default of [`RunOptions::dedup_max_bytes`]: 64 MiB.
+pub const DEFAULT_DEDUP_MAX_BYTES: u64 = 64 << 20;
 
 impl fmt::Debug for RunOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -80,6 +113,9 @@ impl fmt::Debug for RunOptions {
             .field("cancel", &self.cancel)
             .field("stack_size", &self.stack_size)
             .field("on_artifacts", &self.on_artifacts.as_ref().map(|_| "Fn"))
+            .field("dedup_by_content", &self.dedup_by_content)
+            .field("dedup_max_records", &self.dedup_max_records)
+            .field("dedup_max_bytes", &self.dedup_max_bytes)
             .finish()
     }
 }
@@ -87,7 +123,7 @@ impl fmt::Debug for RunOptions {
 impl Default for RunOptions {
     /// `available_parallelism - 1` workers (at least 1), two files and at most
     /// [`DEFAULT_MAX_IN_FLIGHT_BYTES`] in flight, unordered, stop on sink error,
-    /// [`DEFAULT_STACK_SIZE`] stacks.
+    /// [`DEFAULT_STACK_SIZE`] stacks, no dedup.
     fn default() -> Self {
         let threads = thread::available_parallelism()
             .map_or(1, |n| n.get().saturating_sub(1))
@@ -101,6 +137,9 @@ impl Default for RunOptions {
             cancel: None,
             stack_size: DEFAULT_STACK_SIZE,
             on_artifacts: None,
+            dedup_by_content: false,
+            dedup_max_records: DEFAULT_DEDUP_MAX_RECORDS,
+            dedup_max_bytes: DEFAULT_DEDUP_MAX_BYTES,
         }
     }
 }
@@ -143,6 +182,10 @@ pub struct RunStats {
     pub hook_panics: u64,
     /// The first such panic message, for the log.
     pub first_hook_panic: Option<String>,
+    /// Records reused for duplicate content ([`RunOptions::dedup_by_content`]).
+    pub duplicates: u64,
+    /// Records evicted from the dedup cache.
+    pub dedup_evicted: u64,
     /// Wall time of the run.
     pub elapsed: Duration,
 }
@@ -189,6 +232,9 @@ impl fmt::Display for RunStats {
                 "; {} source errors, {} sink errors",
                 self.source_errors, self.sink_errors
             )?;
+        }
+        if self.duplicates > 0 {
+            write!(f, "; {} duplicates reused", self.duplicates)?;
         }
         if self.hook_panics > 0 {
             write!(f, "; {} artifact hook panics", self.hook_panics)?;
@@ -330,17 +376,25 @@ impl Engine {
 
         let mut counts = SourceCounts::default();
         let mut was_cancelled = false;
+        let dedup = opts.dedup_by_content.then(|| {
+            Dedup::new(
+                opts.dedup_max_records,
+                opts.dedup_max_bytes,
+                self.limits().timeout.saturating_mul(2),
+            )
+        });
 
         let writer_ok = thread::scope(|s| {
             let shared = &shared;
             let hook = opts.on_artifacts.as_deref();
+            let dedup = dedup.as_ref();
             for i in 0..threads {
                 let rx = work_rx.clone();
                 let tx = done_tx.clone();
                 thread::Builder::new()
                     .name(format!("quail-worker-{i}"))
                     .stack_size(opts.stack_size)
-                    .spawn_scoped(s, move || self.work(&rx, &tx, hook, shared))
+                    .spawn_scoped(s, move || self.work(&rx, &tx, hook, dedup, shared))
                     .expect("spawn worker thread");
             }
             drop(work_rx);
@@ -380,6 +434,7 @@ impl Engine {
         stats.source_error_records = counts.error_records;
         stats.source_panics = counts.panics;
         stats.cancelled = was_cancelled;
+        stats.dedup_evicted = dedup.as_ref().map_or(0, Dedup::evicted);
         stats.elapsed = started.elapsed();
         stats
     }
@@ -389,6 +444,7 @@ impl Engine {
         rx: &Receiver<(u64, SourceItem)>,
         tx: &Sender<Done>,
         hook: Option<&HookFn>,
+        dedup: Option<&Dedup>,
         shared: &Shared,
     ) {
         for (seq, item) in rx {
@@ -399,6 +455,37 @@ impl Engine {
                 locator: Some(item.locator.clone()),
                 tx,
             };
+            let mut owner = None;
+            if let Some(dedup) = dedup {
+                let started = Instant::now();
+                let digest = digest(item.blob.as_bytes());
+                match dedup.claim(&digest) {
+                    Claim::Hit(first) => {
+                        let micros =
+                            u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                        let record = duplicate_record(&first, item.locator, micros);
+                        shared
+                            .stats
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .duplicates += 1;
+                        guard.locator = None;
+                        if tx
+                            .send(Done {
+                                seq,
+                                bytes: size,
+                                record,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                    Claim::Owner => owner = Some(Owner::new(dedup, digest)),
+                    Claim::Busy => {}
+                }
+            }
             // Last-resort net for a bug in the engine itself: the file still gets a record.
             let processed = contain(self.is_quiet(), || {
                 let SourceItem { locator, blob, .. } = item;
@@ -406,6 +493,9 @@ impl Engine {
             });
             let record = match processed {
                 Ok((r, artifacts)) => {
+                    if let Some(o) = owner.take() {
+                        o.publish(&r);
+                    }
                     if let Some(f) = hook
                         && let Err(e) = contain(self.is_quiet(), || f(&r, &artifacts))
                     {
