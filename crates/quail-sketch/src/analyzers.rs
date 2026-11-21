@@ -392,22 +392,37 @@ impl SadaMinHash {
     }
 }
 
-/// Pages `sketch.page_phash` hashes per document.
-pub const MAX_PHASH_PAGES: usize = 16;
+/// Pages `sketch.page_phash` hashes per document: the first `MAX_PHASH_PAGES - 1` candidate
+/// pages and the last one (see [`phash_pages`]).
+pub const MAX_PHASH_PAGES: usize = 4;
 /// Resolution pages are rendered at for the hash when they hold no single scan.
 pub const PHASH_DPI: f32 = 36.0;
 
-/// `sketch.page_phash@1`: 64-bit pHash ([`crate::phash`]) of every scanned page
-/// ([`quail_core::Page::is_scan`]) or page needing OCR, at most 16 per document
-/// ([`keys::PAGE_PHASH`], [`keys::PAGE_PHASH_PAGES`]). Takes the embedded scan when there is
-/// one, else renders the page at 36 dpi. Requires the `raster` artifact.
+/// Which of `n` candidate pages (scans or pages needing OCR, in order) `sketch.page_phash`
+/// hashes: all of them up to [`MAX_PHASH_PAGES`], else the first `MAX_PHASH_PAGES - 1` and
+/// the last. The last page is where signed and stamped copies of one form differ most.
+pub fn phash_pages(n: usize) -> impl Iterator<Item = usize> {
+    let head = if n > MAX_PHASH_PAGES {
+        MAX_PHASH_PAGES - 1
+    } else {
+        n
+    };
+    (0..head).chain((n > MAX_PHASH_PAGES).then(|| n - 1))
+}
+
+/// `sketch.page_phash@2`: 64-bit pHash ([`crate::phash`]) of scanned pages
+/// ([`quail_core::Page::is_scan`]) and pages needing OCR: all of them up to 4, else the first
+/// 3 and the last ([`phash_pages`]) ([`keys::PAGE_PHASH`], [`keys::PAGE_PHASH_PAGES`]). Takes
+/// the embedded scan when there is one, else renders the page at 36 dpi. Requires the `raster`
+/// artifact. Every hash is computed as in `@1`; `@2` hashes fewer pages (`@1`: the first 16),
+/// because decoding full-resolution scans dominated the cost of scan-heavy corpora.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PagePHash;
 
 analyzer!(
     PagePHash,
     "sketch.page_phash",
-    1,
+    2,
     Profile::Standard,
     &["document", "raster"],
     &[],
@@ -427,15 +442,20 @@ impl PagePHash {
         };
         let mut hashes = Vec::new();
         let mut pages = Vec::new();
-        let wanted = doc.pages.iter().filter(|p| p.is_scan() || p.needs_ocr);
-        for (n, page) in wanted.enumerate() {
-            if n >= MAX_PHASH_PAGES {
-                out.warn(format!(
-                    "{}: only the first {MAX_PHASH_PAGES} scanned pages hashed",
-                    Self::ID
-                ));
-                break;
-            }
+        let wanted: Vec<_> = doc
+            .pages
+            .iter()
+            .filter(|p| p.is_scan() || p.needs_ocr)
+            .collect();
+        if wanted.len() > MAX_PHASH_PAGES {
+            out.warn(format!(
+                "{}: {MAX_PHASH_PAGES} of {} scanned pages hashed (the first {} and the last)",
+                Self::ID,
+                wanted.len(),
+                MAX_PHASH_PAGES - 1
+            ));
+        }
+        for page in phash_pages(wanted.len()).filter_map(|i| wanted.get(i).copied()) {
             out.check_deadline()?;
             let image = match raster.0.embedded_scan(page.index, ctx.limits) {
                 Some(r) => r,

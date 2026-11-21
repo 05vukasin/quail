@@ -15,7 +15,7 @@
 //! | [`InvoiceLayout`] `sketch.invoice_layout@2` | Fast | invoice labels + number-pattern digest | equality |
 //! | [`TextKey`] `sketch.text_key@2` | Fast | 128-bit key of the folded words | equality |
 //! | [`SadaMinHash`] `sketch.minhash_sada@2` | Standard | byte-compatible port of an existing Python service's sketches | as in that service, see [`sada`] |
-//! | [`PagePHash`] `sketch.page_phash@1` | Standard | 64-bit DCT pHash per scanned page | [`hamming`] ≤ [`phash::PAGE_HAMMING_MAX`] per page |
+//! | [`PagePHash`] `sketch.page_phash@2` | Standard | 64-bit DCT pHash of up to 4 scanned pages (first 3 + last) | [`hamming`] ≤ [`phash::PAGE_HAMMING_MAX`] per page |
 //!
 //! Everything builds on `quail-text`: its normalization, tokens, folding and pinned XXH3
 //! hashes. Golden tests (`tests/golden.rs`) pin every sketch; a golden diff means a new
@@ -38,8 +38,8 @@ pub mod template;
 mod text;
 
 pub use analyzers::{
-    InvoiceLayout, LayoutAnalyzer, MinHashAnalyzer, PagePHash, SadaMinHash, SimHashTemplate,
-    SimHashText, TextKey, text_key,
+    InvoiceLayout, LayoutAnalyzer, MAX_PHASH_PAGES, MinHashAnalyzer, PHASH_DPI, PagePHash,
+    SadaMinHash, SimHashTemplate, SimHashText, TextKey, phash_pages, text_key,
 };
 
 /// Number of differing bits of two 64-bit sketches (SimHash, pHash).
