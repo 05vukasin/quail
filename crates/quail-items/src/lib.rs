@@ -6,7 +6,7 @@
 //! currency, VAT), with top-3 category candidates from the EU CPV 2008 vocabulary and the
 //! evidence to check it.
 //!
-//! One analyzer, [`ItemLines`] (`item.lines@4`): requires `document`, runs after
+//! One analyzer, [`ItemLines`] (`item.lines@5`): requires `document`, runs after
 //! `revised_document`, `Profile::Fast` for the lines, categories from `Profile::Standard`.
 //!
 //! | key | value |
@@ -38,6 +38,9 @@
 //!    unit column, numeric columns checked by `quantity × price = amount` and by net/gross
 //!    VAT ratios). Subtotal, VAT and total rows become `item.table_total`.
 //! 2. **PDF** (paragraph blocks with boxes): tables rebuilt from geometry, see `geom`.
+//!    Descriptions read by token shape (`desc`): dates, air times, weekdays and spot codes
+//!    glued to a layout description are split off, codes kept in `code`; the most text-like
+//!    column is the description column.
 //! 3. **Text lines**: `description …… 2 x 3.500,00 = 7.000,00`, merged table rows, rate
 //!    cards (`Senior consultant – 85 EUR/h`).
 //! 4. **Categories**: [`CpvIndex::categorize`]: a curated alias layer for common English and
@@ -52,7 +55,7 @@
 //! # Limits
 //!
 //! At most [`MAX_ITEMS`] items per file (then a problem), tables up to 5 000 rows × 64
-//! columns, 24 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked
+//! columns, 40 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked
 //! per page and per table.
 
 // Table and line parsers walk rows (`r`), columns (`c`) and tokens (`t`).
@@ -68,6 +71,7 @@
 
 mod alias;
 mod analyzer;
+mod desc;
 mod geom;
 mod header;
 mod item;
