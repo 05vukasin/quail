@@ -301,7 +301,11 @@ impl WorkerProcess {
                     Fail::Protocol(m) => (true, m),
                 };
                 let crash = w.crash(protocol, &msg, cfg.startup_timeout);
-                Err(WorkerError::Startup(crash.message))
+                Err(WorkerError::Startup(if protocol {
+                    crash.message
+                } else {
+                    format!("{msg}: {}", crash.message)
+                }))
             }
         }
     }
@@ -624,9 +628,20 @@ fn classify(
     Crash { kind, message }
 }
 
-/// The last non-empty stderr line, shortened.
+/// The stderr line that best explains a death (a Rust runtime message if any, else the
+/// last non-empty line, skipping backtrace hints), shortened.
 fn last_line(s: &str) -> Option<String> {
-    let l = s.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    const TELLING: [&str; 4] = [
+        "memory allocation of",
+        "overflowed its stack",
+        "panicked at",
+        "fatal runtime error",
+    ];
+    let lines = || s.lines().rev().map(str::trim).filter(|l| !l.is_empty());
+    let l = TELLING
+        .iter()
+        .find_map(|m| lines().find(|l| l.contains(m)))
+        .or_else(|| lines().find(|l| !l.starts_with("note: run with")))?;
     let mut end = l.len().min(240);
     while !l.is_char_boundary(end) {
         end -= 1;

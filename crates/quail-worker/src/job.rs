@@ -79,7 +79,8 @@ impl JobSource for FromSource<'_> {
 ///
 /// ```
 /// use quail_worker::PathJobs;
-/// let jobs = PathJobs::new(vec![Ok::<_, quail_core::Error>("a.pdf".into())].into_iter());
+/// let paths = vec![Ok::<std::path::PathBuf, quail_core::Error>("a.pdf".into())];
+/// let jobs = PathJobs::new(paths.into_iter());
 /// # let _ = jobs;
 /// ```
 pub struct PathJobs<I> {

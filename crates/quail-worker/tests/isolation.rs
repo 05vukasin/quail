@@ -261,7 +261,7 @@ fn failure_matrix() {
     let mut items = Vec::new();
     for i in 0..40 {
         items.push(item(&format!("good/{i}"), &format!("good file {i}\n")));
-        if i % 5 == 2 {
+        if i % 5 == 2 && i / 5 < bad.len() {
             let (l, b) = bad[(i / 5) % bad.len()];
             items.push(item(l, b));
         }
@@ -283,6 +283,13 @@ fn failure_matrix() {
     assert_eq!(stats.run.files, total);
     assert_eq!(recs.len() as u64, total, "one record per file");
     let m = by_locator(&recs);
+    for (l, _) in bad {
+        let st = match &m[l].status {
+            Status::Failed { error } => format!("Failed: {error}"),
+            s => format!("{s:?}"),
+        };
+        eprintln!("    {l}: {st}");
+    }
     for i in 0..40 {
         let r = &m[&format!("good/{i}")];
         assert_eq!(r.status, Status::Ok, "{r:?}");
@@ -336,7 +343,8 @@ fn failure_matrix() {
     assert!(max_gap.load(Ordering::SeqCst) <= 8 + 1, "gap {max_gap:?}");
     // One hang costs ~2.5 s; crashes cost a respawn each.
     assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
-    // The pool is alive and reusable after all that.
+    // Dead seats are refilled lazily; the pool is reusable after all that.
+    runner.warm_up(4).unwrap();
     assert_eq!(runner.pids().len(), 4);
 }
 

@@ -466,7 +466,7 @@ impl SlotCtx<'_> {
                     let error = match first {
                         Some(f) => {
                             st.poisoned += 1;
-                            if f.message == crash.message {
+                            if f.kind == crash.kind {
                                 format!("worker crashed: {crash} (twice; skipped)")
                             } else {
                                 format!(
