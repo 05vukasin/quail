@@ -189,7 +189,7 @@ mod tests {
         );
         assert!(m.get("party").unwrap().pending.is_none());
         assert!(m.get("term").unwrap().pending.is_none());
-        assert!(m.get("is_scanned").unwrap().pending.is_some());
+        assert!(m.get("is_scanned").unwrap().pending.is_none()); // produced by pdf.is_scanned since #73
         assert!(m.get("items").unwrap().rows);
         assert!(!m.get("party").unwrap().rows);
     }
