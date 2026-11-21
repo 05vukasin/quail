@@ -47,6 +47,7 @@ pub(crate) enum Abort {
 pub(crate) struct Watchdog<'e> {
     calls: u64,
     nestings: u64,
+    ops: u64,
     clock: Clock<'e>,
 }
 
@@ -63,24 +64,46 @@ impl<'e> Watchdog<'e> {
         Self {
             calls: 0,
             nestings: 0,
+            ops: 0,
             clock,
+        }
+    }
+
+    fn check_deadline(&self) {
+        let late = match &self.clock {
+            Clock::Emitter(e) => e.check_deadline().is_err(),
+            Clock::Until(t) => std::time::Instant::now() >= *t,
+        };
+        if late {
+            resume_unwind(Box::new(Abort::Deadline));
         }
     }
 
     #[inline]
     pub(crate) fn tick(&mut self) {
-        self.calls += 1;
+        self.tick_n(1);
+    }
+
+    /// `n` draw calls at once (a glyph run counts each glyph).
+    #[inline]
+    pub(crate) fn tick_n(&mut self, n: u64) {
+        let before = self.calls;
+        self.calls = self.calls.saturating_add(n.max(1));
         if self.calls > MAX_CALLS_PER_PAGE {
             resume_unwind(Box::new(Abort::TooManyCalls));
         }
-        if self.calls.is_multiple_of(DEADLINE_EVERY) {
-            let late = match &self.clock {
-                Clock::Emitter(e) => e.check_deadline().is_err(),
-                Clock::Until(t) => std::time::Instant::now() >= *t,
-            };
-            if late {
-                resume_unwind(Box::new(Abort::Deadline));
-            }
+        if before / DEADLINE_EVERY != self.calls / DEADLINE_EVERY {
+            self.check_deadline();
+        }
+    }
+
+    /// A content-stream operator: some (`sh`, inline images) cost far more than a draw
+    /// callback, so the deadline is also checked between operators.
+    #[inline]
+    pub(crate) fn op(&mut self) {
+        self.ops = self.ops.saturating_add(1);
+        if self.ops.is_multiple_of(DEADLINE_EVERY) {
+            self.check_deadline();
         }
     }
 
@@ -186,6 +209,10 @@ fn f(x: f64) -> f32 {
 }
 
 impl<'a> Device<'a> for PageCapture<'_> {
+    fn on_operator(&mut self) {
+        self.watchdog.op();
+    }
+
     fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {
         self.watchdog.tick();
         self.paths = self.paths.saturating_add(1);
@@ -276,6 +303,10 @@ impl<'a> Device<'a> for PageCapture<'_> {
 pub(crate) struct DryRun<'e>(pub Watchdog<'e>);
 
 impl<'a> Device<'a> for DryRun<'_> {
+    fn on_operator(&mut self) {
+        self.0.op();
+    }
+
     fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {
         self.0.tick();
     }
@@ -286,9 +317,10 @@ impl<'a> Device<'a> for DryRun<'_> {
         self.0.nest();
     }
     fn draw_glyph_run(&mut self, run: &GlyphRun<'_, 'a>, props: DrawProps<'a>, _: &DrawMode) {
-        self.0.tick();
+        // Every glyph is a fill for the renderer: count glyphs, not runs.
+        self.0.tick_n(run.glyphs().len() as u64);
         // The renderer runs Type3 glyph procedures; so does the dry run, so that their
-        // fan-out is counted too (hayro bounds their nesting depth).
+        // fan-out is counted too (hayro-interpret caps their nesting depth).
         for g in run.glyphs() {
             if let HGlyph::Type3(t3) = &**g {
                 t3.interpret(self, props.transform, g.transform(), &props.paint);
