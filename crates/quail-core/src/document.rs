@@ -71,7 +71,8 @@ pub enum BlockKind {
 }
 
 /// A run of text on a page. Its text is `span` of [`Page::text`], so text is stored once and
-/// every fact can point back into it.
+/// every fact can point back into it. Build it with [`Block::new`] so that fields added later
+/// do not break extractors.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     /// Range in the page text.
@@ -82,6 +83,34 @@ pub struct Block {
     pub zone: Zone,
     /// Its box, when the format has geometry.
     pub bbox: Option<BBox>,
+    /// The measured visual lines inside the block, in reading order, each with its span
+    /// (within the block's `span`) and its box. Empty when the format has no line geometry
+    /// (and then left out of serialized output). A paragraph block keeps its own `span` and
+    /// `bbox`; the lines refine it, they do not replace it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<LineBox>,
+}
+
+impl Block {
+    /// A block without line geometry.
+    pub fn new(span: Span, kind: BlockKind, zone: Zone, bbox: Option<BBox>) -> Self {
+        Self {
+            span,
+            kind,
+            zone,
+            bbox,
+            lines: Vec::new(),
+        }
+    }
+}
+
+/// One measured visual line of a [`Block`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LineBox {
+    /// Range in the page text (within the block's span).
+    pub span: Span,
+    /// Its box, in points from the top-left corner.
+    pub bbox: BBox,
 }
 
 /// An image placed on a page.
@@ -178,4 +207,59 @@ pub struct RevisedDocument(pub Document);
 
 impl Artifact for RevisedDocument {
     const NAME: &'static str = "revised_document";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bb(y0: f32, y1: f32) -> BBox {
+        BBox {
+            x0: 10.0,
+            y0,
+            x1: 100.0,
+            y1,
+        }
+    }
+
+    #[test]
+    fn blocks_without_lines_serialize_as_before() {
+        let b = Block::new(
+            Span { start: 0, end: 5 },
+            BlockKind::Paragraph,
+            Zone::Body,
+            Some(bb(0.0, 10.0)),
+        );
+        let j = serde_json::to_string(&b).unwrap();
+        // Byte-identical to the JSON of a block before `lines` existed.
+        assert_eq!(
+            j,
+            r#"{"span":{"start":0,"end":5},"kind":{"kind":"paragraph"},"zone":"body","bbox":{"x0":10.0,"y0":0.0,"x1":100.0,"y1":10.0}}"#
+        );
+        // ... and such JSON still reads back.
+        assert_eq!(serde_json::from_str::<Block>(&j).unwrap(), b);
+    }
+
+    #[test]
+    fn lines_round_trip() {
+        let mut b = Block::new(
+            Span { start: 0, end: 11 },
+            BlockKind::Paragraph,
+            Zone::Body,
+            Some(bb(0.0, 24.0)),
+        );
+        b.lines = vec![
+            LineBox {
+                span: Span { start: 0, end: 5 },
+                bbox: bb(0.0, 12.0),
+            },
+            LineBox {
+                span: Span { start: 6, end: 11 },
+                bbox: bb(12.0, 24.0),
+            },
+        ];
+        let j = serde_json::to_string(&b).unwrap();
+        assert!(j.contains(r#""lines":[{"span":{"start":0,"end":5}"#), "{j}");
+        assert_eq!(serde_json::from_str::<Block>(&j).unwrap(), b);
+    }
 }

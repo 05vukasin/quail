@@ -776,18 +776,18 @@ mod tests {
     #[test]
     fn marks_nested_and_rejects_bad_spans() {
         let mut d = text_document("Agreement between Alpha Corp and Beta".into());
-        d.pages[0].blocks.push(Block {
-            span: Span { start: 0, end: 9 },
-            kind: BlockKind::Heading { level: 1 },
-            zone: Zone::Title,
-            bbox: None,
-        });
-        d.pages[0].blocks.push(Block {
-            span: Span { start: 10, end: 37 },
-            kind: BlockKind::Paragraph,
-            zone: Zone::Body,
-            bbox: None,
-        });
+        d.pages[0].blocks.push(Block::new(
+            Span { start: 0, end: 9 },
+            BlockKind::Heading { level: 1 },
+            Zone::Title,
+            None,
+        ));
+        d.pages[0].blocks.push(Block::new(
+            Span { start: 10, end: 37 },
+            BlockKind::Paragraph,
+            Zone::Body,
+            None,
+        ));
         let facts = vec![
             fact(0, 18, 28),
             fact(0, 18, 23),

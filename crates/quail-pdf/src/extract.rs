@@ -515,12 +515,7 @@ impl Walk<'_> {
         };
         let blocks_out = kept
             .iter()
-            .map(|(span, bbox)| Block {
-                span: *span,
-                kind: BlockKind::Paragraph,
-                zone: Zone::Unknown,
-                bbox: Some(*bbox),
-            })
+            .map(|(span, bbox)| Block::new(*span, BlockKind::Paragraph, Zone::Unknown, Some(*bbox)))
             .collect();
         self.pending.push(Pending {
             page: Page {

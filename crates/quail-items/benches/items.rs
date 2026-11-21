@@ -39,12 +39,7 @@ fn push(text: &mut String, blocks: &mut Vec<Block>, t: &str, kind: BlockKind, bb
     let start = u32::try_from(text.len()).unwrap_or(u32::MAX);
     text.push_str(t);
     let end = u32::try_from(text.len()).unwrap_or(u32::MAX);
-    blocks.push(Block {
-        span: Span { start, end },
-        kind,
-        zone: Zone::Unknown,
-        bbox,
-    });
+    blocks.push(Block::new(Span { start, end }, kind, Zone::Unknown, bbox));
 }
 
 fn docx_doc(pages: u32) -> Document {

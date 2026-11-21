@@ -90,12 +90,12 @@ pub fn text_page(index: u32, text: &str) -> Page {
     Page {
         text: text.to_owned(),
         text_source: TextSource::Native,
-        blocks: vec![Block {
-            span: Span { start: 0, end: len },
-            kind: BlockKind::Paragraph,
-            zone: Zone::Body,
-            bbox: None,
-        }],
+        blocks: vec![Block::new(
+            Span { start: 0, end: len },
+            BlockKind::Paragraph,
+            Zone::Body,
+            None,
+        )],
         ..Page::new(index, PageKind::Logical)
     }
 }
@@ -144,12 +144,12 @@ pub fn boxed_page(index: u32, boxes: &[(f32, f32, f32, f32)], texts: &[&str]) ->
         let start = u32::try_from(text.len()).unwrap();
         text.push_str(texts[i % texts.len()]);
         let end = u32::try_from(text.len()).unwrap();
-        blocks.push(Block {
-            span: Span { start, end },
-            kind: BlockKind::Paragraph,
-            zone: if y0 < 60.0 { Zone::Header } else { Zone::Body },
-            bbox: Some(BBox { x0, y0, x1, y1 }),
-        });
+        blocks.push(Block::new(
+            Span { start, end },
+            BlockKind::Paragraph,
+            if y0 < 60.0 { Zone::Header } else { Zone::Body },
+            Some(BBox { x0, y0, x1, y1 }),
+        ));
     }
     Page {
         size: Some((595.0, 842.0)),
@@ -178,12 +178,7 @@ pub fn kinds_page(kinds: &[BlockKind], seed: u64) -> Page {
             BlockKind::TableCell { .. } => Zone::Table,
             _ => Zone::Body,
         };
-        blocks.push(Block {
-            span: Span { start, end },
-            kind,
-            zone,
-            bbox: None,
-        });
+        blocks.push(Block::new(Span { start, end }, kind, zone, None));
     }
     Page {
         text,

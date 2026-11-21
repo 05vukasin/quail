@@ -18,15 +18,15 @@ fn page_of(index: u32, parts: &[(&str, Zone)]) -> Page {
         }
         let start = u32::try_from(text.len()).unwrap();
         text.push_str(t);
-        blocks.push(Block {
-            span: Span {
+        blocks.push(Block::new(
+            Span {
                 start,
                 end: u32::try_from(text.len()).unwrap(),
             },
-            kind: BlockKind::Paragraph,
-            zone: *z,
-            bbox: None,
-        });
+            BlockKind::Paragraph,
+            *z,
+            None,
+        ));
     }
     Page {
         text,

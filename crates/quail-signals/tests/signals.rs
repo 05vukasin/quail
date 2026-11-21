@@ -549,21 +549,21 @@ fn evidence_points_into_original_text_with_zone_and_box() {
     let page = Page {
         text: text.clone(),
         blocks: vec![
-            Block {
-                span: Span { start: 0, end: 9 },
-                kind: BlockKind::Paragraph,
-                zone: Zone::Header,
-                bbox: None,
-            },
-            Block {
-                span: Span {
+            Block::new(
+                Span { start: 0, end: 9 },
+                BlockKind::Paragraph,
+                Zone::Header,
+                None,
+            ),
+            Block::new(
+                Span {
                     start: u32::try_from(block_start).unwrap(),
                     end: u32::try_from(start + p.len()).unwrap(),
                 },
-                kind: BlockKind::Paragraph,
-                zone: Zone::Header,
-                bbox: Some(bbox),
-            },
+                BlockKind::Paragraph,
+                Zone::Header,
+                Some(bbox),
+            ),
         ],
         ..Page::new(0, PageKind::Physical)
     };

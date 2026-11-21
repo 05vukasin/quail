@@ -30,12 +30,8 @@ impl PageBuilder {
         let start = u32::try_from(self.text.len()).unwrap();
         self.text.push_str(t);
         let end = u32::try_from(self.text.len()).unwrap();
-        self.blocks.push(Block {
-            span: Span { start, end },
-            kind,
-            zone,
-            bbox,
-        });
+        self.blocks
+            .push(Block::new(Span { start, end }, kind, zone, bbox));
     }
 
     fn table(&mut self, table: u16, rows: &[&[&str]]) {

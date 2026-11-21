@@ -15,15 +15,15 @@ fn page(index: u32, text: &str) -> Page {
     let mut at = 0u32;
     for line in text.split('\n') {
         let len = u32::try_from(line.len()).unwrap();
-        blocks.push(Block {
-            span: Span {
+        blocks.push(Block::new(
+            Span {
                 start: at,
                 end: at + len,
             },
-            kind: BlockKind::Paragraph,
-            zone: Zone::Unknown,
-            bbox: None,
-        });
+            BlockKind::Paragraph,
+            Zone::Unknown,
+            None,
+        ));
         at += len + 1;
     }
     Page {
@@ -618,12 +618,12 @@ fn hostile_inputs_do_not_panic() {
     }
     // Blocks whose spans are out of range or overlapping.
     let mut d = doc(&["Ugovor br. 114/23"]);
-    d.pages[0].blocks = vec![Block {
-        span: Span { start: 50, end: 10 },
-        kind: BlockKind::Paragraph,
-        zone: Zone::Header,
-        bbox: None,
-    }];
+    d.pages[0].blocks = vec![Block::new(
+        Span { start: 50, end: 10 },
+        BlockKind::Paragraph,
+        Zone::Header,
+        None,
+    )];
     let mut out = Emitter::new(RefAnalyzer::ID);
     run_with(d, &Limits::default(), &mut out).unwrap();
 }
