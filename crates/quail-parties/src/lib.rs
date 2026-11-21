@@ -1,6 +1,6 @@
 //! Per-file candidates for the companies a document is about, and the roles it gives them.
 //!
-//! Namespace: `party.*`. One analyzer, [`PartyCandidates`] (`party.candidates@3`, `Fast`,
+//! Namespace: `party.*`. One analyzer, [`PartyCandidates`] (`party.candidates@4`, `Fast`,
 //! requires `document`). It reports candidates, never verdicts: it does not say which company
 //! owns a file and it never compares files. A resolution service joins the keys across files
 //! (union-find on the `key` field of [`keys::COMPANY`], [`keys::ALIAS_OF`] pairs) and decides.
@@ -79,8 +79,9 @@ pub mod words;
 mod analyzer;
 
 pub use analyzer::{
-    AliasPair, Candidate, Found, MAX_KEYS, MAX_MENTIONS_PER_KEY, MAX_RANKED, MAX_SCAN_BYTES,
-    MAX_STATEMENTS, MAX_TITLES, PartyCandidates, candidate_record, collect, mention_conf, rank,
+    AliasPair, Candidate, Found, MAX_CANDIDATE_KEYS, MAX_KEYS, MAX_MENTIONS_PER_KEY, MAX_RANKED,
+    MAX_SCAN_BYTES, MAX_STATEMENTS, MAX_TITLES, PartyCandidates, WEAK_DROP, candidate_record,
+    collect, mention_conf, rank,
 };
 
 /// Fact keys emitted by this crate.

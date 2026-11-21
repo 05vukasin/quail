@@ -1,4 +1,4 @@
-//! `party.candidates@3`: turns page scans into facts.
+//! `party.candidates@4`: turns page scans into facts.
 
 use std::collections::HashMap;
 
@@ -17,8 +17,19 @@ use crate::words::PageWords;
 
 /// Mentions emitted per core key (the strongest ones).
 pub const MAX_MENTIONS_PER_KEY: usize = 3;
-/// Core keys emitted per document.
-pub const MAX_KEYS: usize = 32;
+/// Core keys emitted per document, the strongest first. Long contracts name many companies
+/// legitimately (affiliates, licensors, a list of agreements): on the CUAD dev split the
+/// 99th percentile is 32 distinct keys and the maximum 61, on the Kleister-NDA dev split 15
+/// and 32. Keys over the cap are dropped with a `warn` when they are all weak mentioned-only
+/// names ([`WEAK_DROP`]), with a `problem` otherwise.
+pub const MAX_KEYS: usize = 64;
+/// A dropped key below this score that is only `mentioned` loses nothing a consumer would
+/// act on (`party.company` facts under it are below the usual 0.3 cut): its drop is a
+/// `warn`, not a `problem`.
+pub const WEAK_DROP: f32 = 0.3;
+/// Distinct core keys over which a document is pathological (a list or table of names, not
+/// a contract): the drop is always a `problem`.
+pub const MAX_CANDIDATE_KEYS: usize = 512;
 /// Name statements emitted per document.
 pub const MAX_STATEMENTS: usize = 16;
 /// Signature titles emitted per document.
@@ -35,7 +46,7 @@ pub struct PartyCandidates;
 
 impl PartyCandidates {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("party.candidates", 3);
+    pub const ID: AnalyzerId = AnalyzerId::new("party.candidates", 4);
 }
 
 impl Analyzer for PartyCandidates {
@@ -492,11 +503,26 @@ pub fn rank(candidates: &[Candidate]) -> Vec<(String, Vec<usize>, f32)> {
 fn emit(found: &Found, out: &mut Emitter) {
     let groups = rank(&found.candidates);
     if groups.len() > MAX_KEYS {
-        out.problem(format!(
+        let dropped = &groups[MAX_KEYS..];
+        let weak = dropped.iter().all(|(_, idx, score)| {
+            *score < WEAK_DROP
+                && idx.iter().all(|&i| {
+                    found.candidates[i]
+                        .roles
+                        .iter()
+                        .all(|(r, _)| *r == Role::Mentioned)
+                })
+        });
+        let msg = format!(
             "party: {} candidate companies, the {} strongest emitted",
             groups.len(),
             MAX_KEYS
-        ));
+        );
+        if weak && groups.len() <= MAX_CANDIDATE_KEYS {
+            out.warn(format!("{msg} (the rest weak mentioned-only names)"));
+        } else {
+            out.problem(msg);
+        }
     }
     let mut capped = 0;
     for (_, idx, _) in groups.iter().take(MAX_KEYS) {

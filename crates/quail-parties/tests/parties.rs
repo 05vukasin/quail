@@ -523,6 +523,73 @@ fn many_mentions_are_capped_with_a_problem() {
     assert!(!problems.is_empty());
 }
 
+fn run_full(doc: Document) -> (Vec<Fact>, Vec<String>, Vec<String>) {
+    let mut artifacts = Artifacts::new();
+    artifacts.insert(doc);
+    let blob = Blob::from(Vec::new());
+    let limits = Limits::default();
+    let ctx = Ctx {
+        blob: &blob,
+        format: Format::Pdf,
+        locator: "mem://test",
+        artifacts: &artifacts,
+        facts: &[],
+        limits: &limits,
+        profile: Profile::Fast,
+    };
+    let mut out = Emitter::new(PartyCandidates::ID);
+    PartyCandidates.run(&ctx, &mut out).unwrap();
+    let problems = out.take_problems();
+    let (facts, _, warnings) = out.into_parts();
+    (facts, warnings, problems)
+}
+
+/// `n` lines naming distinct companies, each line `"{prefix}Kompanija{i} Beta d.o.o."`.
+fn names(prefix: &str, from: usize, n: usize) -> String {
+    use std::fmt::Write as _;
+    let mut t = String::new();
+    for i in from..from + n {
+        let _ = writeln!(t, "{prefix}Kompanija{i} Beta d.o.o.");
+    }
+    t
+}
+
+#[test]
+fn key_cap_drops_weak_names_with_a_warning() {
+    let opening = "Ugovor zaključen između Alfa Gradnja d.o.o. (\"Izvođač\") i Omega Trgovina d.o.o. (\"Naručilac\").";
+    let later = names("", 0, 120);
+    let (facts, warnings, problems) = run_full(plain(&[opening, "x", "x", &later]));
+    assert!(problems.is_empty(), "{problems:?}");
+    assert!(warnings.iter().any(|w| w.contains("weak")), "{warnings:?}");
+    let ms = mentions(&facts);
+    let ks = keys_of(&ms);
+    assert_eq!(ks.len(), quail_parties::MAX_KEYS);
+    assert!(ks.contains(&"alfa gradnja"), "{ks:?}");
+    assert!(ks.contains(&"omega trgovina"), "{ks:?}");
+}
+
+#[test]
+fn key_cap_is_a_problem_when_strong_names_are_dropped_or_input_is_pathological() {
+    // More labelled suppliers than the cap: real candidates are lost.
+    let t = names("Dobavljač: ", 0, 120);
+    let (_, _, problems) = run_full(plain(&[&t]));
+    assert!(
+        problems.iter().any(|p| p.contains("candidate companies")),
+        "{problems:?}"
+    );
+    // A list of names, not a contract: always a problem.
+    let pages: Vec<String> = (0..4).map(|p| names("", p * 150, 150)).collect();
+    let refs: Vec<&str> = ["x", "x", "x"]
+        .into_iter()
+        .chain(pages.iter().map(String::as_str))
+        .collect();
+    let (_, _, problems) = run_full(plain(&refs));
+    assert!(
+        problems.iter().any(|p| p.contains("candidate companies")),
+        "{problems:?}"
+    );
+}
+
 #[test]
 fn hostile_input_is_fast_and_safe() {
     // Garbage, long runs of forms and capitalised words, odd Unicode.

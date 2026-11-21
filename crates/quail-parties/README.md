@@ -8,7 +8,7 @@ the `party.alias_of` pairs) and assigns documents to suppliers.
 Out of scope (sibling crates): identifiers, dates, money and e-mail domains (`quail-signals`);
 document numbers, references and titles (`quail-refs`).
 
-- Analyzer: `party.candidates@3` (`PartyCandidates`), profile `Fast`, requires `document`.
+- Analyzer: `party.candidates@4` (`PartyCandidates`), profile `Fast`, requires `document`.
 - Public API: `PartyCandidates`, `keys::*`, and the pure helpers in `names`
   (`normalize_name`, `normalized_key`, `core_key`, `squashed_key`, `meaningful_words`,
   `core_words`, `score_name_match`, `are_names_similar`, `acronym_key`,
@@ -197,8 +197,13 @@ one file partial (mention cap).
 
 - Linear per page: every rule looks a bounded number of tokens around an anchor (walks ≤ 8 words,
   defined terms ≤ 80 tokens, clause windows 25/15 words).
-- At most 200 mentions per page (then a `problem`), 3 mentions per key and 32 keys per document
-  (the strongest; a `problem` when more), 16 name statements, 8 titles, 10 ranked candidates.
+- At most 200 mentions per page (then a `problem`), 3 mentions per key and 64 keys per document
+  (the strongest), 16 name statements, 8 titles, 10 ranked candidates. Keys over 64 are dropped
+  with a `warn` when every dropped key is mentioned-only with a score under 0.3 (`WEAK_DROP`), and
+  with a `problem` when a stronger one is among them or the document has more than 512 distinct
+  keys (`MAX_CANDIDATE_KEYS`, a list of names rather than a contract). Distinct keys per document
+  on the dev splits: CUAD p99 32, max 61; Kleister-NDA p99 15, max 32 (the cap was 32 before
+  `party.candidates@4` and made 4 of 408 CUAD dev records partial).
 - Reads at most `Limits::max_text_bytes` (and 16 MiB) of text; a `problem` when it stops early.
   Checks the deadline per page and keeps what it found. Skips `needs_ocr` pages.
 - Vocabulary tables are built once (read-only).
