@@ -14,6 +14,12 @@ const MAX_PUNCT: usize = 2;
 
 /// Does `phrase` end at token `j`? Returns the index of its first token.
 pub(crate) fn ends_at(p: &PageText, j: usize, phrase: &[&str]) -> Option<usize> {
+    ends_at_within(p, j, phrase, 0)
+}
+
+/// [`ends_at`] whose words may sit up to `lines` lines above token `j` (a phrase wrapped
+/// over a line break of running text: `dated as` / `of 1 May 2024`).
+pub(crate) fn ends_at_within(p: &PageText, j: usize, phrase: &[&str], lines: u32) -> Option<usize> {
     let mut j = j;
     let line = p.line(j);
     for (n, w) in phrase.iter().rev().enumerate() {
@@ -22,7 +28,7 @@ pub(crate) fn ends_at(p: &PageText, j: usize, phrase: &[&str]) -> Option<usize> 
             let mut steps = 0;
             loop {
                 j = j.checked_sub(1)?;
-                if p.line(j) != line {
+                if line - p.line(j).min(line) > lines {
                     return None;
                 }
                 if p.wordlike(j) {
@@ -108,6 +114,41 @@ pub(crate) fn find_before<C: Copy>(
         }
         for (phrase, c) in table {
             if let Some(first) = ends_at(p, j, phrase) {
+                return Some((*c, first));
+            }
+        }
+        if is_other_value(p, j) {
+            return None;
+        }
+        words += 1;
+        if words > reach.words {
+            return None;
+        }
+    }
+    None
+}
+
+/// Like [`find_before`], but for running text whose lines wrap: words between the phrase
+/// and the value, and the phrase itself, may span up to `reach.lines` line breaks.
+pub(crate) fn find_before_wrapped<C: Copy>(
+    p: &PageText,
+    i: usize,
+    table: &[(&[&str], C)],
+    reach: Reach,
+) -> Option<(C, usize)> {
+    let line = p.line(i);
+    let mut words = 0;
+    let mut j = i;
+    while j > 0 {
+        j -= 1;
+        if line - p.line(j).min(line) > reach.lines {
+            return None;
+        }
+        if !p.wordlike(j) {
+            continue;
+        }
+        for (phrase, c) in table {
+            if let Some(first) = ends_at_within(p, j, phrase, reach.lines) {
                 return Some((*c, first));
             }
         }

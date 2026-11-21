@@ -184,6 +184,7 @@ fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
     let mut serbian = false;
     let mut cands = Vec::new();
     let mut page_dates = Vec::new();
+    let mut first_page = true;
     for page in &doc.pages {
         if out.check_deadline().is_err() {
             out.problem(format!(
@@ -213,7 +214,8 @@ fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
         money::scan(&pt, &mut cands);
         contact::scan(&pt, serbian, &mut cands);
         page_dates.clear();
-        date::scan(&pt, &mut page_dates);
+        date::scan(&pt, first_page, &mut page_dates);
+        first_page = false;
 
         let sorted = page
             .blocks

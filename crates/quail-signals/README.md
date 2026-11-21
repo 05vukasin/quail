@@ -51,14 +51,30 @@ One fact per distinct (key, value) per file, with the evidence of its most confi
   `PIB/MB: 101234567/07005466` is split and each part takes the label its length fits.
 - **Dates**: numeric `d.m.yyyy`, `d. m. yyyy.`, ISO, `d/m/y` and `d-m-y`; month names in English (full and
   abbreviated), Serbian Latin and Cyrillic (nominative and genitive), Croatian, German; `12th day of
-  September, 2023`. Years 1900–2099, real calendar days only; two-digit years are not read. Slash dates
+  September, 2023`; a month-name date may wrap over one line break (`January` / `22, 2013`), and
+  `December 11,2014` is read. Years 1900–2099, real calendar days only; two-digit years are not read. Slash dates
   with both parts ≤ 12 are ambiguous: read month-first only when the file has more month-first evidence
   (`09/25/2023`, `September 12, 2023`) than day-first, else day-first; without any evidence at conf 0.6.
 - **Date roles** are separate keys with `Value::Date` (one query gets "the due dates"), rather than one
   role fact that has to be joined to its date by span. `conf` of a role fact = date conf × role
-  precision. `date_signed` includes "dated" dates, which often are dates of a *referenced* agreement;
-  hence its low role precision. `date_expiry` means "end of a term or period" (`until`, `through`,
-  `ending on`, `expires`).
+  precision. `date_expiry` means "end of a term or period" (`until`, `through`, `ending on`, `expires`).
+  Where a role comes from, in order:
+  1. a role phrase up to five words before the date, also across one wrapped line (`made as of`,
+     `entered into on`, `dated as of`, `effective as of`, `commencing on`, `with effect from`, `stupa na
+     snagu`, `važi od`, `zaključen(o) (je) dana`, `zaključuju`, `Datum zaključenja`, `potpisan`; Cyrillic
+     folds to Latin). `dated as of`, `made`, `made on` and `entered into on` give `date_signed`; `as of`,
+     `effective`, `entered into`, `made this` give `date_effective`;
+  2. a bare label right before the date: `Date:`, `Datum:`, and `dana` at the start of a line or after a
+     comma (`U Beogradu, dana ...`) → `date_signed`;
+  3. a date alone on its line in the first 25 lines of the first page (a letter or cover-page date, a
+     place before it and `godine` after it allowed) → `date_signed`.
+
+  **Cited agreements** get no role: for `date_effective` / `date_signed` phrases the sentence before the
+  phrase is searched for the nearest agreement noun (`agreement`, `contract`, `plan`, `letter`, `ugovor`,
+  `sporazum`, ...; defined terms in quotes skipped) and its determiner. `this` / `ovaj` (and a bare `the
+  Agreement`, `This is an Agreement`) mean this document; `the license agreement`, `a ... Agreement`, `both
+  Agreements`, `that certain ...` mean another one. Serbian participles of another document
+  (`Ugovora zaključenog dana`, `potpisanog`) stop the search.
 - **Money**: with both `.` and `,` the later one is decimal; one separator followed by 1–2 digits is
   decimal, by exactly 3 digits groups thousands; spaces group thousands in threes; `million`/`milion`
   etc. multiply. ISO codes only when written in capitals (`TRY`, `ALL` are words), currency words
@@ -79,16 +95,22 @@ a bounded number of tokens around a candidate, so the scan is linear in the text
 
 Measured on 1 430 real files: CUAD (510 contracts, 26.8 MB of text), Kleister-NDA (540, 9.6 MB), a
 private business corpus (369 PDFs through `pdftotext`, 11 DOCX through `quail-docx`; 5.2 MB). Precision
-is hand-checked on random samples of the emitted facts (pooled over the corpora); Kleister-NDA gold
-effective dates check `date_effective` automatically.
+is hand-checked on random samples of the emitted facts (pooled over the corpora). Date roles are
+measured against gold: on the documents of the Kleister-NDA and CUAD dev splits (and serbian-public
+silver dev) that carry an effective or agreement date, a role fact is correct when its date is one of
+them ("any date of this agreement"). The `conf` column is the emitted conf of a usual date (0.97 ×
+role conf). A date alone at the head of the page is set below its precision (0.9) because
+Kleister-NDA leaves about half of its letter agreements without an effective date.
 
 | key / rule | facts | sample | precision | conf |
 |---|---|---|---|---|
 | `date` (unambiguous) | 3 940 | 40 | 1.00 | 0.95–0.97 |
 | `date` ambiguous, by evidence / default | — | — | prior | 0.85 / 0.6 |
-| `date_effective` | 948 | Kleister gold 175; 30 | 0.77 (gold); ~0.83 role-only | 0.78 |
+| `date_effective` (phrase) | 353 on dev gold docs | Kleister-NDA + CUAD dev gold | 0.77 (0.90 / 0.72) | 0.76 |
 | `date_expiry` (end of term/period) | 208 | 30 | 0.93 | 0.78 |
-| `date_signed` | 588 | 40 | ~0.45 own document; 0.98 any agreement date | 0.53 |
+| `date_signed` (phrase) | 209 on dev gold docs | Kleister-NDA + CUAD dev gold | 0.65 | 0.63 |
+| `date_signed` (`Date:` / `dana` label) | 140 on dev gold docs | Kleister-NDA + CUAD + serbian-public silver dev | 0.48 | 0.49 |
+| `date_signed` (date alone at the head of page 1) | 47 on dev gold docs | Kleister-NDA + CUAD dev gold | 0.98 | 0.87 |
 | `date_invoice` | 105 | 30 | 1.00 | 0.92 |
 | `date_due` (after the `Discount Due Date` fix) | 140 | 30 | 1.00 | 0.92 |
 | `amount` | 3 688 | 40 | 1.00 | 0.97 |
