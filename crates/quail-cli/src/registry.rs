@@ -114,6 +114,13 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "Company mentions with roles and defined terms, ranked candidates, name statements.",
     },
+    #[cfg(feature = "clauses")]
+    StepDoc {
+        id: quail_clauses::ClauseTerms::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Contract clauses: governing law, term and renewal, survival and notice periods, termination rights.",
+    },
     #[cfg(feature = "sketch")]
     StepDoc {
         id: quail_sketch::MinHashAnalyzer::ID,
@@ -216,6 +223,8 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     let b = b.analyzer(Box::new(quail_refs::RefAnalyzer::new()));
     #[cfg(feature = "parties")]
     let b = b.analyzer(Box::new(quail_parties::PartyCandidates));
+    #[cfg(feature = "clauses")]
+    let b = b.analyzer(Box::new(quail_clauses::ClauseTerms));
     // `sketch.minhash_sada@1` is Standard: the engine leaves it out under `Profile::Fast`.
     #[cfg(feature = "sketch")]
     let b = b
@@ -259,6 +268,8 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     v.push(("quail-refs", keydocs::REFS));
     #[cfg(feature = "parties")]
     v.push(("quail-parties", keydocs::PARTIES));
+    #[cfg(feature = "clauses")]
+    v.push(("quail-clauses", keydocs::CLAUSES));
     #[cfg(feature = "sketch")]
     v.push(("quail-sketch", keydocs::SKETCH));
     #[cfg(feature = "items")]
@@ -364,6 +375,8 @@ mod tests {
             ("quail-refs", "quail-refs/src/lib.rs"),
             #[cfg(feature = "parties")]
             ("quail-parties", "quail-parties/src/lib.rs"),
+            #[cfg(feature = "clauses")]
+            ("quail-clauses", "quail-clauses/src/lib.rs"),
             #[cfg(feature = "sketch")]
             ("quail-sketch", "quail-sketch/src/lib.rs"),
             #[cfg(feature = "items")]

@@ -581,6 +581,9 @@ fn keys_and_version() {
     if cfg!(feature = "parties") {
         expected.push("party.candidates@2");
     }
+    if cfg!(feature = "clauses") {
+        expected.push("clause.terms@1");
+    }
     if cfg!(feature = "sketch") {
         expected.extend([
             "sketch.minhash@2",
