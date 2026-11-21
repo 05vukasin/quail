@@ -14,6 +14,7 @@
 //! | [`shingle`] | word shingles and char n-grams as stable XXH3-64 hashes |
 //! | [`garbage`] | how broken a text layer looks: `Clean`, `Garbage` or `TooShort` |
 //! | [`lang`] | language identification with top candidates |
+//! | [`money`] | numbers and amounts as written (`1,200.50`, `1.200,50`, `1 200,50`, `(€1,200.50)`, `5 miliona din.`) as exact decimals; currency symbols, words and codes |
 //!
 //! Everything borrows where it can ([`std::borrow::Cow`] results, iterators over `&str`,
 //! `*_into` variants that append to a caller's buffer) and nothing keeps global state.
@@ -29,6 +30,7 @@
 pub mod fold;
 pub mod garbage;
 pub mod lang;
+pub mod money;
 pub mod normalize;
 pub mod script;
 pub mod shingle;
