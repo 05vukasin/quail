@@ -16,11 +16,57 @@
 
 use quail_core::BBox;
 
+/// A glyph's Unicode text: one char inline (the common case, no allocation), else a string
+/// (ligatures, multi-char `ToUnicode` entries).
+#[derive(Clone, Debug)]
+pub(crate) enum GlyphText {
+    /// One char, UTF-8 encoded, and its length in bytes.
+    Char([u8; 4], u8),
+    /// Anything longer.
+    Str(String),
+}
+
+impl GlyphText {
+    /// The text of one char.
+    pub fn from_char(c: char) -> Self {
+        let mut b = [0; 4];
+        let n = c.encode_utf8(&mut b).len();
+        Self::Char(b, u8::try_from(n).unwrap_or(4))
+    }
+
+    /// The text.
+    pub fn as_str(&self) -> &str {
+        match self {
+            // Always valid: written by `char::encode_utf8`.
+            Self::Char(b, n) => {
+                std::str::from_utf8(b.get(..usize::from(*n)).unwrap_or(&[])).unwrap_or_default()
+            }
+            Self::Str(s) => s,
+        }
+    }
+}
+
+impl From<String> for GlyphText {
+    fn from(s: String) -> Self {
+        let mut it = s.chars();
+        match (it.next(), it.next()) {
+            (Some(c), None) => Self::from_char(c),
+            _ => Self::Str(s),
+        }
+    }
+}
+
+impl From<&str> for GlyphText {
+    fn from(s: &str) -> Self {
+        Self::from(s.to_owned())
+    }
+}
+
 /// One glyph with its Unicode text, origin and advance, in page coordinates.
 #[derive(Clone, Debug)]
 pub(crate) struct Glyph {
     /// Unicode text (usually one char, ligatures give several).
-    pub text: String,
+    pub text: GlyphText,
     /// Origin x.
     pub x: f32,
     /// Origin y (on the baseline).
@@ -36,7 +82,7 @@ pub(crate) struct Glyph {
 /// A glyph in its text frame: text runs along +x, lines go down along +y.
 #[derive(Clone, Debug)]
 struct FrameGlyph {
-    text: String,
+    text: GlyphText,
     x0: f32,
     x1: f32,
     baseline: f32,
@@ -207,66 +253,75 @@ fn segments(mut glyphs: Vec<FrameGlyph>) -> Vec<Segment> {
     // Content streams usually emit text in a sensible order already; a stable sort by
     // baseline keeps that order inside a line when x ties.
     glyphs.sort_by(|a, b| a.baseline.total_cmp(&b.baseline));
-    let mut lines: Vec<Vec<FrameGlyph>> = Vec::new();
-    for g in glyphs {
-        if let Some(line) = lines.last_mut()
-            && let Some(first) = line.first()
-            && (g.baseline - first.baseline).abs() <= SAME_LINE_EM * first.size.max(g.size)
-        {
-            line.push(g);
-            continue;
-        }
-        lines.push(vec![g]);
-    }
+    // Lines are runs of the sorted glyphs: a glyph joins the line when its baseline is close
+    // to the line's first glyph. Each run is then sorted by x in place (stable).
     let mut out = Vec::new();
-    for mut line in lines {
-        line.sort_by(|a, b| a.x0.total_cmp(&b.x0));
-        let mut cur: Option<(String, BBox, f32, f32)> = None; // text, bbox, size, last x1
-        for g in line {
-            let top = g.baseline - 0.8 * g.size;
-            let bottom = g.baseline + 0.2 * g.size;
-            let mut close = false;
-            if let Some((text, bbox, size, last_x1)) = cur.as_mut() {
-                let gap = g.x0 - *last_x1;
-                let em = size.max(g.size);
-                if gap > SEGMENT_GAP_EM * em {
-                    close = true;
-                } else {
-                    // Overlapping duplicates (fake bold: the same glyph drawn twice with a tiny
-                    // offset) are dropped.
-                    if gap < -0.3 * em && text.ends_with(g.text.as_str()) {
-                        continue;
-                    }
-                    if gap > SPACE_GAP_EM * em
-                        && !text.ends_with(char::is_whitespace)
-                        && !g.text.starts_with(char::is_whitespace)
-                    {
-                        text.push(' ');
-                    }
-                    text.push_str(&g.text);
-                    bbox.x1 = bbox.x1.max(g.x1);
-                    bbox.y0 = bbox.y0.min(top);
-                    bbox.y1 = bbox.y1.max(bottom);
-                    *last_x1 = g.x1.max(*last_x1);
-                    continue;
-                }
-            }
-            if close && let Some((t, b, s, _)) = cur.take() {
-                push_segment(&mut out, &t, b, s);
-            }
-            let bbox = BBox {
-                x0: g.x0,
-                y0: top,
-                x1: g.x1,
-                y1: bottom,
-            };
-            cur = Some((g.text, bbox, g.size, g.x1));
+    let mut start = 0;
+    while let Some(first) = glyphs.get(start) {
+        let (b0, s0) = (first.baseline, first.size);
+        let rest = glyphs.get(start + 1..).unwrap_or(&[]);
+        let len = rest
+            .iter()
+            .position(|g| (g.baseline - b0).abs() > SAME_LINE_EM * s0.max(g.size))
+            .map_or(rest.len() + 1, |n| n + 1);
+        if let Some(line) = glyphs.get_mut(start..start + len) {
+            line.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+            line_segments(line, &mut out);
         }
-        if let Some((t, b, s, _)) = cur {
-            push_segment(&mut out, &t, b, s);
-        }
+        start += len;
     }
     out
+}
+
+/// Splits one line (sorted by x) into segments at wide gaps.
+fn line_segments(line: &[FrameGlyph], out: &mut Vec<Segment>) {
+    let mut cur: Option<(String, BBox, f32, f32)> = None; // text, bbox, size, last x1
+    for g in line {
+        let gt = g.text.as_str();
+        let top = g.baseline - 0.8 * g.size;
+        let bottom = g.baseline + 0.2 * g.size;
+        let mut close = false;
+        if let Some((text, bbox, size, last_x1)) = cur.as_mut() {
+            let gap = g.x0 - *last_x1;
+            let em = size.max(g.size);
+            if gap > SEGMENT_GAP_EM * em {
+                close = true;
+            } else {
+                // Overlapping duplicates (fake bold: the same glyph drawn twice with a tiny
+                // offset) are dropped.
+                if gap < -0.3 * em && text.ends_with(gt) {
+                    continue;
+                }
+                if gap > SPACE_GAP_EM * em
+                    && !text.ends_with(char::is_whitespace)
+                    && !gt.starts_with(char::is_whitespace)
+                {
+                    text.push(' ');
+                }
+                text.push_str(gt);
+                bbox.x1 = bbox.x1.max(g.x1);
+                bbox.y0 = bbox.y0.min(top);
+                bbox.y1 = bbox.y1.max(bottom);
+                *last_x1 = g.x1.max(*last_x1);
+                continue;
+            }
+        }
+        if close && let Some((t, b, s, _)) = cur.take() {
+            push_segment(out, &t, b, s);
+        }
+        let bbox = BBox {
+            x0: g.x0,
+            y0: top,
+            x1: g.x1,
+            y1: bottom,
+        };
+        let mut text = String::with_capacity(32);
+        text.push_str(gt);
+        cur = Some((text, bbox, g.size, g.x1));
+    }
+    if let Some((t, b, s, _)) = cur {
+        push_segment(out, &t, b, s);
+    }
 }
 
 fn push_segment(out: &mut Vec<Segment>, text: &str, bbox: BBox, size: f32) {
@@ -486,7 +541,7 @@ mod tests {
         s.chars()
             .enumerate()
             .map(|(i, c)| Glyph {
-                text: c.to_string(),
+                text: GlyphText::from_char(c),
                 x: x + i as f32 * w * dx,
                 y: y + i as f32 * w * dy,
                 dx: w * dx,
