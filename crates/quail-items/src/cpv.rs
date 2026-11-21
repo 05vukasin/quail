@@ -51,87 +51,158 @@ pub struct CpvIndex {
     grams: Space,
 }
 
+/// A term packed into an integer: up to six characters of 21 bits each (stems are cut to
+/// six characters, trigrams have three), so two different terms never share a key.
+type TermKey = u128;
+
+fn term_key(t: &str) -> TermKey {
+    t.chars()
+        .take(6)
+        .fold(0u128, |k, c| (k << 21) | TermKey::from(u32::from(c) + 1))
+}
+
+/// One TF-IDF vector space in compressed sparse rows: the postings of term `t` are
+/// `docs[offsets[t]..offsets[t + 1]]` with their weights, in document order. No string and
+/// no per-term allocation is kept after the build.
 #[derive(Default)]
 struct Space {
-    ids: HashMap<String, u32>,
+    ids: HashMap<TermKey, u32>,
     idf: Vec<f32>,
-    /// Term → (doc, normalized weight).
-    postings: Vec<Vec<(u32, f32)>>,
+    max_idf: f32,
+    offsets: Vec<u32>,
+    docs: Vec<u32>,
+    weights: Vec<f32>,
 }
 
 impl Space {
-    fn build(docs: &[Vec<String>]) -> Self {
+    /// Builds the space from each document's terms, given as term keys.
+    fn build(docs: impl Iterator<Item = Vec<TermKey>>) -> Self {
         let mut s = Space::default();
+        // Per document: (term id, tf), sorted by id, flattened.
+        let mut flat: Vec<(u32, f32)> = Vec::new();
+        let mut doc_start: Vec<u32> = vec![0];
         let mut df: Vec<u32> = Vec::new();
-        let mut doc_terms: Vec<Vec<(u32, f32)>> = Vec::with_capacity(docs.len());
+        let mut ids_buf: Vec<u32> = Vec::new();
         for terms in docs {
-            let mut tf: HashMap<u32, f32> = HashMap::new();
+            ids_buf.clear();
             for t in terms {
                 let next = u32::try_from(s.ids.len()).unwrap_or(u32::MAX);
-                let id = *s.ids.entry(t.clone()).or_insert(next);
+                let id = *s.ids.entry(t).or_insert(next);
                 if id as usize >= df.len() {
                     df.push(0);
                 }
-                *tf.entry(id).or_default() += 1.0;
+                ids_buf.push(id);
             }
-            for id in tf.keys() {
-                df[*id as usize] += 1;
+            ids_buf.sort_unstable();
+            let mut i = 0;
+            while i < ids_buf.len() {
+                let id = ids_buf[i];
+                let run = ids_buf[i..].iter().take_while(|&&x| x == id).count();
+                df[id as usize] += 1;
+                #[allow(clippy::cast_precision_loss)]
+                flat.push((id, run as f32));
+                i += run;
             }
-            let mut v: Vec<(u32, f32)> = tf.into_iter().collect();
-            v.sort_unstable_by_key(|(id, _)| *id);
-            doc_terms.push(v);
+            doc_start.push(u32::try_from(flat.len()).unwrap_or(u32::MAX));
         }
         #[allow(clippy::cast_precision_loss)]
-        let n = docs.len().max(1) as f32;
+        let n = (doc_start.len() - 1).max(1) as f32;
         #[allow(clippy::cast_precision_loss)]
         let idf: Vec<f32> = df
             .iter()
             .map(|&d| (n / d.max(1) as f32).ln() + 1.0)
             .collect();
-        s.postings = vec![Vec::new(); idf.len()];
-        for (doc, terms) in doc_terms.iter().enumerate() {
-            let w: Vec<f32> = terms
+        // Postings per term, then offsets.
+        let mut offsets = vec![0u32; idf.len() + 1];
+        for (id, _) in &flat {
+            offsets[*id as usize + 1] += 1;
+        }
+        for t in 1..offsets.len() {
+            offsets[t] += offsets[t - 1];
+        }
+        let mut fill: Vec<u32> = offsets[..offsets.len() - 1].to_vec();
+        let mut post_docs = vec![0u32; flat.len()];
+        let mut post_w = vec![0f32; flat.len()];
+        for (doc, w) in doc_start.windows(2).enumerate() {
+            let terms = &flat[w[0] as usize..w[1] as usize];
+            let norm = terms
                 .iter()
-                .map(|(id, tf)| (1.0 + tf.ln()) * idf[*id as usize])
-                .collect();
-            let norm = w.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
-            for ((id, _), x) in terms.iter().zip(w) {
-                s.postings[*id as usize].push((u32::try_from(doc).unwrap_or(u32::MAX), x / norm));
+                .map(|(id, tf)| {
+                    let x = (1.0 + tf.ln()) * idf[*id as usize];
+                    x * x
+                })
+                .sum::<f32>()
+                .sqrt()
+                .max(1e-6);
+            for (id, tf) in terms {
+                let slot = fill[*id as usize] as usize;
+                fill[*id as usize] += 1;
+                post_docs[slot] = u32::try_from(doc).unwrap_or(u32::MAX);
+                post_w[slot] = (1.0 + tf.ln()) * idf[*id as usize] / norm;
             }
         }
+        s.max_idf = idf.iter().copied().fold(1.0, f32::max);
         s.idf = idf;
+        s.offsets = offsets;
+        s.docs = post_docs;
+        s.weights = post_w;
+        s.ids.shrink_to_fit();
         s
+    }
+
+    /// Heap bytes held by the space (the hash table approximately).
+    fn heap_bytes(&self) -> usize {
+        self.ids.capacity() * (std::mem::size_of::<(TermKey, u32)>() + 1)
+            + self.idf.capacity() * 4
+            + self.offsets.capacity() * 4
+            + self.docs.capacity() * 4
+            + self.weights.capacity() * 4
     }
 
     /// Adds `weight × cosine` of the query to `acc` per document (`touched` lists the
     /// documents that got a non-zero score).
     fn score(&self, terms: &[String], weight: f32, acc: &mut [f32], touched: &mut Vec<u32>) {
-        let mut tf: HashMap<u32, f32> = HashMap::new();
+        let mut tf: Vec<(u32, f32)> = Vec::new();
         for t in terms {
-            if let Some(&id) = self.ids.get(t) {
-                *tf.entry(id).or_default() += 1.0;
+            if let Some(&id) = self.ids.get(&term_key(t)) {
+                match tf.iter_mut().find(|(i, _)| *i == id) {
+                    Some((_, f)) => *f += 1.0,
+                    None => tf.push((id, 1.0)),
+                }
             }
         }
         // Query norm over all its terms; unknown terms count with the highest idf, so a
         // description that is mostly unknown words scores low.
         #[allow(clippy::cast_precision_loss)]
-        let unknown = terms.len() as f32 - tf.values().sum::<f32>();
-        let max_idf = self.idf.iter().copied().fold(1.0, f32::max);
+        let unknown = terms.len() as f32 - tf.iter().map(|(_, f)| f).sum::<f32>();
         let qw: Vec<(u32, f32)> = tf
             .iter()
             .map(|(id, f)| (*id, (1.0 + f.ln()) * self.idf[*id as usize]))
             .collect();
-        let norm = (qw.iter().map(|(_, x)| x * x).sum::<f32>() + unknown * max_idf * max_idf)
+        let norm = (qw.iter().map(|(_, x)| x * x).sum::<f32>()
+            + unknown * self.max_idf * self.max_idf)
             .sqrt()
             .max(1e-6);
         for (id, x) in qw {
             let w = weight * x / norm;
-            for &(doc, y) in &self.postings[id as usize] {
-                if let Some(a) = acc.get_mut(doc as usize) {
-                    if *a == 0.0 {
+            let (Some(&a), Some(&b)) = (
+                self.offsets.get(id as usize),
+                self.offsets.get(id as usize + 1),
+            ) else {
+                continue;
+            };
+            let (Some(docs), Some(ws)) = (
+                self.docs.get(a as usize..b as usize),
+                self.weights.get(a as usize..b as usize),
+            ) else {
+                continue;
+            };
+            for (&doc, &y) in docs.iter().zip(ws) {
+                if let Some(acc) = acc.get_mut(doc as usize) {
+                    if *acc == 0.0 {
                         touched.push(doc);
                     }
-                    *a += w * y;
+                    *acc += w * y;
                 }
             }
         }
@@ -205,8 +276,7 @@ impl CpvIndex {
     pub fn from_tsv(tsv: &str) -> Self {
         let mut entries = Vec::new();
         let mut doc_entry = Vec::new();
-        let mut word_docs = Vec::new();
-        let mut gram_docs = Vec::new();
+        let mut labels: Vec<&str> = Vec::new();
         for line in tsv.lines() {
             let mut parts = line.split('\t');
             let (Some(code), Some(en)) = (parts.next(), parts.next()) else {
@@ -218,9 +288,7 @@ impl CpvIndex {
                 if label.is_empty() {
                     continue;
                 }
-                let w = folded_words(label);
-                word_docs.push(word_terms(&w));
-                gram_docs.push(gram_terms(&w));
+                labels.push(label);
                 doc_entry.push(e);
             }
             entries.push(CpvEntry {
@@ -229,12 +297,37 @@ impl CpvIndex {
                 sr: sr.into(),
             });
         }
+        // Terms are computed per label and packed right away: no label's strings outlive
+        // its turn.
+        let keys = |f: fn(&[String]) -> Vec<String>| {
+            labels
+                .iter()
+                .map(move |l| f(&folded_words(l)).iter().map(|t| term_key(t)).collect())
+        };
+        let words = Space::build(keys(word_terms));
+        let grams = Space::build(keys(gram_terms));
+        entries.shrink_to_fit();
+        doc_entry.shrink_to_fit();
         Self {
-            words: Space::build(&word_docs),
-            grams: Space::build(&gram_docs),
             entries,
             doc_entry,
+            words,
+            grams,
         }
+    }
+
+    /// Approximate heap bytes held by the index (entries, postings, term tables).
+    pub fn heap_bytes(&self) -> usize {
+        let entries: usize = self
+            .entries
+            .iter()
+            .map(|e| e.code.len() + e.en.len() + e.sr.len())
+            .sum();
+        entries
+            + self.entries.capacity() * std::mem::size_of::<CpvEntry>()
+            + self.doc_entry.capacity() * 4
+            + self.words.heap_bytes()
+            + self.grams.heap_bytes()
     }
 
     /// All entries, in code order.

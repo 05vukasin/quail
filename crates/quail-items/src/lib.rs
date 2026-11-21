@@ -6,7 +6,7 @@
 //! currency, VAT), with top-3 category candidates from the EU CPV 2008 vocabulary and the
 //! evidence to check it.
 //!
-//! One analyzer, [`ItemLines`] (`item.lines@2`): requires `document`, runs after
+//! One analyzer, [`ItemLines`] (`item.lines@3`): requires `document`, runs after
 //! `revised_document`, `Profile::Fast` for the lines, categories from `Profile::Standard`.
 //!
 //! | key | value |

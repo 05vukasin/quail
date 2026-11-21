@@ -1,7 +1,7 @@
-//! The `item.lines@2` analyzer.
+//! The `item.lines@3` analyzer.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use quail_core::{
     Analyzer, AnalyzerId, BlockKind, Ctx, Document, Emitter, Evidence, Page, PageKind, Profile,
@@ -35,7 +35,8 @@ const MAX_COLS: usize = 64;
 /// (CPV top-3) are added from [`Profile::Standard`] on.
 #[derive(Clone)]
 pub struct ItemLines {
-    cpv: Arc<CpvIndex>,
+    /// Built on first use (only Standard and up categorize), shared by every clone.
+    cpv: Arc<OnceLock<Arc<CpvIndex>>>,
 }
 
 impl Default for ItemLines {
@@ -46,24 +47,34 @@ impl Default for ItemLines {
 
 impl ItemLines {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("item.lines", 3);
 
-    /// With the embedded CPV 2008 index (built here, about 100 ms; build once and clone).
+    /// With the embedded CPV 2008 index. The index is built lazily on the first file that
+    /// needs categories (about 0.2 s, about 15 MB), once for this value and all its clones; a
+    /// `Profile::Fast` run never builds it.
     pub fn new() -> Self {
-        Self::with_index(Arc::new(CpvIndex::embedded()))
+        Self {
+            cpv: Arc::new(OnceLock::new()),
+        }
     }
 
     /// With a given category index (shared).
     pub fn with_index(cpv: Arc<CpvIndex>) -> Self {
-        Self { cpv }
+        Self {
+            cpv: Arc::new(OnceLock::from(cpv)),
+        }
     }
 
-    /// The category index.
+    /// The category index (built now if it was not yet).
     pub fn index(&self) -> &CpvIndex {
-        &self.cpv
+        self.cpv.get_or_init(|| Arc::new(CpvIndex::embedded()))
+    }
+
+    /// Whether the category index has been built.
+    pub fn index_built(&self) -> bool {
+        self.cpv.get().is_some()
     }
 }
-
 impl Analyzer for ItemLines {
     fn id(&self) -> AnalyzerId {
         Self::ID
@@ -87,7 +98,7 @@ impl Analyzer for ItemLines {
         };
         let found = extract(doc, out);
         let categorize = ctx.profile >= Profile::Standard;
-        emit(&found, categorize.then_some(&*self.cpv), out);
+        emit(&found, categorize.then(|| self.index()), out);
         Ok(())
     }
 }
