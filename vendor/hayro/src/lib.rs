@@ -66,6 +66,12 @@ mod clip;
 mod glyph;
 // quail: render limits.
 mod limits;
+/// quail: recording memory charged per path fill.
+pub(crate) const FILL_RECORD_BYTES: u64 = 512;
+/// quail: recording memory charged per glyph fill.
+pub(crate) const GLYPH_RECORD_BYTES: u64 = 1024;
+/// quail: memory charged per gradient fill (vello builds a lookup table for each).
+pub(crate) const GRADIENT_BYTES: u64 = 64 << 10;
 pub use limits::{RenderAbort, RenderLimits};
 mod glyph_cache;
 mod image;
@@ -96,6 +102,22 @@ impl GlobalState {
     pub(crate) fn tick(&self) {
         if let Some(l) = &self.limits {
             l.tick();
+        }
+    }
+
+    /// quail: a content-stream operator.
+    #[inline]
+    pub(crate) fn op(&self) {
+        if let Some(l) = &self.limits {
+            l.op();
+        }
+    }
+
+    /// quail: rasterization work, in pixel-composites.
+    #[inline]
+    pub(crate) fn work(&self, pixels: u64) {
+        if let Some(l) = &self.limits {
+            l.charge_work(pixels);
         }
     }
 
@@ -149,12 +171,34 @@ impl<'r> Renderer<'r> {
 
     fn child_context(&self, width: u16, height: u16) -> RenderContext {
         // quail: charge the child canvas (8 bytes per pixel) before allocating it.
-        self.global
-            .charge(u64::from(width) * u64::from(height) * 8);
+        self.global.charge(
+            u64::from(width)
+                .saturating_mul(u64::from(height))
+                .saturating_mul(8),
+        );
         let mut ctx =
             RenderContext::new_with(width, height, derive_settings(self.ctx.render_settings()));
         ctx.set_aliasing_threshold(self.global.aliasing_threshold);
         ctx
+    }
+
+    /// quail: a fill of `local` (user space) under `transform`: its device-space area (clipped
+    /// to the canvas) is rasterization work, and vello keeps a record of it.
+    fn charge_fill(&self, local: Rect, transform: Affine) {
+        let canvas = Rect::new(0.0, 0.0, self.ctx.width() as f64, self.ctx.height() as f64);
+        let r = transform.transform_rect_bbox(local).intersect(canvas);
+        let area = if r.area().is_finite() && r.area() > 0.0 {
+            r.area().min(u64::MAX as f64) as u64
+        } else {
+            0
+        };
+        self.global.work(area);
+        self.global.charge(FILL_RECORD_BYTES);
+    }
+
+    /// quail: the canvas area, for layers composited over the whole target.
+    fn canvas_area(&self) -> u64 {
+        u64::from(self.ctx.width()).saturating_mul(u64::from(self.ctx.height()))
     }
 
     fn apply_draw_props(&mut self, props: &DrawProps<'_>) {
@@ -173,6 +217,11 @@ impl<'r> Renderer<'r> {
 }
 
 impl<'a, 'r> Device<'a> for Renderer<'r> {
+    // quail: deadline between operators.
+    fn on_operator(&mut self) {
+        self.global.op();
+    }
+
     // quail: every callback ticks the render limits.
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, props: ImageDrawProps<'a>) {
         self.global.tick();
@@ -196,6 +245,8 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
         blend_mode: BlendMode,
     ) {
         self.global.tick();
+        // quail: a layer is composited over the canvas when it is popped.
+        self.global.work(self.canvas_area());
         Self::push_transparency_group(self, opacity, mask, blend_mode);
     }
 
@@ -209,11 +260,17 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
 
     fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
         self.global.tick();
+        if !matches!(draw_mode, DrawMode::Invisible) {
+            self.charge_fill(kurbo::Shape::bounding_box(path), props.transform);
+        }
         Self::draw_path(self, path, props, draw_mode);
     }
 
     fn draw_rect(&mut self, rect: &Rect, props: DrawProps<'a>, draw_mode: &DrawMode) {
         self.global.tick();
+        if !matches!(draw_mode, DrawMode::Invisible) {
+            self.charge_fill(*rect, props.transform);
+        }
         Self::draw_rect(self, rect, props, draw_mode);
     }
 
@@ -224,6 +281,10 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
         draw_mode: &DrawMode,
     ) {
         self.global.tick();
+        // quail: vello records one fill per glyph.
+        self.global.charge(
+            (glyph_run.glyphs().len() as u64).saturating_mul(GLYPH_RECORD_BYTES),
+        );
         Self::draw_glyph_run(self, glyph_run, props, draw_mode);
     }
 }
@@ -369,8 +430,13 @@ fn render_impl<'a>(
         render_settings,
         &mut ctx,
         transform,
-        limits,
+        limits.clone(),
     );
+    // quail: vello's rasterization below cannot be interrupted; its work was charged while
+    // recording. Do not start it past the deadline.
+    if let Some(l) = &limits {
+        l.check_deadline();
+    }
     ctx.flush();
 
     let mut pixmap = Pixmap::new(ctx.width(), ctx.height());

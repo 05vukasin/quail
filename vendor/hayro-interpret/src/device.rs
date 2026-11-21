@@ -49,6 +49,9 @@ pub trait Device<'a> {
     fn begin_marked_content(&mut self, _tag: &[u8], _properties: Option<&Dict<'_>>) {}
     /// Called at the end of a marked content sequence (EMC).
     fn end_marked_content(&mut self) {}
+    /// quail: called before every content-stream operator, so a device can enforce a deadline
+    /// between operators (some, like `sh`, cost far more than a draw callback). Default: no-op.
+    fn on_operator(&mut self) {}
 }
 
 /// A device that discards all drawing operations.

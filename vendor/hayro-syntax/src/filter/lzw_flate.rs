@@ -753,12 +753,13 @@ struct PredictorParams {
 }
 
 impl PredictorParams {
-    fn bits_per_pixel(&self) -> u8 {
-        self.bits_per_component * self.colors
+    // quail: checked arithmetic in `usize` (`u8 * u8` wrapped, `columns * bpp` could overflow).
+    fn bits_per_pixel(&self) -> Option<usize> {
+        usize::from(self.bits_per_component).checked_mul(usize::from(self.colors))
     }
 
-    fn row_length_in_bytes(&self) -> usize {
-        (self.columns * self.bits_per_pixel() as usize).div_ceil(8)
+    fn row_length_in_bytes(&self) -> Option<usize> {
+        Some(self.columns.checked_mul(self.bits_per_pixel()?)?.div_ceil(8))
     }
 }
 
@@ -792,14 +793,26 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
         i => {
             let is_png_predictor = i >= 10;
 
-            let row_len = params.row_length_in_bytes();
+            // quail: a zero row length (`/Colors 0`, `/Columns 0`) divided by zero below; a row
+            // longer than the data decodes no row at all, and must not size the zero row
+            // (`/Columns 2^31` asked for gigabytes).
+            if params.colors == 0 || params.columns == 0 {
+                return None;
+            }
+            let row_len = params.row_length_in_bytes()?;
+            if row_len == 0 {
+                return None;
+            }
 
             let total_row_len = if is_png_predictor {
                 // + 1 Because each row must start with the predictor that is used for PNG predictors.
-                row_len + 1
+                row_len.checked_add(1)?
             } else {
                 row_len
             };
+            if total_row_len > data.len() {
+                return Some(Vec::new());
+            }
 
             let num_rows = data.len() / total_row_len;
 
@@ -810,7 +823,8 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
             let (bit_size, chunk_len) = if is_png_predictor {
                 (
                     8,
-                    (params.colors * params.bits_per_component).div_ceil(8) as usize,
+                    // quail: in `usize`, the `u8` product wrapped.
+                    params.bits_per_pixel()?.div_ceil(8),
                 )
             } else {
                 (params.bits_per_component, params.colors as usize)

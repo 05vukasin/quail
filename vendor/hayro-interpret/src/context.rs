@@ -66,6 +66,8 @@ pub struct Context<'a> {
     pub(crate) ocg_state: OcgState,
     nesting_depth: u32,
     pub(crate) glyph_scratch: Vec<PositionedGlyph<'a>>,
+    // quail: how many Type3 glyph procedures enclose this context (forms do not count).
+    pub(crate) type3_depth: u32,
 }
 
 impl<'a> Context<'a> {
@@ -112,6 +114,7 @@ impl<'a> Context<'a> {
             ocg_state,
             nesting_depth,
             glyph_scratch: Vec::new(),
+            type3_depth: 0,
         }
     }
 
