@@ -1,0 +1,39 @@
+[package]
+name = "quail-ocr"
+description = "OCR of pages that have no usable text layer: engines, caching, page text and boxes in points"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# PP-OCRv6 (PaddleOCR) on ONNX Runtime through `oar-ocr`. Links a native ONNX Runtime that the
+# `ort` build script downloads (prebuilt for Linux x64/arm64, macOS arm64, Windows x64/arm64).
+paddle = ["dep:oar-ocr", "dep:image", "dep:sha2", "oar-ocr/download-binaries", "oar-ocr/simd"]
+# `fetch_models`: downloads the models of the manifest into the model directory, checking SHA-256.
+fetch = ["dep:ureq", "dep:sha2"]
+
+[dependencies]
+quail-core.workspace = true
+serde.workspace = true
+# `pure`: Rust intrinsics instead of assembly, as in quail-hash (no C toolchain needed).
+blake3 = { version = "1.8", default-features = false, features = ["std", "pure"] }
+
+# Exact versions: the API of oar-ocr still changes between minor releases, and it pins
+# `ort = "=2.0.0-rc.15"` (ONNX Runtime 1.31) itself.
+oar-ocr = { version = "=0.11.0", default-features = false, optional = true }
+image = { version = "=0.25.10", default-features = false, optional = true }
+sha2 = { version = "0.11", optional = true }
+ureq = { version = "3.1", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[[example]]
+name = "fetch_models"
+required-features = ["fetch"]
