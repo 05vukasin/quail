@@ -27,7 +27,7 @@ use crate::device::{
     Abort, Captured, Clock, MAX_CALLS_PER_PAGE, MAX_NESTINGS_PER_PAGE, PageCapture, Watchdog,
 };
 use crate::open::{Caught, caught, open};
-use crate::quality::{Signals, garbage_ratio, judge};
+use crate::quality::{Signals, judge};
 use crate::raster::PdfRaster;
 use crate::{keys, layout, meta, raw, zones};
 
@@ -37,13 +37,13 @@ pub(crate) const REOPEN_AFTER_BYTES: u64 = 64 << 20;
 /// Below this much budget left after a refused decode, the file is treated as spent.
 const BUDGET_SPENT: u64 = 1 << 20;
 
-/// The PDF extractor (`pdf.extract@1`). Stateless; one instance serves every thread.
+/// The PDF extractor (`pdf.extract@2`). Stateless; one instance serves every thread.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PdfExtractor;
 
 impl PdfExtractor {
     /// Its id.
-    pub const ID: AnalyzerId = AnalyzerId::new("pdf.extract", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("pdf.extract", 2);
 
     /// New extractor.
     pub fn new() -> Self {
@@ -199,6 +199,7 @@ struct Walk<'o> {
     fonts: BTreeSet<String>,
     pending: Vec<Pending>,
     image_only_pages: usize,
+    scanned_pages: usize,
     /// Per page: interpreted completely (no abort, no refused decode) and drew a number of
     /// images other than one, so it holds no single embedded scan.
     no_scan: Vec<bool>,
@@ -241,6 +242,7 @@ fn pages(
         fonts: BTreeSet::new(),
         pending: Vec::new(),
         image_only_pages: 0,
+        scanned_pages: 0,
         no_scan: Vec::new(),
     };
     let settings = InterpreterSettings::default();
@@ -291,6 +293,7 @@ fn pages(
         fonts,
         mut pending,
         image_only_pages,
+        scanned_pages,
         no_scan,
         ..
     } = walk;
@@ -315,11 +318,20 @@ fn pages(
         Value::List(fonts.into_iter().map(Value::text).collect()),
     );
     out.fact(keys::IMAGE_ONLY_PAGES, int(image_only_pages));
+    scan_facts(scanned_pages, doc.pages.len(), out);
     out.fact(
         keys::PAGES_NEEDING_OCR,
         int(doc.pages.iter().filter(|p| p.needs_ocr).count()),
     );
     (doc, no_scan)
+}
+
+/// `pdf.scanned_pages`, and `pdf.is_scanned` when a page was extracted.
+fn scan_facts(scanned: usize, pages: usize, out: &mut Emitter) {
+    out.fact(keys::SCANNED_PAGES, int(scanned));
+    if pages > 0 {
+        out.fact(keys::IS_SCANNED, Value::Bool(scanned * 2 > pages));
+    }
 }
 
 fn assign_zones(pending: &mut [Pending]) {
@@ -512,7 +524,7 @@ impl Walk<'_> {
         let verdict = judge(&Signals {
             chars,
             unmapped,
-            garbage: garbage_ratio(&text),
+            report: quail_text::garbage::garbage_report(&text),
             image_coverage: coverage,
             images,
             paths,
@@ -554,6 +566,7 @@ impl Walk<'_> {
             bboxes: kept.into_iter().map(|(_, b)| b).collect(),
         });
         self.image_only_pages += usize::from(verdict.image_only);
+        self.scanned_pages += usize::from(verdict.scanned);
         (flow, false)
     }
 }

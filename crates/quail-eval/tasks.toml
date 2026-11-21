@@ -147,9 +147,9 @@ normalize = "text"
 
 [task.is_scanned]
 description = "The document is a scan (needs OCR)"
-keys = ["ocr.is_scanned"]
+# More than half of the pages are scans needing OCR (image-only, or a thin or garbled layer).
+keys = ["pdf.is_scanned"]
 normalize = "bool"
-pending = "quail-pdf #7 reports pdf.pages_needing_ocr (Int), not a verdict; no OCR crate yet"
 
 [task.near_duplicate_of]
 description = "BLAKE3 of files that are near-duplicates of this one"

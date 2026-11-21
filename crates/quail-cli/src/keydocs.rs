@@ -374,6 +374,14 @@ pub const PDF: &[KeyDoc] = &[
         key: quail_pdf::keys::PAGES_NEEDING_OCR,
         doc: "Extracted pages flagged `needs_ocr`. Int.",
     },
+    KeyDoc {
+        key: quail_pdf::keys::SCANNED_PAGES,
+        doc: "Extracted pages that are scans needing OCR: image-only, or mostly an image whose text layer is too thin or garbage (a bad OCR layer, e.g. Cyrillic read as Latin). A scan with a usable OCR layer is not counted. Int.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::IS_SCANNED,
+        doc: "More than half of the extracted pages are `SCANNED_PAGES`: the document is a scan that needs OCR. Emitted for every PDF with an extracted page. Bool.",
+    },
 ];
 
 /// Keys of `quail_text::keys`.

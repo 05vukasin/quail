@@ -66,7 +66,7 @@ fn boolean(r: &Run, k: &FactKey) -> bool {
 #[test]
 fn ids() {
     let e = PdfExtractor::new();
-    assert_eq!(e.id().to_string(), "pdf.extract@1");
+    assert_eq!(e.id().to_string(), "pdf.extract@2");
     assert_eq!(e.formats(), &[Format::Pdf]);
     assert_eq!(e.provides(), &["raster"]);
 }
@@ -132,6 +132,8 @@ fn multi_page_text_with_positions() {
     );
     assert!(!boolean(&r, &keys::ENCRYPTED));
     assert_eq!(int(&r, &keys::PAGES_NEEDING_OCR), 0);
+    assert_eq!(int(&r, &keys::SCANNED_PAGES), 0);
+    assert!(!boolean(&r, &keys::IS_SCANNED));
     assert_eq!(int(&r, &keys::INCREMENTAL_UPDATES), 0);
     assert!(r.warnings.is_empty(), "{:?}", r.warnings);
     assert!(r.problems.is_empty(), "{:?}", r.problems);
@@ -217,6 +219,9 @@ fn image_only_page_needs_ocr() {
     assert!(p.text.is_empty());
     assert_eq!(int(&r, &keys::IMAGE_ONLY_PAGES), 1);
     assert_eq!(int(&r, &keys::PAGES_NEEDING_OCR), 1);
+    // One scan of two pages: not "most pages".
+    assert_eq!(int(&r, &keys::SCANNED_PAGES), 1);
+    assert!(!boolean(&r, &keys::IS_SCANNED));
     assert!(p.is_scan());
     assert!(!doc.pages[0].is_scan());
     assert_eq!(p.images.len(), 1);
@@ -585,4 +590,44 @@ fn object_stream_bomb_is_refused_before_opening() {
         r.doc
     );
     assert!(fact(&r, &keys::VERSION).is_some());
+}
+
+#[test]
+fn mostly_scans_is_scanned() {
+    let scan = || PageSpec {
+        lines: vec![],
+        full_page_image: true,
+    };
+    let r = run(pdf(&[text_page(1, 3), scan(), scan()], &Extras::default()));
+    assert_eq!(int(&r, &keys::SCANNED_PAGES), 2);
+    assert!(boolean(&r, &keys::IS_SCANNED));
+}
+
+#[test]
+fn lookalike_text_layer_is_kept_and_needs_ocr() {
+    // Cyrillic read as Latin look-alikes by a Latin-only OCR engine.
+    let garbled = [
+        "Ha ocHOBy 4naHa 146. cTaB 1. 3aKoHa o jaBHMM Ha6aBKaMa",
+        "M M3BeuiTaja o nocTynKy jaBHe Ha6aBKe ycnyra, AMpeKTop",
+        "AreHuMje AOHocM OflnyKy o AOAenM yroBopa 3a Ha6aBKy ycnyra.",
+        "YroBop ce AOAerbyje noHyhavy ca ceAMLUTeM y Eeorpafly, 6p. 91/19.",
+    ];
+    let page = PageSpec {
+        lines: garbled
+            .iter()
+            .enumerate()
+            .map(|(i, t)| line(72.0, 150.0 + 14.0 * i as f32, t))
+            .collect(),
+        full_page_image: false,
+    };
+    let r = run(pdf(&[text_page(1, 3), page], &Extras::default()));
+    let doc = r.doc.as_ref().expect("doc");
+    assert!(!doc.pages[0].needs_ocr);
+    let p = &doc.pages[1];
+    assert!(p.needs_ocr);
+    assert_eq!(p.text_source, TextSource::Native);
+    assert!(p.text.contains("91/19"));
+    assert_eq!(int(&r, &keys::PAGES_NEEDING_OCR), 1);
+    // Not an image: a born-digital page with a bad layer is not a scan.
+    assert_eq!(int(&r, &keys::SCANNED_PAGES), 0);
 }

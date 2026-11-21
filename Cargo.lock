@@ -3001,6 +3001,7 @@ dependencies = [
  "memchr",
  "miniz_oxide 0.8.9",
  "quail-core",
+ "quail-text",
 ]
 
 [[package]]
