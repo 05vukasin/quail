@@ -154,16 +154,19 @@ fn job(locator: String, path: PathBuf, modified: Option<i64>) -> Job {
     }
 }
 
-/// What `quail-io` checks before reading a file: it opens, is a regular file and is within
-/// the cap. Returns its modification time (seconds since the epoch).
+/// What `quail-io` checks before reading a file: it is a regular file, opens and is within
+/// the cap. Returns its modification time (seconds since the epoch). The file type is checked
+/// before opening, so a directory is refused the same way on every OS (Windows cannot open
+/// one: `PermissionDenied`).
 fn check(path: &Path, cap: u64) -> io::Result<Option<i64>> {
-    let meta = File::open(path)?.metadata()?;
-    if !meta.is_file() {
+    if !std::fs::metadata(path)?.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "not a regular file",
         ));
     }
+    // Opened to refuse unreadable files here, as an in-process run does.
+    let meta = File::open(path)?.metadata()?;
     let len = meta.len();
     if len > cap {
         return Err(io::Error::new(
