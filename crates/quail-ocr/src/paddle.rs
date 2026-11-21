@@ -5,12 +5,14 @@
 //! 1. **Orientation.** PP-LCNet doc orientation on a thumbnail; the page is turned upright
 //!    when the classifier is sure ([`PaddleConfig::orientation_min_score`]). Boxes are mapped
 //!    back to the input image afterwards.
-//! 2. **Detection and recognition.** PP-OCRv6 small (DB detector, long side capped at
+//! 2. **Detection and recognition.** PP-OCRv6 small (DB detector, long side capped at 1600 px by default,
 //!    [`PaddleConfig::det_max_side`]), PP-LCNet text-line orientation (0/180) per line, the
 //!    PP-OCRv6 small recognizer (Latin with `č ć š ž đ`, English, Chinese, Japanese).
 //!    Optional deskew ([`PaddleConfig::deskew_degrees`]).
-//! 3. **Cyrillic routing.** PP-OCRv6 has no Cyrillic. The longest lines of the page (up to
-//!    [`PaddleConfig::script_sample`]) are read again with the Cyrillic PP-OCRv5 recognizer.
+//! 3. **Cyrillic routing.** PP-OCRv6 has no Cyrillic. The longest lines whose Latin reading
+//!    is below [`PaddleConfig::latin_sure`] (up to [`PaddleConfig::script_sample`]; none on a
+//!    clean Latin page, so it costs nothing there) are read again with the Cyrillic PP-OCRv5
+//!    recognizer.
 //!    When at least half of them read as confident Cyrillic, the page is Cyrillic and every
 //!    line is read with both, keeping the Cyrillic reading unless the Latin one is clearly
 //!    better; when only some do, lines below [`PaddleConfig::mixed_reread_below`] are read
@@ -52,6 +54,8 @@ pub struct PaddleConfig {
     pub cyrillic: bool,
     /// Lines sampled to decide a page's script.
     pub script_sample: usize,
+    /// Latin readings at or above this confidence are not re-read in Cyrillic (`Auto`).
+    pub latin_sure: f32,
     /// On mixed pages, Latin readings below this confidence are tried in Cyrillic too.
     pub mixed_reread_below: f32,
     /// Deskew pages whose text is tilted by at least this many degrees (`None`: off).
@@ -60,24 +64,30 @@ pub struct PaddleConfig {
     pub word_boxes: bool,
     /// ONNX Runtime intra-op threads per session (1 for one-engine-per-worker).
     pub intra_threads: usize,
-    /// Text lines recognized per batch.
+    /// Text lines recognized per batch. 1 by default: a batch is padded to its widest line,
+    /// which costs both time and (kept) arena memory.
     pub region_batch: usize,
+    /// ONNX Runtime memory patterns (pre-planned buffers per input shape). Off by default:
+    /// page and line sizes vary, and the plans only grow memory.
+    pub memory_pattern: bool,
 }
 
 impl Default for PaddleConfig {
     fn default() -> Self {
         Self {
-            det_max_side: 2400,
+            det_max_side: 1600,
             doc_orientation: true,
             orientation_min_score: 0.85,
             line_orientation: true,
             cyrillic: true,
-            script_sample: 12,
+            script_sample: 8,
+            latin_sure: 0.95,
             mixed_reread_below: 0.90,
             deskew_degrees: None,
             word_boxes: true,
             intra_threads: 1,
-            region_batch: 8,
+            region_batch: 1,
+            memory_pattern: false,
         }
     }
 }
@@ -142,6 +152,7 @@ fn ort(cfg: &PaddleConfig) -> OrtSessionConfig {
     OrtSessionConfig::new()
         .with_intra_threads(cfg.intra_threads.max(1))
         .with_inter_threads(1)
+        .with_memory_pattern(cfg.memory_pattern)
         .add_config_entry("session.intra_op.allow_spinning", "0")
         .add_config_entry("session.inter_op.allow_spinning", "0")
 }
@@ -432,15 +443,18 @@ impl PaddleEngine {
         if crops.is_empty() {
             return Ok(Vec::new());
         }
-        let r = cyr
-            .predict(crops)
-            .map_err(|e| oar_err("cyrillic recognizer", e))?;
-        Ok(which
-            .into_iter()
-            .zip(r.texts)
-            .zip(r.scores)
-            .map(|((i, t), s)| (i, t, s))
-            .collect())
+        // One line per call: batches are padded to their widest line, and ONNX Runtime keeps
+        // the largest buffers it ever needed.
+        let mut out = Vec::with_capacity(crops.len());
+        for (i, c) in which.into_iter().zip(crops) {
+            let r = cyr
+                .predict(vec![c])
+                .map_err(|e| oar_err("cyrillic recognizer", e))?;
+            if let (Some(t), Some(s)) = (r.texts.into_iter().next(), r.scores.first()) {
+                out.push((i, t, *s));
+            }
+        }
+        Ok(out)
     }
 
     fn route(&self, img: &RgbImage, regions: &mut [Region], hint: ScriptHint) -> Result<()> {
@@ -449,11 +463,17 @@ impl PaddleEngine {
         }
         let mut by_len: Vec<usize> = (0..regions.len()).collect();
         by_len.sort_by_key(|&i| std::cmp::Reverse(regions[i].text.chars().count()));
+        // A confident Latin reading is never Cyrillic text in disguise: only the weaker lines
+        // (unless the caller expects Cyrillic) are worth a second recognizer.
         let sample: Vec<usize> = by_len
             .iter()
             .copied()
+            .filter(|&i| hint == ScriptHint::Cyrillic || regions[i].conf < self.cfg.latin_sure)
             .take(self.cfg.script_sample.max(1))
             .collect();
+        if sample.is_empty() {
+            return Ok(());
+        }
         let first = self.reread(img, regions, &sample)?;
         let votes = first
             .iter()
