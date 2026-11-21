@@ -40,7 +40,9 @@ quail-refs = { path = "../quail-refs", optional = true }
 quail-parties = { path = "../quail-parties", optional = true }
 quail-sketch = { path = "../quail-sketch", optional = true }
 serde.workspace = true
-serde_json.workspace = true
+# `float_roundtrip`: `--isolate` records cross the worker pipe as JSON and are parsed back;
+# without exact float parsing a value can come back one ULP off and differ from in-process.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 clap = { version = "4.6", features = ["derive"] }
 ctrlc = "3.5"
 

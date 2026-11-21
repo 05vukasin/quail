@@ -235,6 +235,20 @@ mod tests {
         assert!(WorkerSpec::from_args(vec![OsString::from("quail")].into_iter()).is_err());
     }
 
+    /// Records come back from workers as JSON: floats must parse back to the same bits.
+    #[test]
+    fn floats_survive_the_worker_pipe() {
+        for x in [
+            0.999_893_605_709_075_9_f64,
+            0.998_699_605_464_935_3,
+            1.0 / 3.0,
+            1e-300,
+        ] {
+            let back: f64 = serde_json::from_str(&serde_json::to_string(&x).unwrap()).unwrap();
+            assert_eq!(back.to_bits(), x.to_bits(), "{x}");
+        }
+    }
+
     #[test]
     fn oversized_and_special_files_are_refused_before_a_worker() {
         let t = tempfile::tempdir().unwrap();
