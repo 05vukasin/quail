@@ -6,7 +6,7 @@ later service can answer "who is cheapest for X" across suppliers. Namespace `it
 The crate reports each line as written plus normalized fields and top-3 category candidates
 (EU CPV 2008). It never decides that two suppliers' lines are the same service.
 
-- Analyzer: `item.lines@1` (`ItemLines`), requires `document`, runs after `revised_document`,
+- Analyzer: `item.lines@2` (`ItemLines`), requires `document`, runs after `revised_document`,
   reads `Ctx::document()`. Line extraction is `Profile::Fast`; category candidates are added
   from `Profile::Standard` on.
 - Public API: `ItemLines` (`new`, `with_index`), `CpvIndex` (`embedded`, `from_tsv`, `top`,
@@ -70,6 +70,11 @@ line) in the page text, the row's box when the format has geometry. `conf` refle
    the CPV labels (English and Serbian), the better label per code, top 3 above 0.12; lines
    billed by time or reading as a role/service prefer service divisions (50–98).
 
+Numbers and currencies are read by `quail_text::money` (shared with `quail-signals`): `1,200.50`,
+`1.200,50`, `1 200,50` (also no-break spaces), `1'200.50`, up to four decimals resolved by the
+document's decimal separator; a minus sign, and an amount standing alone in parentheses
+(`(1,200.00)`, a credit) are negative.
+
 The CPV index (`data/cpv2008.tsv`, 620 kB, EU Regulation 213/2008 English labels + the Serbian
 UJN translation) is embedded; see `data/README.md` for sources and licence, and
 `tools/cpv/fetch.sh` to rebuild it.
@@ -85,3 +90,9 @@ page and per table. Scanned pages without a text layer produce nothing unless OC
 
 Document-level amounts, dates and VAT numbers (`quail-signals`), parties (`quail-parties`),
 cross-supplier matching of services (the service, at query time).
+
+## Versions
+
+- `item.lines@2`: numbers via `quail_text::money`; credits in parentheses are negative;
+  amounts grouped with no-break spaces are read; `km.` is never a currency.
+- `item.lines@1`: first version.
