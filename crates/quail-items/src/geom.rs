@@ -183,6 +183,25 @@ fn is_header_row(r: &Row) -> bool {
         })
 }
 
+fn has_money(r: &Row, hints: &DocHints) -> bool {
+    r.lines.iter().any(|l| {
+        num::scan(&l.text, hints.dec, hints.order)
+            .iter()
+            .any(num::NumTok::moneylike)
+    })
+}
+
+/// A short all-text row with several cells: the column labels of a table whose header
+/// names no known role (`Title | Onshore | Offshore`).
+fn label_row(r: &Row) -> bool {
+    r.lines.len() >= 2
+        && r.lines.iter().all(|l| {
+            l.text.chars().count() <= 40
+                && l.text.chars().any(char::is_alphabetic)
+                && !l.text.chars().any(|c| c.is_ascii_digit())
+        })
+}
+
 fn has_amount(r: &Row, hints: &DocHints) -> bool {
     let mut plain = 0;
     for l in &r.lines {
@@ -246,15 +265,31 @@ pub(crate) fn tables(page: &Page, hints: &DocHints) -> (Vec<Grid>, Vec<Row>) {
             quiet = 0;
             continue;
         }
-        let data = !prose(r) && has_amount(r, hints) && (r.lines.len() >= 2 || cur.is_some() && gap_ok);
+        // Under a header plain numbers make a data row; without one, money must be there.
+        let headed = cur.as_ref().is_some_and(|c| c.header.is_some()) && gap_ok;
+        let amount = if headed { has_amount(r, hints) } else { has_money(r, hints) };
+        let data = !prose(r) && amount && (r.lines.len() >= 2 || cur.is_some() && gap_ok);
         if data {
             if let Some(c) = cur.as_mut().filter(|_| gap_ok) {
                 c.rows.push(i);
                 c.data += 1;
             } else {
                 close(&mut cur, &mut regions, &rows);
+                // Column labels right above the first row.
+                let above = i
+                    .checked_sub(1)
+                    .and_then(|k| rows.get(k).map(|a| (k, a)))
+                    .filter(|(k, a)| {
+                        label_row(a)
+                            && r.y0 - a.y1 <= 2.0 * a.h().max(r.h())
+                            && regions.last().is_none_or(|g| !g.rows.contains(k))
+                    })
+                    .map(|(k, _)| k);
+                let mut first = Vec::with_capacity(2);
+                first.extend(above);
+                first.push(i);
                 cur = Some(Region {
-                    rows: vec![i],
+                    rows: first,
                     header: None,
                     data: 1,
                 });

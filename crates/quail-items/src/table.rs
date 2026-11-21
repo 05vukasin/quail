@@ -32,6 +32,9 @@ pub(crate) struct Roles {
     pub cols: Vec<Option<HeaderCell>>,
     /// Came from a header row (not guessed from content).
     pub from_header: bool,
+    /// Price columns of a rate matrix (`Role | Onshore | Offshore`): one item per row and
+    /// column, the column label added to the description.
+    pub matrix: Vec<usize>,
 }
 
 impl Roles {
@@ -136,7 +139,34 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
             }
         }
     }
-    let kind = best.map(|(_, k)| k)?;
+    let kind = match best {
+        Some((_, k)) => k,
+        // `AIRTIME TOTAL :`, `Invoice total`, `Rep. Firm Commission`: a short label with a
+        // total word anywhere.
+        None if w.len() <= 5 => {
+            let has = |set: &[&str]| w.iter().any(|x| set.contains(&x.as_str()));
+            if has(&["total", "totals", "subtotal", "ukupno", "svega", "payable", "balance"]) {
+                "total"
+            } else if has(&["taxable", "osnovica"]) {
+                "net"
+            } else if has(&["amount", "iznos"]) && has(&["tax", "vat", "pdv", "due", "excluding", "excl", "net"]) {
+                if has(&["excluding", "excl", "net"]) { "net" } else { "total" }
+            } else if has(&["tax", "vat", "pdv"]) && w.len() <= 3 {
+                "vat"
+            } else if w.iter().any(|x| x == "commission" || x == "provizija") {
+                "discount"
+            } else if matches!(w.first().map(String::as_str), Some("gross" | "bruto")) {
+                "gross"
+            } else if matches!(w.first().map(String::as_str), Some("net" | "neto")) {
+                "net"
+            } else {
+                return None;
+            }
+        }
+        // `4,420.43 USD at TAX (0.0%) Totals`: a long label ending in a total word.
+        None if matches!(w.last().map(String::as_str), Some("total" | "totals" | "subtotal" | "ukupno")) => "total",
+        None => return None,
+    };
     // `ukupno sa PDV-om` is gross, `ukupno bez PDV-a` net, `Total incl. VAT` gross.
     if kind == "total" {
         if w.iter().any(|x| x == "incl" || x == "including" || x == "inclusive") {
@@ -152,19 +182,40 @@ pub(crate) fn total_kind(label: &str) -> Option<&'static str> {
 /// The first amount in a cell: number, its currency, and a unit after it (`85 EUR/h`).
 pub(crate) struct CellAmount {
     pub num: Num,
+    /// Written as money (currency, two decimals or thousand groups).
+    pub money: bool,
     pub currency: Option<[u8; 3]>,
     pub unit: Option<(&'static str, String)>,
 }
 
 pub(crate) fn amount_in(text: &str, hints: &DocHints) -> Option<CellAmount> {
+    amount_of(text, hints, false)
+}
+
+/// The amount of a price or total cell: its last money-like number (`4 Charged 38.00` is
+/// 38.00), else its first number.
+pub(crate) fn money_in(text: &str, hints: &DocHints) -> Option<CellAmount> {
+    amount_of(text, hints, true)
+}
+
+fn amount_of(text: &str, hints: &DocHints, money: bool) -> Option<CellAmount> {
     let toks = num::scan(text, hints.dec, hints.order);
-    let tok = toks
-        .into_iter()
-        .find(|t| t.number().is_some() && !t.glued)?;
+    let pick = if money {
+        toks.iter().rposition(NumTok::moneylike)
+    } else {
+        None
+    };
+    let tok = match pick {
+        Some(i) => toks.into_iter().nth(i)?,
+        None => toks
+            .into_iter()
+            .find(|t| t.number().is_some() && !t.glued)?,
+    };
     let num = tok.number()?;
     let unit = unit_after(text, tok.end);
     Some(CellAmount {
         num,
+        money: tok.moneylike(),
         currency: tok.currency,
         unit,
     })
@@ -247,6 +298,37 @@ fn is_numbering_row(row: &[Option<GCell>]) -> bool {
         last = n;
     }
     true
+}
+
+const MONTHS: &[&str] = &[
+    "jan", "january", "feb", "february", "mar", "march", "apr", "april", "may", "jun", "june", "jul",
+    "july", "aug", "august", "sep", "sept", "september", "oct", "october", "nov", "november", "dec",
+    "december", "januar", "februar", "mart", "maj", "juni", "jul", "avgust", "septembar", "oktobar",
+    "novembar", "decembar", "jun", "januara", "februara", "marta", "aprila", "maja", "juna", "jula",
+    "avgusta", "septembra", "oktobra", "novembra", "decembra",
+];
+
+/// Only a date in words (`March 01, 2024`, `15. maj 2024`).
+pub(crate) fn is_date_text(s: &str) -> bool {
+    let w = header::words(s);
+    let letters: Vec<&String> = w.iter().filter(|x| x.chars().any(char::is_alphabetic)).collect();
+    !letters.is_empty() && letters.len() <= 2 && letters.iter().all(|x| MONTHS.contains(&x.as_str()))
+}
+
+/// A first row of short labels over the columns, with no numbers.
+fn is_label_row(row: &[Option<GCell>]) -> bool {
+    let cells: Vec<&str> = row
+        .iter()
+        .flatten()
+        .map(|c| c.text.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    cells.len() >= 2
+        && cells.iter().all(|t| {
+            t.chars().count() <= 40
+                && t.chars().any(char::is_alphabetic)
+                && !t.chars().any(|c| c.is_ascii_digit())
+        })
 }
 
 fn header_roles(row: &[Option<GCell>], ncols: usize) -> Vec<Option<HeaderCell>> {
@@ -417,6 +499,8 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
         })
     };
     cols[desc] = mk(Role::Desc);
+    let mut matrix = Vec::new();
+    let is_money = |i: usize| stats[i].money * 2 >= stats[i].numeric.max(1);
     for i in 0..grid.ncols {
         if i != desc && stats[i].unit >= half {
             cols[i] = mk(Role::Unit);
@@ -440,6 +524,11 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
                         cols[*a] = Some(HeaderCell { role: Role::UnitPrice, vat: Some(false), currency: None });
                         cols[*b] = Some(HeaderCell { role: Role::UnitPrice, vat: Some(true), currency: None });
                     }
+                    None if is_money(*a) && is_money(*b) && !ascending(grid, start, *a, *b, hints) => {
+                        cols[*a] = mk(Role::UnitPrice);
+                        cols[*b] = mk(Role::UnitPrice);
+                        matrix = vec![*a, *b];
+                    }
                     None => {
                         cols[*a] = mk(Role::UnitPrice);
                         cols[*b] = mk(Role::Total);
@@ -453,11 +542,33 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
                 cols[p] = mk(Role::UnitPrice);
                 cols[t] = mk(Role::Total);
             } else {
-                let n = many.len();
-                cols[many[n - 1]] = mk(Role::Total);
-                cols[many[n - 2]] = mk(Role::UnitPrice);
-                if stats[many[0]].integer * 2 >= stats[many[0]].numeric {
-                    cols[many[0]] = mk(Role::Qty);
+                // Without arithmetic: prices are the money-formatted columns; integer-only
+                // columns (lengths, zones, counts) are not prices.
+                let money: Vec<usize> = many
+                    .iter()
+                    .copied()
+                    .filter(|&i| stats[i].money * 2 >= stats[i].numeric)
+                    .collect();
+                let pool = if money.is_empty() { many.to_vec() } else { money };
+                let n = pool.len();
+                if n >= 2 && pool.iter().all(|&i| is_money(i)) && !ascending(grid, start, pool[n - 2], pool[n - 1], hints) {
+                    for &c in &pool {
+                        cols[c] = mk(Role::UnitPrice);
+                    }
+                    matrix.clone_from(&pool);
+                } else if n >= 2 {
+                    cols[pool[n - 1]] = mk(Role::Total);
+                    cols[pool[n - 2]] = mk(Role::UnitPrice);
+                } else {
+                    cols[pool[0]] = mk(Role::UnitPrice);
+                }
+                let first_price = pool.first().copied().unwrap_or(grid.ncols);
+                if let Some(&q) = many
+                    .iter()
+                    .rev()
+                    .find(|&&i| i < first_price && cols[i].is_none() && stats[i].integer * 2 >= stats[i].numeric)
+                {
+                    cols[q] = mk(Role::Qty);
                 }
             }
         }
@@ -469,11 +580,24 @@ fn infer_roles(grid: &Grid, start: usize, hints: &DocHints) -> Option<Roles> {
     Some(Roles {
         cols,
         from_header: false,
+        matrix,
     })
 }
 
+/// Share of rows where column `b` is at least column `a` (an amount is at least its price).
+fn ascending(grid: &Grid, start: usize, a: usize, b: usize, hints: &DocHints) -> bool {
+    let (mut n, mut up) = (0, 0);
+    for row in grid.rows.iter().skip(start) {
+        if let (Some(x), Some(y)) = (num_at(row, a, hints), num_at(row, b, hints)) {
+            n += 1;
+            up += usize::from(y.to_f64() >= x.to_f64());
+        }
+    }
+    n > 0 && up * 5 >= n * 4
+}
+
 fn num_at(row: &[Option<GCell>], i: usize, hints: &DocHints) -> Option<Num> {
-    amount_in(cell_text(row, i), hints).map(|a| a.num)
+    money_in(cell_text(row, i), hints).map(|a| a.num)
 }
 
 fn close(a: f64, b: f64) -> bool {
@@ -554,6 +678,7 @@ pub(crate) fn parse(
     let mut roles = None;
     let mut start = 0;
     let mut header_at = 0;
+    let mut label_row: Option<usize> = None;
     for h in 0..grid.rows.len().min(8) {
         let r = header_roles(&grid.rows[h], grid.ncols);
         if is_header(&r) {
@@ -568,6 +693,7 @@ pub(crate) fn parse(
             roles = Some(Roles {
                 cols: r,
                 from_header: true,
+                matrix: Vec::new(),
             });
             header_at = h;
             break;
@@ -577,7 +703,13 @@ pub(crate) fn parse(
         Some(r) => r,
         None => match prev {
             Some(p) if p.cols.len() == grid.ncols && p.from_header => p.clone(),
-            _ => match infer_roles(grid, 0, hints) {
+            _ => match {
+                if grid.rows.len() > 1 && is_label_row(&grid.rows[0]) {
+                    label_row = Some(0);
+                    start = 1;
+                }
+                infer_roles(grid, start, hints)
+            } {
                 Some(r) => r,
                 None => {
                     out.unused_rows = (0..grid.rows.len()).collect();
@@ -631,6 +763,17 @@ pub(crate) fn parse(
     let col_vat = |c: Option<usize>| c.and_then(|c| roles.get(c)).and_then(|h| h.vat);
     let col_cur = |c: Option<usize>| c.and_then(|c| roles.get(c)).and_then(|h| h.currency);
 
+    // A price column written as money in most rows does not take a bare `3` in another.
+    let money_cols = [price_col, total_col].into_iter().flatten().any(|c| {
+        let (mut n, mut m) = (0, 0);
+        for row in grid.rows.iter().skip(start) {
+            if let Some(a) = money_in(cell_text(row, c), hints) {
+                n += 1;
+                m += usize::from(a.money);
+            }
+        }
+        n >= 2 && m * 2 >= n
+    });
     let base_conf = match (grid.source, roles.from_header) {
         (Source::Table, true) => 0.85,
         (Source::Layout, true) => 0.75,
@@ -679,8 +822,19 @@ pub(crate) fn parse(
                 .unwrap_or("")
                 .to_owned()
         };
-        let price = price_col.and_then(|c| amount_in(cell_text(row, c), hints));
-        let total = total_col.and_then(|c| amount_in(cell_text(row, c), hints));
+        // Without a header only amounts written as money count (`26`, `2011`, `4` in a
+        // key-value layout are not prices).
+        let trusted = |a: &CellAmount| (roles.from_header && !money_cols) || a.money;
+        let price = price_col
+            .and_then(|c| money_in(cell_text(row, c), hints))
+            .filter(trusted);
+        let total = total_col
+            .and_then(|c| money_in(cell_text(row, c), hints))
+            .filter(trusted);
+        let desc_span = desc_cols
+            .iter()
+            .find_map(|&c| row.get(c).and_then(Option::as_ref).map(|c| c.span))
+            .unwrap_or(row_span);
         if let Some(kind) = total_kind(&label) {
             let amount = total
                 .as_ref()
@@ -714,7 +868,7 @@ pub(crate) fn parse(
                 .all(|(i, c)| desc_cols.contains(&i) || c.as_ref().is_none_or(|c| c.text.trim().is_empty()));
             if letters(&desc) >= 2 && only_desc {
                 if grid.source == Source::Layout
-                    && last_item_row == Some(ri - 1)
+                    && ri.checked_sub(1).is_some_and(|p| last_item_row == Some(p))
                     && let Some(it) = out.items.last_mut()
                 {
                     // A wrapped description line.
@@ -732,15 +886,51 @@ pub(crate) fn parse(
             }
             continue;
         }
-        if letters(&desc) < 2 {
+        // `Contract No:` / `Due Date:` in a key-value layout; `March 01, 2024`.
+        if letters(&desc) < 2
+            || (!roles.from_header && desc.trim_end().ends_with(':'))
+            || is_date_text(&desc)
+        {
             out.unused_rows.push(ri);
+            continue;
+        }
+        if !roles.matrix.is_empty() {
+            for &c in &roles.matrix {
+                let Some(a) = money_in(cell_text(row, c), hints).filter(|a| a.money) else {
+                    continue;
+                };
+                let label = label_row
+                    .and_then(|l| grid.rows.get(l))
+                    .map(|l| cell_text(l, c))
+                    .filter(|t| !t.is_empty());
+                let d = match label {
+                    Some(l) => format!("{} – {l}", desc.trim()),
+                    None => desc.trim().to_owned(),
+                };
+                let mut it = Item::new(grid.page, grid.source, d);
+                it.section.clone_from(&section);
+                it.table_index = Some(table_index);
+                it.row_index = u32::try_from(ri).ok();
+                it.span = desc_span;
+                it.bbox = row_box;
+                it.unit_price = Some(a.num);
+                it.currency = a.currency.or(table_currency).or(hints.currency);
+                it.vat_included = hints.vat;
+                if let Some((u, raw)) = a.unit.clone().or_else(|| unit_in_desc(&desc)) {
+                    it.unit = Some(u);
+                    it.unit_raw = Some(raw);
+                }
+                it.conf = (base_conf - 0.05).max(0.05);
+                out.items.push(it);
+            }
+            last_item_row = Some(ri);
             continue;
         }
         let mut it = Item::new(grid.page, grid.source, desc.trim().to_owned());
         it.section.clone_from(&section);
         it.table_index = Some(table_index);
         it.row_index = u32::try_from(ri).ok();
-        it.span = row_span;
+        it.span = desc_span;
         it.bbox = row_box;
         it.code = code_col
             .map(|c| cell_text(row, c).to_owned())

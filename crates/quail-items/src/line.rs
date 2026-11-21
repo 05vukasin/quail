@@ -24,6 +24,16 @@ const SENTENCE_TAIL: &[&str] = &[
     "total", "ukupno", "visini", "vrednosti", "vrednost", "cena", "price", "sum", "uplatu", "approximately",
     "exceed", "exceeding", "than", "up", "to", "na", "za", "sa", "with", "pursuant", "within", "clan", "article",
     "section", "tacka", "stav", "broj", "no", "br", "page", "strana", "year", "godine", "godina", "dana", "days",
+    "from", "de", "au", "by", "at", "about", "around", "under", "over", "than", "least", "most", "maximum",
+    "minimum", "max", "min", "capital", "kapital", "fund", "budget", "budzet", "limit", "cap", "worth",
+];
+
+/// Words that make a description a sentence (a verb or a relative pronoun).
+const SENTENCE_WORDS: &[&str] = &[
+    "will", "shall", "must", "may", "is", "are", "be", "been", "was", "were", "has", "have", "had",
+    "which", "that", "who", "whom", "whose", "if", "when", "where", "pay", "paid", "agrees", "agree",
+    "se", "je", "su", "ce", "biti", "bice", "koji", "koja", "koje", "ako", "kada", "placa", "placanje",
+    "iznosi", "obavezuje", "dostavlja",
 ];
 
 /// Words allowed after the last amount.
@@ -129,11 +139,15 @@ pub(crate) fn parse(
     if letters < 3 || words > 14 || desc.chars().count() > 120 {
         return None;
     }
-    if table::total_kind(&desc).is_some() {
+    if table::total_kind(&desc).is_some() || table::is_date_text(&desc) {
         return None;
     }
-    let last_word = header::words(&desc).pop().unwrap_or_default();
-    if SENTENCE_TAIL.contains(&last_word.as_str()) {
+    let desc_words = header::words(&desc);
+    let last_word = desc_words.last().cloned().unwrap_or_default();
+    if SENTENCE_TAIL.contains(&last_word.as_str())
+        || desc_words.iter().any(|w| SENTENCE_WORDS.contains(&w.as_str()))
+        || desc.starts_with(|c: char| c.is_lowercase())
+    {
         return None;
     }
     // Values from the first money value on.
@@ -171,7 +185,7 @@ pub(crate) fn parse(
             // A rate card line: one price.
             let unit = unit_after(t, money.end).or_else(|| unit_in_desc(&it.description));
             let separated = head.trim_end().ends_with(['–', '-', ':', '.', '…', '|', '—']);
-            if !(money.currency.is_some() || unit.is_some() || separated || hints.commercial) {
+            if !(money.currency.is_some() || unit.is_some() || (separated && hints.commercial)) {
                 return None;
             }
             it.unit_price = Some(*p);

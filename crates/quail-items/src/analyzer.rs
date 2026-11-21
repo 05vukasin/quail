@@ -160,14 +160,35 @@ pub(crate) fn hints(doc: &Document) -> DocHints {
     };
     let folded = fold(&text, &FoldOptions::KEY);
     let has = |needles: &[&str]| needles.iter().any(|n| folded.contains(n));
-    let net = has(&[
+    // VAT wording outside total rows (`Ukupno sa PDV-om` says nothing about line prices).
+    let prose: String = folded
+        .lines()
+        .filter(|l| table::total_kind(l.split(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']).next().unwrap_or("")).is_none())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let in_prose = |needles: &[&str]| needles.iter().any(|n| prose.contains(n));
+    let net = in_prose(&[
         "bez pdv", "+ pdv", "plus pdv", "excl. vat", "excl vat", "excluding vat", "exclusive of vat",
         "plus vat", "+ vat", "net of vat", "pdv nije uracunat", "vat not included",
     ]);
-    let gross = has(&[
+    let gross = in_prose(&[
         "sa pdv", "s pdv", "ukljucujuci pdv", "uracunat pdv", "uracunatim pdv", "incl. vat", "incl vat",
         "including vat", "inclusive of vat", "vat included", "pdv uracunat", "sa uracunatim",
     ]);
+    // `Sve cene su u dinarima`, `prices in EUR`: a currency named without an amount.
+    let currency = currency.or_else(|| {
+        if has(&["u dinarima", "dinara", " rsd", "in rsd"]) {
+            Some(*b"RSD")
+        } else if has(&["u evrima", "u eurima", "in eur", "in euro", " evra"]) {
+            Some(*b"EUR")
+        } else if has(&["in usd", "us dollars", "u dolarima", "in dollars"]) {
+            Some(*b"USD")
+        } else if has(&["in gbp", "pounds sterling"]) {
+            Some(*b"GBP")
+        } else {
+            None
+        }
+    });
     let vat = match (net, gross) {
         (true, false) => Some(false),
         (false, true) => Some(true),

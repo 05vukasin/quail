@@ -91,6 +91,8 @@ const UNITS: &[(&str, &str)] = &[
     ("years", "year"),
     ("yearly", "year"),
     ("annual", "year"),
+    ("annum", "year"),
+    ("p.a", "year"),
     ("annually", "year"),
     ("yr", "year"),
     ("min", "min"),

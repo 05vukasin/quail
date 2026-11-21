@@ -359,7 +359,12 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
                 .is_none_or(|(_, c)| c.is_whitespace() || *c == '(');
         let glued_prev = prev.is_some_and(|p| p.is_alphabetic() || p == '/' || p == '_')
             || (prev == Some('-') && !neg);
-        let glued_next = next.is_some_and(|x| x.is_alphabetic() || x == '/' && !unit_slash(text, end_b));
+        let after_next = chars.get(end_idx + 1).map(|(_, c)| *c);
+        let glued_next = next.is_some_and(|x| {
+            x.is_alphabetic()
+                || (x == '/' && !unit_slash(text, end_b))
+                || (x == '-' && after_next.is_some_and(char::is_alphanumeric))
+        });
         let kind = if raw.contains(['/', '-']) {
             parse_date(raw, order).map(NumKind::Date)
         } else {
@@ -404,8 +409,30 @@ pub(crate) fn scan(text: &str, dec: Dec, order: DateOrder) -> Vec<NumTok> {
             };
             let currency = before_sym.or(after_sym).or(after_word).or(before_word);
             let glued_by_letter = glued_next && after_word.is_none();
-            let glued = (glued_prev && before_sym.is_none()) || glued_by_letter;
-            let formatted = raw.contains([',', '.', ' ', '\u{a0}', '\'']);
+            // `No. 11129984`, `#4521`, `br. 12`, `ID: 773882`: an identifier.
+            let after_label = text.get(..start_b).is_some_and(|h| {
+                let h = h.trim_end_matches(|c: char| c == ' ' || c == ':' || c == '\u{a0}');
+                let lower = h.to_lowercase();
+                h.ends_with('#')
+                    || [
+                    "no.", "no", "nr.", "nr", "br.", "br", "broj", "id", "number", "num", "sec.", "sec",
+                    "section", "clause", "article", "art.", "cl.", "page", "p.", "pp.", "str.", "clan",
+                    "član", "tacka", "tačka", "stav", "annex", "schedule", "exhibit", "appendix", "version",
+                    "v", "rev", "box", "suite", "floor", "room",
+                ]
+                        .iter()
+                        .any(|l| lower.ends_with(l) && lower[..lower.len() - l.len()].chars().next_back().is_none_or(|c| !c.is_alphanumeric()))
+            });
+            let glued = (glued_prev && before_sym.is_none()) || glued_by_letter || (after_label && currency.is_none());
+            // Money is written with two decimals or with thousand groups (`12,00`, `1.200`),
+            // not `10.1` (a clause) or `0.3`.
+            let formatted = match kind {
+                NumKind::Number(v) => {
+                    v.scale == 2
+                        || (v.scale == 0 && raw.contains([',', '.', ' ', '\u{a0}', '\'']))
+                }
+                _ => false,
+            };
             out.push(NumTok {
                 start: if neg { start_b - 1 } else { start_b },
                 end: end_b,
