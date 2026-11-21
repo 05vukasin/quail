@@ -329,7 +329,7 @@ impl IsolatedRunner {
             let writer = thread::Builder::new()
                 .name("quail-writer".to_owned())
                 .spawn_scoped(s, move || {
-                    write_all(sink, &done_rx, &freed_tx, stats, stop, cfg)
+                    write_all(sink, &done_rx, &freed_tx, stats, stop, cfg);
                 })
                 .expect("spawn writer thread");
             let stop_now = || cancelled() || stop.load(Ordering::Relaxed);
