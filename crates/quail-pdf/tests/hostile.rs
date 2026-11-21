@@ -481,14 +481,14 @@ fn shared_pdf(npages: u32, mib: usize, array_on_one_page: bool) -> Vec<u8> {
 
 #[test]
 fn shared_contents_memory_is_bounded_by_a_page() {
-    // 40 pages share one 16 MiB content stream: 640 MiB decoded in total, fine under the
-    // default budget, but never more than about one parse's cache held at once.
-    let bytes = shared_pdf(40, 16, false);
+    // 12 pages share one 16 MiB content stream: 192 MiB decoded in total, under the default
+    // 256 MiB budget, but never more than about one parse's cache (64 MiB) held at once.
+    let bytes = shared_pdf(12, 16, false);
     let (r, peak) = peak_of(|| run(bytes, &Limits::default()));
     let doc = r.doc.expect("doc");
-    assert_eq!(doc.pages.len(), 40);
+    assert_eq!(doc.pages.len(), 12);
     assert!(doc.pages.iter().all(|p| p.text.contains("shared")));
-    assert!(peak < 192 * MIB, "peak {} MiB", peak / MIB);
+    assert!(peak < 128 * MIB, "peak {} MiB", peak / MIB);
 }
 
 #[test]
