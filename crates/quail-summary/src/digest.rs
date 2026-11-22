@@ -1066,6 +1066,8 @@ pub struct MapPart {
     pub tokens: usize,
     /// The sections.
     pub sections: Vec<DigestSection>,
+    /// The deadline cut its excerpt selection short.
+    pub truncated: bool,
 }
 
 /// The parts of a map-reduce summary of `doc`: the outline's sections (up to four per part)
@@ -1112,7 +1114,7 @@ pub fn map_parts(
             .map(|g| tokens::estimate(&section_title(&g.title, g.page, g.end_page)) + 1)
             .sum();
         let avail = mr.part_tokens.saturating_sub(titles + 4);
-        let (sections, _) = select(doc, slice, gs.get(b + 1), avail, "", cfg, deadline);
+        let (sections, truncated) = select(doc, slice, gs.get(b + 1), avail, "", cfg, deadline);
         let mut body = String::new();
         for s in &sections {
             body.push_str(&section_title(&s.title, s.page, s.end_page));
@@ -1137,6 +1139,7 @@ pub fn map_parts(
             tokens: tokens::estimate(&body),
             body: body.trim_end().to_owned(),
             sections,
+            truncated,
         });
     }
     out
@@ -1272,6 +1275,22 @@ mod tests {
             ..mr
         };
         assert!(map_parts(&d, &o, &DigestConfig::default(), &short, None).is_empty());
+    }
+
+    #[test]
+    fn map_parts_mark_a_deadline_cut() {
+        let d = book(12, 10);
+        let o = outline(&d, &OutlineConfig::default(), None);
+        let mr = MapReduceConfig::default();
+        let cfg = DigestConfig::default();
+        assert!(
+            map_parts(&d, &o, &cfg, &mr, None)
+                .iter()
+                .all(|p| !p.truncated)
+        );
+        let past = Instant::now().checked_sub(std::time::Duration::from_secs(1));
+        let cut = map_parts(&d, &o, &cfg, &mr, past);
+        assert!(!cut.is_empty() && cut.iter().any(|p| p.truncated));
     }
 
     #[test]

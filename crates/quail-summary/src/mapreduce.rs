@@ -161,6 +161,7 @@ mod tests {
                     page: 0,
                 }],
             }],
+            truncated: false,
         }
     }
 

@@ -179,6 +179,14 @@ pub fn checked_or_fallback(
     }
 }
 
+/// Whether `summary` may go into a [`SummaryCache`](crate::cache::SummaryCache): only a
+/// fact-checked model output made from complete input. A fallback (timeout, failed check,
+/// load error) or a summary of input the deadline cut short would otherwise be replayed on
+/// every later run, even when the model would now succeed.
+pub fn cacheable(summary: &Summary, input_truncated: bool) -> bool {
+    summary.method == Method::Llm && summary.checked && !input_truncated
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +217,29 @@ mod tests {
                 },
             })
         }
+    }
+
+    #[test]
+    fn only_complete_checked_model_output_is_cacheable() {
+        let card = FileCard::default();
+        let input = SummaryInput {
+            card: &card,
+            card_text: "doc: report",
+            subject: None,
+            text_head: "",
+            lang: Some("en"),
+            deadline: None,
+        };
+        let ok = checked_or_extractive(&Fixed(Some(("A report.", true))), &input);
+        assert!(cacheable(&ok, false));
+        // A deadline cut the input: the next run may read all of it.
+        assert!(!cacheable(&ok, true));
+        // A timed-out call and a failed fact check fall back; neither is cached.
+        let timeout = checked_or_extractive(&Fixed(None), &input);
+        assert_eq!(timeout.method, Method::ExtractiveFallback);
+        assert!(!cacheable(&timeout, false));
+        let failed = checked_or_extractive(&Fixed(Some(("A report of 9.", false))), &input);
+        assert!(!cacheable(&failed, false));
     }
 
     #[test]

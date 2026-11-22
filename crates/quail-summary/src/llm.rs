@@ -43,7 +43,8 @@ use crate::models::{self, ModelFile};
 use crate::outline::{self, OutlineConfig};
 use crate::prompt;
 use crate::summarizer::{
-    LongInput, Method, Summarizer, SummarizerId, Summary, SummaryInput, checked_or_fallback,
+    LongInput, Method, Summarizer, SummarizerId, Summary, SummaryInput, cacheable,
+    checked_or_fallback,
 };
 
 /// Settings of the LLM step.
@@ -457,6 +458,13 @@ impl Analyzer for SummaryLlm {
             }
             _ => Vec::new(),
         };
+        let truncated = o.truncated || d.truncated || parts.iter().any(|p| p.truncated);
+        if truncated {
+            out.problem(format!(
+                "{}: deadline reached, the model read the first sections only",
+                Self::ID
+            ));
+        }
         let outline_text = o.render(dcfg.max_tokens / 4);
         let input = SummaryInput {
             card: &card,
@@ -492,7 +500,7 @@ impl Analyzer for SummaryLlm {
                 self.summarizer.summarize(&input)
             };
             let s = checked_or_fallback(self.summarizer.as_ref(), &input, got);
-            if let Some(c) = &self.cache {
+            if let Some(c) = self.cache.as_ref().filter(|_| cacheable(&s, truncated)) {
                 c.put(key, Arc::new(s.clone()));
             }
             (s, false)
