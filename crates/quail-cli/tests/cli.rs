@@ -649,10 +649,11 @@ fn keys_and_version() {
     }
     if cfg!(feature = "summary") {
         expected.extend([
-            "summary.card@3",
+            // Plan order: the card and the topic map run after the keywords they read.
             "summary.extractive@2",
             "summary.outline@1",
             "summary.keywords@1",
+            "summary.card@3",
             "summary.topics@1",
         ]);
     }

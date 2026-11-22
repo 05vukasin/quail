@@ -39,9 +39,11 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `sketch.minhash_compat@3` | analyzer | any | standard | Compatibility mode: byte-compatible port of an existing deployment's MinHash and template sketches. |
 | `sketch.page_phash@4` | analyzer | any | standard | 64-bit DCT pHash of each scanned page (embedded scan or 36 dpi render; needs `raster`). |
 | `item.lines@5` | analyzer | any | fast | Price items from tables and rate lines: description, quantity, unit, prices, CPV top-3. |
-| `summary.card@2` | analyzer | any | fast | File card from all facts (finalizer): kind, parties, dates, amounts, ids, items, flags. |
+| `summary.card@3` | analyzer | any | fast | File card from all facts (finalizer): kind, parties, dates, amounts, refs, keywords, ids, items, flags. |
 | `summary.extractive@2` | analyzer | any | fast | 1-3 sentence English summary without a model: card template + subject clause. |
 | `summary.outline@1` | analyzer | any | fast | Document outline: headings (numbered, keyword, capitals, type size) with page ranges, bounded. |
+| `summary.keywords@1` | analyzer | any | fast | Keywords and key phrases (YAKE-style, English and Serbian Latin/Cyrillic as one), linked to parties. |
+| `summary.topics@1` | analyzer | any | standard | Topic map of documents of 20+ pages: keywords per section, topic shifts, topic segments. |
 
 <a id="engine"></a>
 
@@ -317,7 +319,7 @@ Declared by `quail-items`. 3 keys.
 
 ## summary: file card and summaries
 
-Declared by `quail-summary`. 9 keys.
+Declared by `quail-summary`. 11 keys.
 
 | key | documentation |
 |---|---|
@@ -329,4 +331,6 @@ Declared by `quail-summary`. 9 keys.
 | `summary.outline` | The document's headings with page ranges (Record: `method` = `headings` or `windows`, `total`, `pages`, `sections` = list of `title level page end_page source`, pages zero-based; `truncated`?). |
 | `summary.digest` | The bounded summary input of a document of any length (Text: `FACTS` = the card, then the whole `TEXT` when it fits, else `OUTLINE`, `START` and per-section `EXCERPTS` copied verbatim). |
 | `summary.digest_tokens` | Estimated tokens of `DIGEST` (Int, see `crate::tokens`). |
+| `summary.keywords` | Document keywords and key phrases, best first (List of Record: `term`, `key` = the matching key, stems in ASCII, the same for Latin and Cyrillic, `score` in (0, 1], `count`, `first_page` zero-based, `entities`? = keys of the `party.candidates` it names). |
+| `summary.topics` | Topic map of a long document (Record: `method` = `headings` or `windows`, `threshold`, `sections` = list of `title page end_page keywords shift`, `segments` = list of `title first sections page end_page keywords shift` (`first`: index of its first section), pages zero-based; `truncated`?). |
 | `summary.llm` | The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or `map_reduce`, `calls`). Feature `llm`. |
