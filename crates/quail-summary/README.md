@@ -333,6 +333,49 @@ and specific; the reduce step sometimes drifts to card details (producer, an adv
 the card) or a garbled title. Default stays the single call; map-reduce is for callers who want
 per-part summaries and can spend ~3–4 min per long document.
 
+**Keywords and topics.** No keyword gold exists, so these are proxies. Optimized build (thin LTO), 3 threads, shared laptop. Aggregates only.
+
+| CUAD dev, 406 contracts (type from the folder) | value |
+|---|---|
+| contract-type term among the top 10 keywords | 275 / 394 = **69.8 %** |
+| same type among the 5 nearest neighbours (precision@5), keyword vectors (cosine, idf-weighted keys and words) | **43.6 %** |
+| same, MinHash (`sketch.minhash`, 128 rows) | 17.1 % |
+| same, random | 4.4 % |
+| documents with a keyword linked to a party (`entities`) | 375 / 406 |
+
+The two levers were (CUAD dev, top-10 % / precision@5): plain YAKE 51.5 / 32.7. Dropping lone generic words and keeping at most 3 company names gave 55.1 / 33.6. The title boost gave 69.5 / 43.6.
+
+| serbian-public, 362 files (221 `sr`) | value |
+|---|---|
+| files with keywords (the rest have no text layer) | 251 |
+| distinct keys / seen in Cyrillic / seen in **both** scripts (one key for Latin and Cyrillic spellings) | 1,716 / 948 / 137 |
+| spot check of 10 files, keywords read next to the text (1–5) | 3.5 mean (5, 4, 4, 4, 4, 3.5, 3, 3, 2.5, 2) |
+
+Typical Serbian failures:
+
+- Tender documentation boilerplate takes places (bidder and procedure words; most are ranked down now).
+- A company name and its address dominate an award decision.
+- A word with a Latin homoglyph inside Cyrillic text is a separate key.
+- Sibilarization (`usluga` / `usluzi`) is not folded.
+
+| topic map | maps | chapter starts with a segment boundary (±3 pages) | segment boundaries at a chapter start | record p50 / max |
+|---|---|---|---|---|
+| 613-page technical book (3 parts, 12 chapters) | 1 | 10 / 12 | 15 / 18 | 36 KB |
+| Kleister-Charity, 40 of the largest reports (22 have 20+ pages) | 22 | 107 / 206 = 52 % (top outline level) | 76 / 116 = 66 % | 13 / 21 KB |
+| CUAD dev, 20+ pages | 117 | 471 / 546 = 86 % (top outline level) | 399 / 765 = 52 % | 13 / 29 KB |
+
+The book's 19 segments follow its chapters. Chapters 8–9 and 10–11 share a segment each. The segment keywords are chapter-level terms (e.g. snapshot isolation and write skew for the transactions chapter, leader-based replication for replication).
+
+| time | p50 | p90 | max |
+|---|---|---|---|
+| `summary.keywords`, CUAD dev | 2.0 ms | 5.8 ms | 13 ms |
+| `summary.keywords`, serbian-public | 0.36 ms | 4.7 ms | 30 ms |
+| `summary.topics`, CUAD 20+ pages / Kleister | – / 1.1 ms | 3.1 ms | 8 ms |
+| per 100 pages: keywords (CUAD) / keywords + topics (Kleister, book) | 17 ms / 16 ms, 14 ms | 28 ms | |
+| 613-page book | keywords 60 ms, topics 27 ms | | |
+
+With dependencies at opt-level 2 and `quail-summary` at opt-level 2 (dev build), keywords take 2.8 ms p50 on CUAD.
+
 ## Limits
 
 - Reads the first 4 pages and at most 48 KiB of normalized text for the subject. The outline
