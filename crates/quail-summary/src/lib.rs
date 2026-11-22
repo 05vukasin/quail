@@ -1,6 +1,6 @@
 //! Per-file cards and English summaries for LLM agents. Namespace `summary.*`.
 //!
-//! - [`SummaryCard`] (`summary.card@2`, Fast): a deterministic **file card** built only from
+//! - [`SummaryCard`] (`summary.card@3`, Fast): a deterministic **file card** built only from
 //!   the facts of the other steps (type, title, language, pages, own number, cited documents,
 //!   parties with roles, dates by role, amounts, identifiers, price items, sketches, producer,
 //!   flags), stored as a record and rendered as compact `key: value` text under a hard token
@@ -11,11 +11,17 @@
 //! - [`SummaryOutline`] (`summary.outline@1`, Fast): the document's headings (DOCX heading
 //!   blocks, `CHAPTER 3`, `Article 5`, `2.1 Term`, capitals, larger type) with page ranges,
 //!   bounded, or fixed page windows ([`outline`]).
-//! - [`SummaryDigest`] (`summary.digest@1`, Standard): the bounded **summary input** of a document
+//! - [`SummaryKeywords`] (`summary.keywords@1`, Fast): 10–16 ranked keywords and key phrases
+//!   (YAKE-style statistics, no model), English and Serbian (Latin and Cyrillic give one key),
+//!   linked to the parties they name ([`keywords`], over the [term index](terms)).
+//! - [`SummaryTopics`] (`summary.topics@1`, Standard): the topic map of a long document:
+//!   keywords per outline section, topic shifts between sections and topic segments
+//!   ([`topics`]).
+//! - [`SummaryDigest`] (`summary.digest@2`, Standard): the bounded **summary input** of a document
 //!   of any length, 2 or 2,000 pages: card, outline, start and the salient sentences of every
 //!   section, copied verbatim, within a token budget ([`digest`]). Any model can read it;
 //!   [`digest::map_parts`] splits a very long document for a map-reduce summary.
-//! - `SummaryLlm` (`summary.llm@2`, Deep, feature `llm`, opt-in): a local GGUF model reads the
+//! - `SummaryLlm` (`summary.llm@3`, Deep, feature `llm`, opt-in): a local GGUF model reads the
 //!   digest (or, for very long documents and when configured, summarizes parts first and then
 //!   combines them) and writes `{summary, subject, title_en}` under a JSON grammar; every
 //!   output is [fact-checked](factcheck) against the card and the text it saw, and falls back
@@ -100,7 +106,7 @@ pub mod keys {
     pub const KEYWORDS: FactKey = FactKey::new("summary.keywords");
     /// Topic map of a long document (Record: `method` = `headings` or `windows`, `threshold`,
     /// `sections` = list of `title page end_page keywords shift`, `segments` = list of `title
-    /// titles sections page end_page keywords shift`, pages zero-based; `truncated`?).
+    /// first sections page end_page keywords shift` (`first`: index of its first section), pages zero-based; `truncated`?).
     pub const TOPICS: FactKey = FactKey::new("summary.topics");
     /// The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or
     /// `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or

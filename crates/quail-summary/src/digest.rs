@@ -341,7 +341,6 @@ pub fn build_with_terms(
     body.push_str(header);
     let mut digest = render(&facts, &body, &sections, doc_tokens, truncated);
     // The estimate of the parts and of the whole can differ by a few tokens: trim to fit.
-    let mut sections = sections;
     while digest.tokens > max {
         let Some(s) = sections
             .iter_mut()
@@ -1194,6 +1193,7 @@ pub fn map_parts(
 }
 
 #[cfg(test)]
+#[allow(clippy::many_single_char_names)] // short names for test fixtures
 mod tests {
     use super::*;
     use crate::outline::{OutlineConfig, outline};
@@ -1303,6 +1303,40 @@ mod tests {
         assert!(gs[0].title.ends_with("more)"), "{}", gs[0].title);
         let total: usize = d.pages.iter().map(|p| p.text.len()).sum();
         assert_eq!(gs.iter().map(|g| g.bytes).sum::<usize>(), total);
+    }
+
+    #[test]
+    fn sections_carry_keywords_within_the_budget() {
+        let d = book(12, 40);
+        let o = outline(&d, &OutlineConfig::default(), None);
+        let t = crate::terms::build(&d, None, crate::terms::StemLang::English, None);
+        let cfg = DigestConfig::default();
+        let g = build_with_terms(&d, "doc: book pages=480", &o, &cfg, Some((&t, None)), None);
+        assert!(g.tokens <= cfg.max_tokens, "{}", g.tokens);
+        assert!(g.verbatim(&d).is_empty());
+        let lines = g
+            .text
+            .lines()
+            .filter(|l| l.starts_with("keywords: "))
+            .count();
+        assert_eq!(lines, g.sections.len(), "{}", g.text);
+        // The batching chapter's keywords name its topic.
+        let s = g
+            .sections
+            .iter()
+            .find(|s| s.title.contains("Batching"))
+            .unwrap();
+        assert!(
+            s.keywords.iter().any(|k| k.contains("batching")),
+            "{:?}",
+            s.keywords
+        );
+        // Without a term index: the digest of `build`.
+        assert!(
+            !build(&d, "doc: book pages=480", &o, &cfg, None)
+                .text
+                .contains("keywords: ")
+        );
     }
 
     #[test]

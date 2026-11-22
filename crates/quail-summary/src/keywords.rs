@@ -197,6 +197,7 @@ fn part_of(a: &[u32], b: &[u32]) -> bool {
 /// Picks the best `max` phrases of `ranked`, skipping redundant parts and wholes, and
 /// keeping at most `max_named` phrases for which `named` holds (company names: the subject
 /// words get the other places).
+#[allow(clippy::many_single_char_names)] // phrase / id / score of one comparison
 pub fn pick(
     t: &TermIndex,
     ranked: &[(u32, f64)],
@@ -205,14 +206,14 @@ pub fn pick(
     named: impl Fn(u32) -> bool,
 ) -> Vec<(u32, f64)> {
     let mut out: Vec<(u32, f64)> = Vec::new();
-    let mut names = 0usize;
+    let mut taken_names = 0usize;
     for &(id, s) in ranked {
         if out.len() >= max {
             break;
         }
         let p = &t.phrases[id as usize];
         let is_name = named(id);
-        if is_name && names >= max_named {
+        if is_name && taken_names >= max_named {
             continue;
         }
         // A picked phrase this one is part of, mostly occurring inside it: skip this one.
@@ -246,7 +247,7 @@ pub fn pick(
             }
             None => out.push((id, s)),
         }
-        names += usize::from(is_name);
+        taken_names += usize::from(is_name);
     }
     out
 }
@@ -390,10 +391,12 @@ fn round(x: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::many_single_char_names)] // short names for test fixtures
 mod tests {
     use super::*;
     use crate::terms::build;
     use quail_core::{Page, PageKind, TextSource};
+    use std::fmt::Write as _;
 
     fn doc(pages: &[&str]) -> Document {
         Document {
@@ -432,7 +435,7 @@ mod tests {
             terms.iter().take(6).any(|t| t.contains("forklift")),
             "{terms:?}"
         );
-        assert!(terms.iter().any(|t| *t == "charging stations"), "{terms:?}");
+        assert!(terms.contains(&"charging stations"), "{terms:?}");
         assert!(terms.iter().any(|t| t.contains("lessee")), "{terms:?}");
         // No stop word, number, or generic-only phrase.
         assert!(
@@ -497,10 +500,41 @@ mod tests {
     }
 
     #[test]
+    fn title_words_rank_up_and_generic_words_alone_never_rank() {
+        let text = "GLAZING SERVICES AGREEMENT\nThe Contractor installs triple glazing panes in \
+                    the atrium. The Contractor measures the atrium frames before the panes are \
+                    cut. Under this agreement the parties meet weekly. The agreement covers the \
+                    atrium, the frames and the panes. Each party signs the agreement. Glazing \
+                    work ends in spring.";
+        let d = doc(&[text]);
+        let t = build(&d, None, StemLang::English, None);
+        let plain = extract(&d, None, &t, &[], &[], &KeywordConfig::default());
+        let title = title_stems("Glazing Services Agreement", StemLang::English);
+        assert_eq!(title, vec!["glazing", "service", "agreement"]);
+        let titled = extract(&d, None, &t, &[], &title, &KeywordConfig::default());
+        let rank = |k: &[Keyword], key: &str| k.iter().position(|x| x.key == key);
+        let before = rank(&plain, "glazing");
+        let after = rank(&titled, "glazing");
+        assert!(
+            after.is_some() && (before.is_none() || after < before),
+            "{plain:?} {titled:?}"
+        );
+        for k in [&plain, &titled] {
+            assert!(
+                !k.iter().any(|x| x.key == "agreement" || x.key == "party"),
+                "{k:?}"
+            );
+        }
+    }
+
+    #[test]
     fn empty_and_hostile_text() {
         assert!(keywords(&doc(&[]), StemLang::English).is_empty());
         assert!(keywords(&doc(&["", "   ", "12 34 56 / . ,"]), StemLang::English).is_empty());
-        let noise: String = (0..5000).map(|i| format!("w{i}x ")).collect();
+        let noise = (0..5000).fold(String::new(), |mut s, i| {
+            let _ = write!(s, "w{i}x ");
+            s
+        });
         assert!(keywords(&doc(&[&noise]), StemLang::None).is_empty());
     }
 }

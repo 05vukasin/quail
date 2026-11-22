@@ -1,4 +1,4 @@
-//! `summary.llm@2`: a local GGUF model (llama.cpp through `llama-cpp-2`) writes
+//! `summary.llm@3`: a local GGUF model (llama.cpp through `llama-cpp-2`) writes
 //! `{summary, subject, title_en}`; every output is fact-checked and falls back to the
 //! extractive summary when it fails. Feature `llm`, `Profile::Deep`, and opt-in: the analyzer
 //! applies only when [`LlmConfig::enabled`] is set.
@@ -368,7 +368,7 @@ impl Summarizer for LlmSummarizer {
     }
 }
 
-/// `summary.llm@2`: the [`LlmSummarizer`] (or any [`Summarizer`]) as an analyzer. Deep and
+/// `summary.llm@3`: the [`LlmSummarizer`] (or any [`Summarizer`]) as an analyzer. Deep and
 /// opt-in ([`LlmConfig::enabled`]); never part of the default pipeline.
 ///
 /// Reads the digest of the document ([`crate::digest`], [`LlmConfig::digest_tokens`]); with
@@ -383,7 +383,7 @@ pub struct SummaryLlm {
 
 impl SummaryLlm {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.llm", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.llm", 3);
 
     /// The step for `summarizer` with `cfg` (which must have `enabled` set to do anything)
     /// and an optional result cache.

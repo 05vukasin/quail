@@ -259,14 +259,31 @@ when one exists and the original otherwise. Without OCR they run exactly as befo
 
 ## 12. Finalizers
 
-Some steps need the facts of every other step: the file **card** (`summary.card`) and the
-**extractive summary** (`summary.extractive`). They are **finalizers**: the engine runs them
-after all non-finalizer steps, whatever the registration order.
+Some steps need the facts of every other step: the file **card** (`summary.card`), the
+**extractive summary** (`summary.extractive`), the keywords and the topic map. They are
+**finalizers**: the engine runs them after all non-finalizer steps, whatever the registration
+order (and among themselves by what they read: the card after the keywords).
 
 The card is what an LLM agent should read first about a file: a compact, deterministic text
 of 100 to 300 tokens with the document kind, title, parties, dates, amounts, identifiers,
-references and flags. The extractive summary is one to three English sentences built from the
-card and the document's subject clause, without a model.
+references, keywords and flags. The extractive summary is one to three English sentences built
+from the card and the document's subject clause, without a model.
+
+**Keywords** (`summary.keywords`) are the document's 10–16 key phrases, ranked by YAKE-style
+statistics (no model, one pass over the text). Stop words, numbers, dates, amounts and running
+headers never become keywords, and a phrase in the title ranks higher. Each keyword has a
+`key` that is the same for Latin and Cyrillic spellings and for Serbian case forms (`ugovora`,
+`уговором` → `ugovor`), so documents can be matched and clustered by subject; a keyword that
+names a party links to its `party.candidates` key (`entities`), so they can be matched by
+company too.
+
+For long documents (20 pages or more) the **topic map** (`summary.topics`) says where the
+subject changes: every outline section (or page window) gets its distinctive keywords and a
+*shift*, the cosine distance of its words to the previous section's, and consecutive sections
+on one subject are grouped into topic segments with their page ranges and keywords. A
+2,000-page file can then be navigated, and summarized part by part, by subject. The digest
+(`summary.digest`, the bounded input for a model) prints the same kind of keywords under each
+of its sections.
 
 ## 13. Content dedup
 

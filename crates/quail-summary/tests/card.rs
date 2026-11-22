@@ -408,3 +408,37 @@ fn an_expiry_before_the_effective_date_is_dropped() {
     assert!(s.contains("effective 2020-03-01"), "{s}");
     assert!(!s.contains("expiring"), "{s}");
 }
+
+#[test]
+fn card_shows_the_top_keywords() {
+    let mut facts = amendment_facts();
+    let kw = |term: &str| {
+        Value::record([
+            ("term", text(term)),
+            ("key", text(term)),
+            ("score", Value::Float(0.5)),
+            ("count", Value::Int(3)),
+            ("first_page", Value::Int(0)),
+        ])
+    };
+    let list: Vec<Value> = (0..12).map(|i| kw(&format!("harbor crane {i}"))).collect();
+    facts.push(fact("summary.keywords", Value::List(list), 0.7));
+    let out = run(&SummaryCard::new(), &facts, doc(&[AMENDMENT_TEXT]));
+    let text = get(&out, &keys::CARD_TEXT).as_text().unwrap();
+    let line = text.lines().find(|l| l.starts_with("keywords: ")).unwrap();
+    assert_eq!(line.split(", ").count(), 8, "{line}");
+    assert!(
+        line.starts_with("keywords: harbor crane 0, harbor crane 1"),
+        "{line}"
+    );
+    let card = get(&out, &keys::CARD);
+    assert!(matches!(card.field("keywords"), Some(Value::List(l)) if l.len() == 8));
+    // A tight budget drops the keywords line before the parties.
+    let small = run(
+        &SummaryCard::with_max_tokens(60),
+        &facts,
+        doc(&[AMENDMENT_TEXT]),
+    );
+    let t = get(&small, &keys::CARD_TEXT).as_text().unwrap();
+    assert!(!t.contains("keywords: ") && t.contains("parties: "), "{t}");
+}

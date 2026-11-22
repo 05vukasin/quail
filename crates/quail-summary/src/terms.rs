@@ -60,9 +60,8 @@ impl StemLang {
         match lang {
             Some("en") => Self::English,
             Some("sr" | "hr" | "bs" | "sh" | "cnr") => Self::Hbs,
-            Some(_) => Self::None,
             None if script == Some("cyrillic") => Self::Hbs,
-            None => Self::None,
+            _ => Self::None,
         }
     }
 }
@@ -152,7 +151,7 @@ impl Artifact for TermIndex {
 /// The key of a phrase: its word ids, unused slots [`NONE`].
 type PhraseKey = [u32; 3];
 
-/// A fast multiplicative hasher (FxHash) for maps keyed by ids this crate assigns in order.
+/// A fast multiplicative hasher (`FxHash`) for maps keyed by ids this crate assigns in order.
 /// Never used for text keys: a hostile file cannot choose the ids, so it cannot make them
 /// collide.
 #[derive(Clone, Copy, Default)]
@@ -303,11 +302,9 @@ impl Builder {
                         cut = true;
                         prev_word = None;
                     }
-                    if matches!(p, "." | "!" | "?" | ";" | ":") {
-                        if matches!(p, "." | "!" | "?") {
-                            self.sentence = self.sentence.saturating_add(1);
-                            sentence_start = true;
-                        }
+                    if matches!(p, "." | "!" | "?") {
+                        self.sentence = self.sentence.saturating_add(1);
+                        sentence_start = true;
                     }
                     continue;
                 }
@@ -457,12 +454,11 @@ pub fn build(
             continue;
         }
         let own;
-        let np = match shared.and_then(|n| n.page(pos, &p.text)) {
-            Some(n) => n,
-            None => {
-                own = NormalizedPage::new(&p.text);
-                &own
-            }
+        let np = if let Some(n) = shared.and_then(|n| n.page(pos, &p.text)) {
+            n
+        } else {
+            own = NormalizedPage::new(&p.text);
+            &own
         };
         let skip = furniture_ranges(np.text(), &furniture);
         furniture_lines += u32::try_from(skip.len()).unwrap_or(u32::MAX);
@@ -515,12 +511,11 @@ impl TermIndex {
                 continue;
             };
             let own;
-            let np = match shared.and_then(|n| n.page(pos as usize, &p.text)) {
-                Some(n) => n,
-                None => {
-                    own = NormalizedPage::new(&p.text);
-                    &own
-                }
+            let np = if let Some(n) = shared.and_then(|n| n.page(pos as usize, &p.text)) {
+                n
+            } else {
+                own = NormalizedPage::new(&p.text);
+                &own
             };
             while i < by_page.len() && by_page[i].0 == pos {
                 let id = by_page[i].1;
@@ -1109,12 +1104,21 @@ pub(crate) const STOP_HBS: &[&str] = &[
     "cete",
     "cu",
     "da",
+    "dalje",
+    "daljem",
     "dana",
     "decembar",
     "decembra",
+    "din",
+    "dinara",
     "do",
     "dok",
     "doo",
+    "druga",
+    "druge",
+    "drugi",
+    "drugom",
+    "drugu",
     "februar",
     "februara",
     "ga",
@@ -1126,12 +1130,17 @@ pub(crate) const STOP_HBS: &[&str] = &[
     "ih",
     "ili",
     "im",
+    "itd",
     "iz",
     "izmedju",
     "ja",
     "januar",
     "januara",
     "je",
+    "jedan",
+    "jedna",
+    "jedne",
+    "jednog",
     "jer",
     "jesu",
     "joj",
@@ -1154,6 +1163,8 @@ pub(crate) const STOP_HBS: &[&str] = &[
     "kojim",
     "kojima",
     "kojoj",
+    "koju",
+    "kom",
     "kroz",
     "li",
     "maj",
@@ -1162,16 +1173,25 @@ pub(crate) const STOP_HBS: &[&str] = &[
     "marta",
     "me",
     "mi",
+    "moci",
+    "mogu",
+    "mora",
+    "moraju",
+    "moze",
     "mu",
     "na",
     "nad",
     "nakon",
     "nam",
     "nas",
+    "navedene",
+    "navedeni",
+    "navedenog",
     "ne",
     "nego",
     "neka",
     "neki",
+    "nekog",
     "nema",
     "ni",
     "nije",
@@ -1208,29 +1228,40 @@ pub(crate) const STOP_HBS: &[&str] = &[
     "ovim",
     "ovo",
     "ovog",
+    "ovoj",
     "ovom",
     "pa",
+    "pak",
+    "pdv",
     "po",
     "pod",
+    "potrebno",
     "pred",
     "preko",
     "prema",
     "pri",
     "protiv",
     "radi",
+    "rsd",
     "s",
     "sa",
+    "saglasno",
     "sam",
     "samo",
     "se",
     "septembar",
     "septembra",
+    "shodno",
     "si",
+    "sl",
     "smo",
     "st",
     "ste",
     "sto",
     "su",
+    "svaka",
+    "svake",
+    "svaki",
     "sve",
     "svi",
     "svih",
@@ -1246,13 +1277,18 @@ pub(crate) const STOP_HBS: &[&str] = &[
     "takodje",
     "te",
     "tek",
+    "tekstu",
     "ti",
     "to",
     "tog",
+    "toj",
     "tokom",
     "tom",
+    "treba",
     "tu",
     "u",
+    "ukoliko",
+    "usled",
     "uz",
     "vam",
     "vas",
@@ -1278,10 +1314,12 @@ pub(crate) const GENERIC: &[&str] = &[
     "condition",
     "contract",
     "cost",
+    "dan",
     "date",
     "day",
     "detail",
     "document",
+    "dokumentacij",
     "effect",
     "event",
     "exhibit",
@@ -1289,22 +1327,45 @@ pub(crate) const GENERIC: &[&str] = &[
     "form",
     "information",
     "item",
+    "javn",
+    "javna",
+    "javne",
+    "javni",
+    "javnih",
+    "javnoj",
+    "javnu",
+    "konkursn",
+    "konkursna",
     "law",
+    "lic",
     "lice",
     "manner",
     "matter",
     "member",
+    "nabavk",
+    "narucilac",
+    "narucioc",
     "notice",
     "number",
+    "obavez",
     "obaveza",
     "obligation",
+    "obrasc",
+    "obrazac",
+    "odredb",
     "odredba",
     "part",
     "party",
     "period",
     "person",
     "place",
+    "ponud",
+    "ponudjac",
+    "postupak",
+    "postupk",
+    "prav",
     "pravo",
+    "predmet",
     "provision",
     "purpose",
     "reason",
@@ -1314,19 +1375,24 @@ pub(crate) const GENERIC: &[&str] = &[
     "schedule",
     "section",
     "stav",
+    "stran",
     "strana",
+    "tack",
     "tacka",
     "term",
     "thing",
     "time",
     "ugovor",
+    "ugovorn",
     "uslov",
     "way",
     "written",
     "year",
+    "zakon",
 ];
 
 #[cfg(test)]
+#[allow(clippy::many_single_char_names)] // short names for test fixtures
 mod tests {
     use super::*;
     use quail_core::{Page, PageKind};

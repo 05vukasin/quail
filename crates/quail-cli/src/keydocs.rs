@@ -792,7 +792,7 @@ pub const SUMMARY: &[KeyDoc] = &[
     },
     KeyDoc {
         key: quail_summary::keys::TOPICS,
-        doc: "Topic map of a long document (Record: `method` = `headings` or `windows`, `threshold`, `sections` = list of `title page end_page keywords shift`, `segments` = list of `title titles sections page end_page keywords shift`, pages zero-based; `truncated`?).",
+        doc: "Topic map of a long document (Record: `method` = `headings` or `windows`, `threshold`, `sections` = list of `title page end_page keywords shift`, `segments` = list of `title first sections page end_page keywords shift` (`first`: index of its first section), pages zero-based; `truncated`?).",
     },
     KeyDoc {
         key: quail_summary::keys::LLM,

@@ -15,18 +15,26 @@ original script; a non-English subject sentence is quoted and marked with its la
 
 | id | profile | requires / after | emits |
 |---|---|---|---|
-| `summary.card@2` (`SummaryCard`) | Fast | `document` / `revised_document ocr_text raster normalized_text` | `summary.card`, `summary.card_text`, `summary.card_tokens` |
-| `summary.extractive@2` (`SummaryExtractive`) | Fast | same | `summary.extractive`, `summary.subject` |
+| `summary.card@3` (`SummaryCard`) | Fast | `document` / `revised_document ocr_text raster normalized_text summary_terms` | `summary.card`, `summary.card_text`, `summary.card_tokens` |
+| `summary.extractive@2` (`SummaryExtractive`) | Fast | `document` / `revised_document ocr_text raster normalized_text` | `summary.extractive`, `summary.subject` |
 | `summary.outline@1` (`SummaryOutline`) | Fast | same | `summary.outline` |
-| `summary.digest@1` (`SummaryDigest`) | Standard | same | `summary.digest`, `summary.digest_tokens` |
-| `summary.llm@2` (`SummaryLlm`, feature `llm`) | Deep, opt-in | same | `summary.llm` |
+| `summary.keywords@1` (`SummaryKeywords`) | Fast | same; provides `summary_terms` | `summary.keywords` |
+| `summary.topics@1` (`SummaryTopics`) | Standard | `document` / same + `summary_terms` | `summary.topics` |
+| `summary.digest@2` (`SummaryDigest`) | Standard | `document` / same + `summary_terms` | `summary.digest`, `summary.digest_tokens` |
+| `summary.llm@3` (`SummaryLlm`, feature `llm`) | Deep, opt-in | `document` / `revised_document ocr_text raster normalized_text` | `summary.keywords` | list of records `term key score count first_page entities?`, best first (below) |
+| `summary.topics` | record `method threshold sections segments truncated?`: `sections` list of `title page end_page keywords shift`, `segments` list of `title first sections page end_page keywords shift` (pages zero-based, `first` = index of the segment's first section) |
+| `summary.llm` |
 
 **Ordering.** They read `ctx.facts`, so they must run after every fact producer. All of them are
 finalizers (`Analyzer::finalizer`): the engine runs them after every non-finalizer step,
 whatever the registration order. They also declare `after` on every artifact a workspace step
 provides (`AFTER`), so they see OCR text when OCR is active (`tests/engine.rs` checks the plan).
+The card, topic and digest steps also run after `summary.keywords` (`AFTER_TERMS`, the
+`summary_terms` artifact): the card prints the keywords, the other two reuse its term index
+(and build the same index themselves when it is absent).
 
-`quail-cli` registers `summary.outline@1` by default (cheap, see Measured). `summary.digest@1`
+`quail-cli` registers `summary.outline@1`, `summary.keywords@1` and `summary.topics@1` by
+default (`summary.topics` is Standard: left out under `--profile fast`). `summary.digest@2`
 is Standard and not in the CLI pipeline: it costs a few ms per file and adds ~6.5 KB to every
 record; a service that feeds a model registers it (`SummaryDigest::with_config` sets the
 budget and a minimum document size).
@@ -63,6 +71,7 @@ budget and a minimum document size).
 | `ids` | list of `kind values count` (`pib mb vat iban oib lei ein duns account bic`, ≤ 2 values) | `signal.*` |
 | `personal_ids` | Int, count only | `signal.jmbg_count` |
 | `items` | record `count categories` (top 3 CPV `code label lines`) | `item.count`, `item.line` |
+| `keywords` | list of terms, best first (≤ 8) | `summary.keywords` |
 | `sketch` | record `simhash_text simhash_template text_key` (first 8 bytes, hex) | `sketch.*` |
 | `producer`, `author`, `company` | Text | `pdf.producer` / `docx.application` / `pdf.creator`; `pdf.author` / `docx.creator`; `docx.company` |
 | `flags` | list: `scanned(n) ocr(n) needs_ocr(n) encrypted signed signature_fields(n) macros javascript hidden_text(n) tracked_changes(n) comments(n) embedded(n) updated(n) protected garbled_text` | `pdf.*`, `docx.*`, `ocr.pages`, `text.garbage_ratio` |
@@ -78,6 +87,7 @@ parties: customer=Northwind Logistics Ltd; supplier=Blue River Software GmbH
 dates: effective=2023-09-12 expires=2026-12-31
 amounts: total=EUR 4,200.00
 refs: amends=msa 114/23; references=po PO-77812
+keywords: hosted platform, service levels, support tickets, uptime credits
 ids: vat=DE136695976 iban=DE89370400440532013000,GB82WEST12345698765432 (+1)
 flags: signed
 meta: producer="Microsoft® Word 2016"
@@ -85,7 +95,7 @@ sketch: text=9f3a61c2b7d40e15 tmpl=11c07a3e5b92d468
 ```
 
 Per-field limits (title 100 characters, names 60, labels 40, list lengths, `+N` for the rest),
-then whole lines are dropped from the least useful up (`sketch`, `meta`, `items`, `flags`, `ids`,
+then whole lines are dropped from the least useful up (`sketch`, `meta`, `items`, `flags`, `ids`, `keywords`,
 `refs`, `amounts`, `dates`, `parties`) until the text fits the budget; `doc` is clipped last.
 
 **Token estimate** (`tokens::estimate`): per whitespace-separated chunk, ASCII letters and digits
@@ -152,7 +162,63 @@ whole levels first (all level 1, then level 2, …; a level that does not fit is
 Each entry's pages run to the next heading of the same or a higher level. Fewer than 3
 headings: fixed page windows (`Pages 1-9`, at most 16, emitted from 4 pages on).
 
-## Digest (`summary.digest@1`)
+## Keywords (`summary.keywords@1`)
+
+Document keywords and key phrases for matching and clustering documents by subject and company,
+no model, one linear pass over the shared `normalized_text` tokens (`terms`):
+
+- **Candidates**: runs of 1–3 content words; stop words (English and Serbian, legal boilerplate
+  such as `hereinafter`, `hereto`, `u daljem tekstu`, months, Roman numerals, legal forms),
+  punctuation, numbers, codes, URLs and a capitalized word that starts a line (a heading ends
+  there) cut them. Dates, amounts and identifiers are therefore never keywords (they are
+  signals already). Content words have ≥ 3 letters (2 for an upper-case acronym).
+- **One key for both scripts**: tokens are keyed by `FoldOptions::KEY` (lowercase, no
+  diacritics, Serbian Cyrillic transliterated), so `Уговор`, `UGOVOR` and `ugovor` are one
+  word. Lemmatization-lite: Serbian / Croatian / Bosnian case endings folded on words of ≥ 6
+  letters keeping ≥ 4 (`ugovora`, `ugovorom`, `ugovorima` → `ugovor`; a multi-letter ending
+  only after a consonant), English plurals (`services` → `service`, `parties` → `party`, not
+  `-ss`, `-us`, `-is`); other languages are not stemmed.
+- **Furniture**: a line among the first or last three of a page, of ≤ 12 words, that repeats
+  (digits ignored) on ≥ 3 pages and a tenth of the document is a running header or footer and
+  is skipped.
+- **Score** (YAKE, Campos et al. 2020, per stem): casing (capitalized not at a sentence
+  start; acronyms outside runs of capitals), median sentence position, frequency, relatedness
+  (distinct neighbours per occurrence: a word next to anything is stop-word-like), spread over
+  sentences; `S(w) = T_rel · T_pos / (T_case + (T_freq + T_sent) / T_rel)`, ×3 for generic
+  document words (`agreement`, `section`, `party`, `ugovor`, `ponuda`, `nabavka`, ...). A
+  phrase scores `Π S(w) / (tf · (1 + Σ S(w)))`, ÷4 when all its words are in the document title
+  (`ref.title`: the title names the subject). Lower is better. Phrases of 2–3 words need ≥ 2
+  occurrences (single words too from 300 content words), unless they are title words. A
+  generic word alone, or a phrase of generic words only, is never a keyword.
+- **Pick**: the best 16 (`KeywordConfig::max`), a phrase that occurs mostly inside a picked one
+  (≤ 1.3× its count) skipped and a picked word replaced by the phrase it mostly occurs in; at
+  most 3 company names (`max_names`; a party's defined term such as `Licensee` does not count).
+  `score` = `S(best) / S(k)`: 1 for the first, falling.
+- **Fields**: `term` (first occurrence as written, lowercased; a 2–6 letter word that is mostly
+  an acronym keeps its capitals), `key` (stems in ASCII: the same for Latin and Cyrillic, use it
+  to match documents), `count`, `first_page` (zero-based), `entities` (the `party.candidates`
+  keys whose name or defined term holds every word of the keyword; helps company matching).
+
+## Topics (`summary.topics@1`)
+
+A map of a long document (≥ 20 pages, `TopicConfig::min_pages`): where the subject changes and
+what each part is about, so a 200–2,000-page file can be navigated and summarized by subject.
+
+- **Sections**: the outline's headings at the deepest level that gives ≤ 64 sections (headings
+  that start on the same page are one), plus `Opening pages` before the first heading; without
+  3 headings, ≤ 32 fixed page windows. A section's text is its pages.
+- **Vectors**: per section, the 1–2 word phrases of its pages (the term index keeps per-page
+  counts). Keyword weight `(1 + ln pages) · (1 + ½ ln tf) · ln((N + 1) / df)` over the `N`
+  sections (spread across the section's pages beats repetition on one page, a phrase in every
+  section weighs almost nothing), single generic words ×0.3, two-word phrases ×1.3. Section
+  keywords: top 5; segment keywords: top 8.
+- **Shift**: cosine distance (1 − cos) of a section's single-word vector to the previous one.
+- **Segments**: a section whose distance to the running segment's summed vector reaches the
+  threshold `max(0.6, median + ½ (p90 − median))` of those distances starts a new segment; at
+  most 64 (the largest distances win). The record keeps the threshold.
+- `topics::range_keywords` gives the distinctive keywords of any page ranges: the digest uses it.
+
+## Digest (`summary.digest@2`)
 
 The model input for a document of any length, at most `DigestConfig::max_tokens` (default
 2,000) estimated tokens, deterministic:
@@ -175,6 +241,9 @@ EXCERPTS (sentences copied from each section):
 ```
 
 - A document whose whole text fits gets `FACTS` + `TEXT` (the whole normalized text).
+- With a term index (`summary.keywords` ran, or the digest builds one), each section title is
+  followed by `keywords: a, b, c` (5 per section, distinctive against the other sections, see
+  Topics); their tokens come out of the excerpt budget.
 - Budget: card (≤ 300), outline (15 %, deepest levels dropped first), start (10 %), the rest
   for excerpts. Sections are the outline entries at the deepest level that gives ≤ 16 of them
   (one per 125 tokens of budget; one level deeper when that gives fewer than a third, merged
@@ -272,5 +341,10 @@ per-part summaries and can spend ~3–4 min per long document.
   paragraphs, whatever the length, and checks the deadline per section; its output is bounded
   by its token budget, the outline by 64 entries. The LLM sees at most `digest_tokens` per call
   and at most `max_parts + 1` calls per document. Checks the deadline during generation.
+- Keywords: one pass over every token (deadline checked every 16 pages; a cut index is marked
+  and the record partial), at most 150,000 distinct words and 300,000 distinct phrases (later
+  new ones are not counted), 32 sentence positions per word; per-page counts of 1–2 word
+  phrases only. Output: at most 16 keywords. Topics: at most 64 sections and 64 segments, 5
+  and 8 keywords each; documents of fewer than 20 pages get none.
 - Card text: hard budget (default 300 estimated tokens, `SummaryCard::with_max_tokens`).
 - No panics on any fact shape: unexpected value types are skipped.

@@ -89,6 +89,8 @@ pub struct TopicSection {
 pub struct TopicSegment {
     /// Titles of its first sections (at most 4).
     pub titles: Vec<String>,
+    /// Index of its first section in [`TopicMap::sections`].
+    pub first: usize,
     /// Sections in it.
     pub sections: usize,
     /// Zero-based first page.
@@ -142,7 +144,10 @@ impl TopicMap {
                         "title",
                         Value::text(s.titles.first().map_or("", String::as_str)),
                     ),
-                    ("titles", words(&s.titles)),
+                    (
+                        "first",
+                        Value::Int(i64::try_from(s.first).unwrap_or(i64::MAX)),
+                    ),
                     (
                         "sections",
                         Value::Int(i64::try_from(s.sections).unwrap_or(i64::MAX)),
@@ -341,6 +346,7 @@ fn distance(a: &[(u32, f64)], b: &[(u32, f64)]) -> f64 {
 }
 
 /// The top `k` phrase ids of `v` (see the [module docs](self)).
+#[allow(clippy::many_single_char_names)] // the weighting formula's terms
 fn top(t: &TermIndex, v: &Vector, df: &IdMap<u32, u32>, n: usize, k: usize) -> Vec<u32> {
     let total: u32 = v.values().map(|x| x.0).sum();
     let min_tf = if total >= 400 { 2 } else { 1 };
@@ -411,6 +417,7 @@ pub fn range_keywords(
 
 /// The topic map of `doc` from its term index `t` and `outline`, or `None` for a document
 /// of fewer than [`TopicConfig::min_pages`] pages or fewer than 2 sections.
+#[allow(clippy::many_single_char_names, clippy::too_many_lines)] // one pipeline, in order
 pub fn map(
     doc: &Document,
     shared: Option<&NormalizedText>,
@@ -484,30 +491,35 @@ pub fn map(
         starts = std::iter::once(0).chain(by).collect();
     }
 
-    let sec_ids: Vec<Vec<u32>> = vs
+    let section_ids: Vec<Vec<u32>> = vs
         .iter()
         .map(|v| top(t, v, &df, n, cfg.section_keywords))
         .collect();
-    let mut seg_ids: Vec<Vec<u32>> = Vec::new();
+    let mut segment_ids: Vec<Vec<u32>> = Vec::new();
     for (j, &a) in starts.iter().enumerate() {
         let b = starts.get(j + 1).copied().unwrap_or(n);
         let mut v = Vector::default();
         for x in &vs[a..b] {
             add(&mut v, x);
         }
-        seg_ids.push(top(t, &v, &df, n, cfg.segment_keywords));
+        segment_ids.push(top(t, &v, &df, n, cfg.segment_keywords));
     }
-    let all: Vec<u32> = sec_ids.iter().chain(&seg_ids).flatten().copied().collect();
-    let names = t.surfaces(doc, shared, &all);
+    let all: Vec<u32> = section_ids
+        .iter()
+        .chain(&segment_ids)
+        .flatten()
+        .copied()
+        .collect();
+    let surfaces = t.surfaces(doc, shared, &all);
     let named = |l: &[u32]| {
         l.iter()
-            .filter_map(|id| names.get(id).cloned())
+            .filter_map(|id| surfaces.get(id).cloned())
             .collect::<Vec<_>>()
     };
 
     let sections: Vec<TopicSection> = spans
         .iter()
-        .zip(&sec_ids)
+        .zip(&section_ids)
         .zip(&shifts)
         .map(|((s, ids), &shift)| TopicSection {
             title: s.title.clone(),
@@ -523,6 +535,7 @@ pub fn map(
         .map(|(j, &a)| {
             let b = starts.get(j + 1).copied().unwrap_or(n);
             TopicSegment {
+                first: a,
                 titles: spans[a..b]
                     .iter()
                     .take(4)
@@ -531,7 +544,7 @@ pub fn map(
                 sections: b - a,
                 page: spans[a].page,
                 end_page: spans[b - 1].end,
-                keywords: named(&seg_ids[j]),
+                keywords: named(&segment_ids[j]),
                 shift: if a == 0 { 0.0 } else { dist[a] },
             }
         })
@@ -562,6 +575,7 @@ pub fn render(m: &TopicMap) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::many_single_char_names)] // short names for test fixtures
 mod tests {
     use super::*;
     use crate::outline::{OutlineConfig, outline};
@@ -689,7 +703,17 @@ mod tests {
         assert_eq!(m.segments.len(), 2);
         assert_eq!(m.segments[0].page, 0);
         let rk = range_keywords(&d, None, &t, &[(0, 11), (12, 23)], 4);
-        assert!(rk[0].iter().any(|k| k.split(' ').any(|w| REEF.contains(&w))), "{rk:?}");
-        assert!(rk[1].iter().any(|k| k.split(' ').any(|w| MINE.contains(&w))), "{rk:?}");
+        assert!(
+            rk[0]
+                .iter()
+                .any(|k| k.split(' ').any(|w| REEF.contains(&w))),
+            "{rk:?}"
+        );
+        assert!(
+            rk[1]
+                .iter()
+                .any(|k| k.split(' ').any(|w| MINE.contains(&w))),
+            "{rk:?}"
+        );
     }
 }
