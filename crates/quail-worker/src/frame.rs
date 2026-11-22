@@ -10,6 +10,8 @@
 //! supervisor -> child   HELLO(json)                     once, right after spawn
 //! child -> supervisor   READY(json) | FATAL(utf-8)
 //! supervisor -> child   JOB(json) [DATA(bytes)]         DATA only for in-memory files
+//! child -> supervisor   EXTEND(id u64, budget_ms u64)*  while the job runs, when a step
+//!                                                       extends the file's deadline
 //! child -> supervisor   RESULT(id u64, has_doc u8, record json) [DOC(json)]
 //! ```
 //!
@@ -38,6 +40,9 @@ pub(crate) const DATA: u8 = 5;
 pub(crate) const RESULT: u8 = 6;
 /// Child to supervisor: the extracted document of the previous [`RESULT`].
 pub(crate) const DOC: u8 = 7;
+/// Child to supervisor, before the [`RESULT`] of a job: a step extended the file's deadline;
+/// the file's whole time budget is now `budget_ms` ([`extend_payload`]).
+pub(crate) const EXTEND: u8 = 8;
 
 /// One received frame.
 pub(crate) struct Frame {
@@ -115,6 +120,10 @@ pub(crate) struct Ready {
     pub pid: u32,
     /// The engine's `Limits::timeout`, in milliseconds.
     pub timeout_ms: u64,
+    /// The engine's `Limits::timeout_cap()`, in milliseconds: the most a step may extend a
+    /// file's budget to. Absent (zero) from older workers: no extension is honoured.
+    #[serde(default)]
+    pub timeout_cap_ms: u64,
     /// The engine's `Limits::max_bytes`.
     pub max_bytes: u64,
     /// Limits that could not be applied, one line each.
@@ -159,6 +168,24 @@ pub(crate) fn path_from_bytes(b: Vec<u8>) -> std::path::PathBuf {
     }
 }
 
+/// An [`EXTEND`] payload: job id and the file's whole budget in milliseconds.
+pub(crate) fn extend_payload(id: u64, budget_ms: u64) -> [u8; 16] {
+    let mut p = [0u8; 16];
+    p[..8].copy_from_slice(&id.to_le_bytes());
+    p[8..].copy_from_slice(&budget_ms.to_le_bytes());
+    p
+}
+
+/// Inverse of [`extend_payload`].
+pub(crate) fn split_extend(payload: &[u8]) -> Option<(u64, u64)> {
+    if payload.len() != 16 {
+        return None;
+    }
+    let id = u64::from_le_bytes(payload.get(..8)?.try_into().ok()?);
+    let ms = u64::from_le_bytes(payload.get(8..)?.try_into().ok()?);
+    Some((id, ms))
+}
+
 /// Splits a [`RESULT`] payload into job id, whether a [`DOC`] frame follows, and the record
 /// JSON.
 pub(crate) fn split_result(payload: &[u8]) -> Option<(u64, bool, &[u8])> {
@@ -193,6 +220,12 @@ mod tests {
         assert!(read_frame(&mut &buf[..], 10).is_err());
         assert!(read_frame(&mut &buf[..20], 100).is_err());
         assert!(read_frame(&mut &buf[..5], 100).is_err());
+    }
+
+    #[test]
+    fn extend_round_trip() {
+        assert_eq!(split_extend(&extend_payload(7, 1234)), Some((7, 1234)));
+        assert_eq!(split_extend(&[0u8; 15]), None);
     }
 
     #[test]

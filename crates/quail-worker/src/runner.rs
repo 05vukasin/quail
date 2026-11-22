@@ -42,7 +42,9 @@ pub struct IsolationOptions {
     pub retry_timeouts: bool,
     /// Wall-clock budget of one file from the moment it is sent to the worker; past it the
     /// worker is killed. `None`: twice the engine's `Limits::timeout` plus [`grace`]
-    /// (the engine's own cooperative deadline gets the first chance).
+    /// (the engine's own cooperative deadline gets the first chance). Either way, when a step
+    /// extends the file's deadline (up to `Limits::timeout_cap()`), the budget grows by twice
+    /// the extension while the file runs ([`WorkerProcess::process`]).
     ///
     /// [`grace`]: Self::grace
     pub kill_after: Option<Duration>,
@@ -288,7 +290,7 @@ impl IsolatedRunner {
             .slots
             .iter()
             .filter_map(|s| s.worker.as_ref())
-            .map(|w| w.engine_timeout().saturating_mul(2))
+            .map(|w| w.engine_timeout_cap().saturating_mul(2))
             .max()
             .unwrap_or(Duration::MAX);
         let cfg = WriterCfg {

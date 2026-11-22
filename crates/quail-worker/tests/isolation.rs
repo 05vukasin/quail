@@ -82,6 +82,13 @@ impl Analyzer for Trap {
                 "EXIT" => std::process::exit(3),
                 "PRINT" => println!("this line must not reach the protocol channel"),
                 "SLEEP" => std::thread::sleep(Duration::from_millis(arg.parse().unwrap_or(0))),
+                "EXTEND" => {
+                    let got = out.extend_deadline(Duration::from_millis(arg.parse().unwrap_or(0)));
+                    out.fact(
+                        FactKey::new("test.granted_ms"),
+                        Value::Int(i64::try_from(got.as_millis()).unwrap_or(0)),
+                    );
+                }
                 "FLAKY" => {
                     let marker = PathBuf::from(arg);
                     if !marker.exists() {
@@ -128,6 +135,8 @@ fn test_engine() -> Engine {
             // Generous: only `!HANG` and `!SPIN` files may ever run over it, also on a loaded
             // machine. Small files only: `path_mode_applies_the_source_cap` reads 1 MiB + 1.
             timeout: Duration::from_secs(2),
+            // `!EXTEND` may add up to 3 s.
+            max_timeout: Duration::from_secs(5),
             max_bytes: 1 << 20,
             ..Limits::default()
         })
@@ -625,6 +634,49 @@ fn single_worker_crash_and_respawn() {
     assert!(matches!(Job::path("x").input, JobInput::Path(_)));
 }
 
+/// The watchdog moves with an extension the engine granted, and only with that.
+fn watchdog_follows_deadline_extensions() {
+    let cfg = isolation().worker;
+    let mut w = WorkerProcess::spawn(&cfg).unwrap();
+    assert_eq!(w.engine_timeout_cap(), Duration::from_secs(5));
+    let kill = Duration::from_millis(400);
+    // Without an extension, a step longer than the budget is killed.
+    let c = w
+        .process(&Job::from(item("slow", "!SLEEP 1500")), false, kill)
+        .unwrap_err();
+    assert_eq!(c.kind, CrashKind::Timeout);
+    // An extension of 1 s moves the kill 2 s later: the same step survives.
+    let mut w = WorkerProcess::spawn(&cfg).unwrap();
+    let p = w
+        .process(
+            &Job::from(item("ext", "!EXTEND 1000\n!SLEEP 1500")),
+            false,
+            kill,
+        )
+        .unwrap();
+    assert_eq!(p.record.status, Status::Ok, "{:?}", p.record.status);
+    assert!(w.is_alive());
+    // The next file starts from the plain budget again.
+    let c = w
+        .process(&Job::from(item("slow2", "!SLEEP 1500")), false, kill)
+        .unwrap_err();
+    assert_eq!(c.kind, CrashKind::Timeout);
+    // Asking for an hour gets the 3 s up to the cap, so the kill is at most 6 s later.
+    let mut w = WorkerProcess::spawn(&cfg).unwrap();
+    let t = Instant::now();
+    let c = w
+        .process(
+            &Job::from(item("cap", "!EXTEND 3600000\n!HANG")),
+            false,
+            kill,
+        )
+        .unwrap_err();
+    assert_eq!(c.kind, CrashKind::Timeout);
+    let took = t.elapsed();
+    assert!(took >= Duration::from_secs(6), "{took:?}");
+    assert!(took < Duration::from_secs(30), "{took:?}");
+}
+
 fn startup_failures_are_errors() {
     let mut runner = IsolatedRunner::new(IsolationOptions {
         worker: WorkerConfig {
@@ -683,6 +735,10 @@ const TESTS: &[Test] = &[
     (
         "single_worker_crash_and_respawn",
         single_worker_crash_and_respawn,
+    ),
+    (
+        "watchdog_follows_deadline_extensions",
+        watchdog_follows_deadline_extensions,
     ),
     ("startup_failures_are_errors", startup_failures_are_errors),
 ];

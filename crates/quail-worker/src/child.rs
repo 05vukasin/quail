@@ -2,13 +2,14 @@
 
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 
 use quail_core::{Blob, Document, FileRecord, Format, SCHEMA_VERSION, SourceItem, Status};
 use quail_engine::Engine;
 
 use crate::frame::{
-    self, DATA, DOC, FATAL, HELLO, Hello, JOB, JobMsg, READY, RESULT, Ready, read_frame,
+    self, DATA, DOC, EXTEND, FATAL, HELLO, Hello, JOB, JobMsg, READY, RESULT, Ready, read_frame,
     write_frame,
 };
 use crate::sys;
@@ -67,9 +68,11 @@ fn run_worker(build_engine: impl FnOnce() -> Engine + Send + 'static) -> i32 {
         .stack_size(hello.stack_size.max(1 << 20))
         .spawn(move || {
             let engine = build_engine();
+            let ms = |d: std::time::Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
             let ready = Ready {
                 pid: std::process::id(),
-                timeout_ms: u64::try_from(engine.limits().timeout.as_millis()).unwrap_or(u64::MAX),
+                timeout_ms: ms(engine.limits().timeout),
+                timeout_cap_ms: ms(engine.limits().timeout_cap()),
                 max_bytes: engine.limits().max_bytes,
                 notes,
             };
@@ -77,7 +80,7 @@ fn run_worker(build_engine: impl FnOnce() -> Engine + Send + 'static) -> i32 {
             if write_frame(&mut out, READY, &[&ready]).is_err() {
                 return 0;
             }
-            serve(&engine, &mut input, &mut out, cpu)
+            serve(&engine, &mut input, &Arc::new(Mutex::new(out)), cpu)
         });
     match worker.map(thread::JoinHandle::join) {
         Ok(Ok(code)) => code,
@@ -98,7 +101,17 @@ fn fatal(out: &mut impl Write, msg: &str) -> i32 {
 }
 
 /// The job loop. Returns the exit code.
-fn serve(engine: &Engine, input: &mut impl Read, out: &mut impl Write, cpu: Option<u64>) -> i32 {
+///
+/// `out` is shared with the deadline hook, which writes an [`EXTEND`] frame from inside the
+/// engine whenever a step extends the file's deadline, so that the supervisor's watchdog
+/// moves along while the step still runs.
+fn serve<W: Write + Send + 'static>(
+    engine: &Engine,
+    input: &mut impl Read,
+    out: &Arc<Mutex<W>>,
+    cpu: Option<u64>,
+) -> i32 {
+    let lock = || out.lock().unwrap_or_else(PoisonError::into_inner);
     // A DATA frame may be as big as the engine reads at all, plus slack for oversized files
     // that are only hashed.
     let max_data = engine.limits().max_bytes.saturating_mul(2).max(1 << 30);
@@ -107,16 +120,16 @@ fn serve(engine: &Engine, input: &mut impl Read, out: &mut impl Write, cpu: Opti
             Ok(None) => return 0,
             Ok(Some(f)) if f.tag == JOB => match serde_json::from_slice(&f.payload) {
                 Ok(j) => j,
-                Err(e) => return fatal(out, &format!("bad job: {e}")),
+                Err(e) => return fatal(&mut *lock(), &format!("bad job: {e}")),
             },
-            Ok(Some(f)) => return fatal(out, &format!("expected job, got tag {}", f.tag)),
-            Err(e) => return fatal(out, &format!("reading job: {e}")),
+            Ok(Some(f)) => return fatal(&mut *lock(), &format!("expected job, got tag {}", f.tag)),
+            Err(e) => return fatal(&mut *lock(), &format!("reading job: {e}")),
         };
         let blob = match job.path {
             None => match read_frame(input, max_data) {
                 Ok(Some(f)) if f.tag == DATA => Ok(Blob::from(f.payload)),
-                Ok(_) => return fatal(out, "expected data frame"),
-                Err(e) => return fatal(out, &format!("reading data: {e}")),
+                Ok(_) => return fatal(&mut *lock(), "expected data frame"),
+                Err(e) => return fatal(&mut *lock(), &format!("reading data: {e}")),
             },
             Some(p) => {
                 read_capped(&frame::path_from_bytes(p), engine.limits().max_bytes).map(Blob::from)
@@ -133,30 +146,39 @@ fn serve(engine: &Engine, input: &mut impl Read, out: &mut impl Write, cpu: Opti
                     blob,
                     modified: job.modified,
                 };
-                if job.want_document {
-                    engine.process_with(item, |_, artifacts| {
+                let on_budget = {
+                    let (out, id) = (Arc::clone(out), job.id);
+                    Arc::new(move |budget: std::time::Duration| {
+                        let ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX);
+                        let mut w = out.lock().unwrap_or_else(PoisonError::into_inner);
+                        // A dead supervisor shows up when the result is written.
+                        let _ = write_frame(&mut *w, EXTEND, &[&frame::extend_payload(id, ms)]);
+                    })
+                };
+                let want = job.want_document;
+                engine.process_watched(item, on_budget, |_, artifacts| {
+                    if want {
                         doc_json = artifacts
                             .get::<Document>()
                             .and_then(|d| serde_json::to_vec(d).ok());
-                    })
-                } else {
-                    engine.process(item)
-                }
+                    }
+                })
             }
             Err(e) => read_failed(job.locator, &e),
         };
         let json = match serde_json::to_vec(&record) {
             Ok(j) => j,
-            Err(e) => return fatal(out, &format!("cannot encode record: {e}")),
+            Err(e) => return fatal(&mut *lock(), &format!("cannot encode record: {e}")),
         };
         let mut head = [0u8; 9];
         head[..8].copy_from_slice(&job.id.to_le_bytes());
         head[8] = u8::from(doc_json.is_some());
-        if write_frame(out, RESULT, &[&head, &json]).is_err() {
+        let mut w = lock();
+        if write_frame(&mut *w, RESULT, &[&head, &json]).is_err() {
             return 0; // supervisor gone
         }
         if let Some(d) = doc_json
-            && write_frame(out, DOC, &[&d]).is_err()
+            && write_frame(&mut *w, DOC, &[&d]).is_err()
         {
             return 0;
         }
