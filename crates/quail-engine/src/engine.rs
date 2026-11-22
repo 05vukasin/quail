@@ -1,10 +1,11 @@
 //! [`Engine::process`]: one file through sniffing, extraction and the analyzer plan.
 
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use quail_core::{
-    Analyzer, AnalyzerId, Artifacts, Blob, Ctx, Emitter, Error, Extractor, Fact, FileRecord,
-    Format, Limits, Profile, SCHEMA_VERSION, SourceItem, Status, Timing, Value,
+    Analyzer, AnalyzerId, Artifacts, Blob, Ctx, DeadlineHook, Emitter, Error, Extractor, Fact,
+    FileRecord, Format, Limits, Profile, SCHEMA_VERSION, SourceItem, Status, Timing, Value,
 };
 
 use crate::builder::ExtractorTable;
@@ -37,8 +38,10 @@ pub const SNIFF_ID: AnalyzerId = AnalyzerId::new("engine.sniff", 2);
 ///
 /// # Deadlines are cooperative
 ///
-/// The engine hands every step the file's deadline through [`Emitter::with_deadline`] and
-/// stops starting new steps once it has passed, but it cannot preempt a step that never calls
+/// The engine hands every step the file's deadline through
+/// [`Emitter::with_extensible_deadline`] (a step may extend it up to
+/// [`Limits::timeout_cap`], and later steps keep the extension) and stops starting new steps
+/// once it has passed, but it cannot preempt a step that never calls
 /// [`Emitter::check_deadline`]. A native library that hangs inside one call holds its worker
 /// thread until it returns; only a separate process can be killed, so process isolation (a
 /// watchdog that restarts workers) is the service's job.
@@ -63,6 +66,61 @@ struct FileState {
     /// reason): a consumer missing one of these is a problem, not a silent skip.
     failed: Vec<&'static str>,
     fatal: Option<String>,
+    clock: Clock,
+}
+
+/// The file's deadline as steps extend it.
+struct Clock {
+    /// `None`: a timeout too large to add, so no deadline (and nothing to extend).
+    deadline: Option<Instant>,
+    /// Start plus [`Limits::timeout_cap`].
+    latest: Option<Instant>,
+    hook: Option<DeadlineHook>,
+}
+
+impl Clock {
+    fn new(
+        start: Instant,
+        limits: &Limits,
+        on_budget: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
+    ) -> Self {
+        Self {
+            deadline: start.checked_add(limits.timeout),
+            latest: start.checked_add(limits.timeout_cap()),
+            hook: on_budget.map(|f| -> DeadlineHook {
+                Arc::new(move |d: Instant| f(d.saturating_duration_since(start)))
+            }),
+        }
+    }
+
+    /// An emitter for the next step, with the current deadline.
+    fn emitter(&self, id: AnalyzerId) -> Emitter {
+        match (self.deadline, self.latest) {
+            (Some(d), Some(latest)) => {
+                let e = Emitter::with_extensible_deadline(id, d, latest);
+                match &self.hook {
+                    Some(h) => e.on_extend(Arc::clone(h)),
+                    None => e,
+                }
+            }
+            (Some(d), None) => Emitter::with_deadline(id, d),
+            (None, _) => Emitter::new(id),
+        }
+    }
+
+    /// Takes over a deadline the step extended. Also after a failed step: the extension was
+    /// granted, and a supervisor may already have moved its watchdog with it.
+    fn adopt(&mut self, out: &Emitter) {
+        if let (Some(d), Some(new)) = (self.deadline, out.deadline())
+            && new > d
+        {
+            self.deadline = Some(new);
+        }
+    }
+
+    fn expired(&self) -> bool {
+        self.deadline.is_some_and(|d| Instant::now() >= d)
+    }
 }
 
 impl FileState {
@@ -173,7 +231,7 @@ impl Engine {
 
     /// [`process`](Self::process) for a blob held elsewhere.
     pub fn process_blob(&self, locator: String, blob: &Blob) -> FileRecord {
-        self.process_parts(locator, blob).0
+        self.process_parts(locator, blob, None).0
     }
 
     /// [`process`](Self::process), then `f` with the record and every artifact the steps
@@ -190,15 +248,40 @@ impl Engine {
         f: impl FnOnce(&FileRecord, &Artifacts),
     ) -> FileRecord {
         let SourceItem { locator, blob, .. } = item;
-        let (record, artifacts) = self.process_parts(locator, &blob);
+        let (record, artifacts) = self.process_parts(locator, &blob, None);
+        f(&record, &artifacts);
+        record
+    }
+
+    /// [`process_with`](Self::process_with), calling `on_budget` with the file's whole time
+    /// budget (`Limits::timeout` plus what steps were granted, at most
+    /// [`Limits::timeout_cap`]) each time a step extends the deadline
+    /// ([`Emitter::extend_deadline`]), while that step still runs. A supervisor that kills
+    /// stuck work from outside moves its own limit with it.
+    pub fn process_watched(
+        &self,
+        item: SourceItem,
+        on_budget: Arc<dyn Fn(Duration) + Send + Sync>,
+        f: impl FnOnce(&FileRecord, &Artifacts),
+    ) -> FileRecord {
+        let SourceItem { locator, blob, .. } = item;
+        let (record, artifacts) = self.process_parts(locator, &blob, Some(on_budget));
         f(&record, &artifacts);
         record
     }
 
     /// The record of one file and the artifacts its steps produced.
-    pub(crate) fn process_parts(&self, locator: String, blob: &Blob) -> (FileRecord, Artifacts) {
+    ///
+    /// The deadline starts `timeout` after `start`; a step may move it up to
+    /// [`Limits::timeout_cap`] after `start` ([`Emitter::extend_deadline`]), and the moved
+    /// deadline holds for every later step.
+    pub(crate) fn process_parts(
+        &self,
+        locator: String,
+        blob: &Blob,
+        on_budget: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
+    ) -> (FileRecord, Artifacts) {
         let start = Instant::now();
-        let deadline = start.checked_add(self.limits.timeout);
         let size = blob.len() as u64;
         let cap = self.plan.len() + 2;
         let mut st = FileState {
@@ -210,12 +293,8 @@ impl Engine {
             warnings: Vec::new(),
             failed: Vec::new(),
             fatal: None,
+            clock: Clock::new(start, &self.limits, on_budget),
         };
-        let emitter = |id| match deadline {
-            Some(d) => Emitter::with_deadline(id, d),
-            None => Emitter::new(id),
-        };
-        let expired = || deadline.is_some_and(|d| Instant::now() >= d);
 
         let sniff = contain(self.quiet, || detect(blob.as_bytes())).unwrap_or_else(|e| {
             st.problems.push(format!("{SNIFF_ID}: {e}"));
@@ -246,11 +325,11 @@ impl Engine {
             ));
             st.fail_provides(&["document"]);
         } else if let Some(ext) = self.extractor(sniff.format) {
-            pages = self.extract(&mut st, ext, blob, emitter(ext.id()));
+            pages = self.extract(&mut st, ext, blob);
         }
 
         for (i, a) in self.plan.iter().enumerate() {
-            if expired() {
+            if st.clock.expired() {
                 st.problems.push(format!(
                     "engine: {}; {} analyzer(s) not run",
                     Error::Timeout,
@@ -258,7 +337,7 @@ impl Engine {
                 ));
                 break;
             }
-            self.run_analyzer(&mut st, &**a, blob, sniff.format, &locator, &emitter);
+            self.run_analyzer(&mut st, &**a, blob, sniff.format, &locator);
         }
 
         let status = match st.fatal {
@@ -290,17 +369,13 @@ impl Engine {
     }
 
     /// Runs the extractor; returns the page count when it produced a document.
-    fn extract(
-        &self,
-        st: &mut FileState,
-        ext: &dyn Extractor,
-        blob: &Blob,
-        mut out: Emitter,
-    ) -> Option<u32> {
+    fn extract(&self, st: &mut FileState, ext: &dyn Extractor, blob: &Blob) -> Option<u32> {
         let t = Instant::now();
         let id = ext.id();
+        let mut out = st.clock.emitter(id);
         let r = contain(self.quiet, || ext.extract(blob, &self.limits, &mut out)).and_then(|r| r);
         st.step(id, t);
+        st.clock.adopt(&out);
         // The emitter survives an error: what the extractor said before failing is kept.
         st.problems.extend(
             out.take_problems()
@@ -339,11 +414,10 @@ impl Engine {
         blob: &Blob,
         format: Format,
         locator: &str,
-        emitter: &dyn Fn(AnalyzerId) -> Emitter,
     ) {
         let id = a.id();
         let t = Instant::now();
-        let mut out = emitter(id);
+        let mut out = st.clock.emitter(id);
         let missing = a
             .requires()
             .iter()
@@ -369,6 +443,7 @@ impl Engine {
                 }
             })
         };
+        st.clock.adopt(&out);
         match ran {
             Ok(None) => {
                 let Some(m) = missing else { return };

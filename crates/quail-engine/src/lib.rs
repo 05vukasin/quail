@@ -20,8 +20,11 @@
 //! # Deadlines are cooperative
 //!
 //! Each file gets `now + Limits::timeout` as its deadline, passed to every step through
-//! [`quail_core::Emitter::with_deadline`]. The engine checks it between steps and steps check
-//! it in their loops. Nothing can preempt code that does not check: a native library that
+//! [`quail_core::Emitter::with_extensible_deadline`]. A step that finds more work than the
+//! timeout covers (OCR with pages to read) may move it later, up to
+//! `Limits::timeout_cap()` after the start ([`quail_core::Emitter::extend_deadline`]); the
+//! later steps of the file keep the moved deadline. The engine checks it between steps and
+//! steps check it in their loops. Nothing can preempt code that does not check: a native library that
 //! hangs inside one call keeps its worker thread busy until it returns. Killing a stuck
 //! worker needs process isolation, which is the job of the service around the library.
 
