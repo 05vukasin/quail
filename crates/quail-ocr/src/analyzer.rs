@@ -1,12 +1,14 @@
-//! The `ocr.pages@1` analyzer.
+//! The `ocr.pages@2` analyzer.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use quail_core::{
     Analyzer, AnalyzerId, Ctx, Document, Emitter, Error, Evidence, Image, Limits, Page, PageKind,
     PageRaster, Profile, Raster, Result, RevisedDocument, Value,
 };
 
+use crate::budget::{OcrPermits, OcrResources};
 use crate::cache::{CacheKey, OcrCache};
 use crate::engine::{EngineFactory, OcrHints, OcrPage, ScriptHint};
 use crate::keys;
@@ -26,14 +28,37 @@ pub struct OcrConfig {
     pub retry_below: f32,
     /// Lines with a lower confidence are left out of the text.
     pub min_line_conf: f32,
-    /// Pages OCR'd per file; later ones are skipped with a problem.
+    /// Pages OCR'd per file; later ones are skipped with a problem (record `partial`).
     pub max_pages: u32,
+    /// Reading time allowed per page that needs OCR (up to `max_pages`). A file's OCR stops
+    /// with a problem once `pages × page_time` of reading is spent; time spent waiting for a
+    /// permit ([`OcrPermits`]) is not counted. The file's own deadline
+    /// ([`Emitter::deadline`]) always applies too. `None`: only the file's deadline.
+    pub page_time: Option<Duration>,
     /// Embedded scans above this resolution are shrunk to it before OCR.
     pub max_scan_dpi: f32,
     /// Longest side of any image given to the engine.
     pub max_side: u32,
     /// Scripts to expect.
     pub script: ScriptHint,
+}
+
+impl OcrConfig {
+    /// Default [`page_time`](Self::page_time): 20 s, about twice the measured 5 to 15 s per
+    /// page of one engine on a laptop CPU, so a 300 DPI retry still fits.
+    pub const PAGE_TIME: Duration = Duration::from_secs(20);
+
+    /// Wall time to give a whole file so that its OCR (at most `max_pages` pages at
+    /// `page_time` each) fits after `base` for everything else, with `queue` files ahead of
+    /// it for the OCR permits (in a scan, `ceil(workers / jobs) - 1`). Without a
+    /// `page_time`: `base`.
+    pub fn file_timeout(&self, base: Duration, queue: u32) -> Duration {
+        let Some(t) = self.page_time else {
+            return base;
+        };
+        let ocr = t.saturating_mul(self.max_pages);
+        base.saturating_add(ocr.saturating_mul(queue.saturating_add(1)))
+    }
 }
 
 impl Default for OcrConfig {
@@ -43,7 +68,8 @@ impl Default for OcrConfig {
             retry_dpi: 300.0,
             retry_below: 0.80,
             min_line_conf: 0.5,
-            max_pages: 200,
+            max_pages: 40,
+            page_time: Some(Self::PAGE_TIME),
             max_scan_dpi: 300.0,
             max_side: 4000,
             script: ScriptHint::Auto,
@@ -56,7 +82,7 @@ enum Backend {
     Unavailable(String),
 }
 
-/// OCR of the pages that need it (`ocr.pages@1`, profile `Deep`, requires `document` and
+/// OCR of the pages that need it (`ocr.pages@2`, profile `Deep`, requires `document` and
 /// `raster`, provides [`OcrText`]).
 ///
 /// For each physical page with `needs_ocr`: takes the page's embedded scan when the page is
@@ -66,6 +92,12 @@ enum Backend {
 /// [`OcrConfig::retry_below`], renders again at [`OcrConfig::retry_dpi`] and keeps the better
 /// reading. Boxes are mapped from pixels to page points.
 ///
+/// With [`OcrPermits`] (as built by [`with_resources`](Self::with_resources)), a page is
+/// decoded, rendered and read only while its worker holds a permit, so at most `jobs` pages
+/// are in work in the process however many workers run files. A file's OCR may take
+/// [`OcrConfig::page_time`] per page plus the time it waited for permits, within the file's
+/// deadline; pages past that or past [`OcrConfig::max_pages`] are left out with a problem.
+///
 /// Without a backend (crate built without `paddle`, or no models) it reports the problem
 /// `ocr backend not compiled` (or why the models could not be used), and only for files that
 /// have a page needing OCR.
@@ -73,11 +105,13 @@ pub struct OcrPages {
     backend: Backend,
     cache: Option<Arc<dyn OcrCache>>,
     config: OcrConfig,
+    permits: Option<Arc<OcrPermits>>,
+    resources: Option<OcrResources>,
 }
 
 impl OcrPages {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("ocr.pages", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("ocr.pages", 2);
 
     /// Problem reported when the crate was built without a backend.
     pub const NOT_COMPILED: &'static str = "ocr backend not compiled";
@@ -89,6 +123,8 @@ impl OcrPages {
             backend: Backend::Ready(EnginePool::new(factory, max_idle)),
             cache: None,
             config,
+            permits: None,
+            resources: None,
         }
     }
 
@@ -99,29 +135,72 @@ impl OcrPages {
             backend: Backend::Unavailable(reason.into()),
             cache: None,
             config: OcrConfig::default(),
+            permits: None,
+            resources: None,
         }
+    }
+
+    /// The best backend compiled in, sized for this machine:
+    /// [`with_resources`](Self::with_resources) with [`OcrResources::auto`] for `workers`
+    /// file workers and the default configuration.
+    pub fn with_default_backend(workers: usize) -> Self {
+        Self::with_resources(OcrResources::auto(workers), OcrConfig::default())
     }
 
     /// The best backend compiled in: `paddle` with the models of
     /// [`model_dir`](crate::models::model_dir) when the feature is on and the models are
-    /// there, else [`unavailable`](Self::unavailable) with the reason. `workers` is the number
-    /// of threads that will run files (engines kept idle).
-    pub fn with_default_backend(workers: usize) -> Self {
+    /// there, else [`unavailable`](Self::unavailable) with the reason. At most
+    /// `resources.jobs` pages are read at once (shared [`OcrPermits`]), each by an engine with
+    /// `resources.threads` ONNX Runtime intra-op threads.
+    pub fn with_resources(resources: OcrResources, config: OcrConfig) -> Self {
         #[cfg(feature = "paddle")]
         {
             let Some(dir) = crate::models::model_dir() else {
                 return Self::unavailable("ocr models: no model directory (set QUAIL_OCR_MODELS)");
             };
-            match crate::paddle::PaddleFactory::new(&dir, crate::paddle::PaddleConfig::default()) {
-                Ok(f) => Self::new(Arc::new(f), workers.max(1), OcrConfig::default()),
+            let paddle = crate::paddle::PaddleConfig {
+                intra_threads: resources.threads.max(1),
+                ..crate::paddle::PaddleConfig::default()
+            };
+            match crate::paddle::PaddleFactory::new(&dir, paddle) {
+                Ok(f) => {
+                    let mut a = Self::new(Arc::new(f), resources.jobs.max(1), config)
+                        .with_permits(Arc::new(OcrPermits::new(resources.jobs)));
+                    a.resources = Some(resources);
+                    a
+                }
                 Err(e) => Self::unavailable(format!("ocr models: {e}")),
             }
         }
         #[cfg(not(feature = "paddle"))]
         {
-            let _ = workers;
+            let _ = (resources, config);
             Self::unavailable(Self::NOT_COMPILED)
         }
+    }
+
+    /// Reads at most `permits.total()` pages at once, sharing `permits` with whatever else
+    /// holds them.
+    #[must_use]
+    pub fn with_permits(mut self, permits: Arc<OcrPermits>) -> Self {
+        self.permits = Some(permits);
+        self
+    }
+
+    /// The permits pages are read under, if any.
+    pub fn permits(&self) -> Option<&Arc<OcrPermits>> {
+        self.permits.as_ref()
+    }
+
+    /// Pages at once and threads per engine, when built by
+    /// [`with_resources`](Self::with_resources) with a backend.
+    pub fn resources(&self) -> Option<OcrResources> {
+        self.resources
+    }
+
+    /// The configuration.
+    pub fn config(&self) -> &OcrConfig {
+        &self.config
     }
 
     /// Caches results in `cache` (shared by every file this analyzer sees).
@@ -201,15 +280,41 @@ impl Analyzer for OcrPages {
                 todo.len()
             ));
         }
+        let mut clock = Clock::new(&self.config, todo.len().min(cap), out.deadline());
+        let ticket = self.permits.as_ref().map(|p| p.ticket());
         for page in todo.into_iter().take(cap) {
             if out.check_deadline().is_err() {
                 out.problem(format!("ocr: deadline reached after {} pages", pages.len()));
                 break;
             }
-            match run.page(page, budget, out) {
+            if clock.spent() {
+                out.problem(clock.spent_problem(pages.len()));
+                break;
+            }
+            // Held while the page is decoded, rendered and read.
+            let _permit = match (&self.permits, ticket) {
+                (Some(p), Some(t)) => {
+                    if let Ok((permit, waited)) = p.acquire(t, out.deadline()) {
+                        clock.waited(waited);
+                        Some(permit)
+                    } else {
+                        out.problem(format!(
+                            "ocr: deadline reached waiting for an OCR slot after {} pages",
+                            pages.len()
+                        ));
+                        break;
+                    }
+                }
+                _ => None,
+            };
+            match run.page(page, budget, clock.deadline(), out) {
                 Ok(t) => {
                     budget = budget.saturating_sub(t.text.len());
                     pages.push(t);
+                }
+                Err(Error::Timeout) if clock.spent() && out.check_deadline().is_ok() => {
+                    out.problem(clock.spent_problem(pages.len()));
+                    break;
                 }
                 Err(Error::Timeout) => {
                     out.problem(format!("ocr: deadline reached on page {}", page.index));
@@ -233,6 +338,54 @@ impl Analyzer for OcrPages {
         }
         out.provide(ocr);
         Ok(())
+    }
+}
+
+/// The OCR time budget of one file: `pages × page_time` from the start, moved later by the
+/// time spent waiting for permits, never past the file's deadline.
+struct Clock {
+    /// End of the budget; `None` without a `page_time`.
+    until: Option<Instant>,
+    file: Option<Instant>,
+    allowed: Option<Duration>,
+    pages: usize,
+}
+
+impl Clock {
+    fn new(cfg: &OcrConfig, pages: usize, file: Option<Instant>) -> Self {
+        let allowed = cfg
+            .page_time
+            .map(|t| t.saturating_mul(u32::try_from(pages).unwrap_or(u32::MAX)));
+        Self {
+            until: allowed.and_then(|a| Instant::now().checked_add(a)),
+            file,
+            allowed,
+            pages,
+        }
+    }
+
+    fn waited(&mut self, d: Duration) {
+        self.until = self.until.and_then(|u| u.checked_add(d));
+    }
+
+    /// The earlier of the budget's end and the file's deadline.
+    fn deadline(&self) -> Option<Instant> {
+        match (self.until, self.file) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn spent(&self) -> bool {
+        self.until.is_some_and(|u| Instant::now() >= u)
+    }
+
+    fn spent_problem(&self, read: usize) -> String {
+        let secs = self.allowed.map_or(0, |a| a.as_secs());
+        format!(
+            "ocr: time budget of {secs} s for {} pages spent after {read} pages (page_time)",
+            self.pages
+        )
     }
 }
 
@@ -294,13 +447,21 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
-    fn page(&self, page: &Page, budget: usize, out: &mut Emitter) -> Result<OcrPageText> {
+    fn page(
+        &self,
+        page: &Page,
+        budget: usize,
+        deadline: Option<Instant>,
+        out: &mut Emitter,
+    ) -> Result<OcrPageText> {
         let (img, source, dpi) = self.pixels(page, self.cfg.dpi, out)?;
         let first = self.recognize(&img, dpi)?;
         let mut best = (first, (img.width, img.height), source, dpi);
         let weak = best.0.mean_conf().is_some_and(|c| c < self.cfg.retry_below);
         if weak && dpi < self.cfg.retry_dpi * 0.9 && page.size.is_some() {
-            out.check_deadline()?;
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                return Err(Error::Timeout);
+            }
             match self.render(page, self.cfg.retry_dpi) {
                 Ok((img2, dpi2)) if dpi2 > dpi * 1.1 => {
                     let second = self.recognize(&img2, dpi2)?;

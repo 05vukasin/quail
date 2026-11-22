@@ -82,7 +82,7 @@ pub struct OcrPageText {
 }
 
 /// OCR results of a file: one entry per OCR'd page, in page order. Pages that were not
-/// OCR'd (they have a text layer) are absent. Provided by `ocr.pages@1` as `"ocr_text"`.
+/// OCR'd (they have a text layer) are absent. Provided by `ocr.pages@2` as `"ocr_text"`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OcrText {
     /// Short id of the engine (`name@fingerprint`).

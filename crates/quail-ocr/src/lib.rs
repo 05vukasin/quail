@@ -1,6 +1,6 @@
 //! OCR for pages without a usable text layer. Namespace `ocr.*`.
 //!
-//! One analyzer, [`OcrPages`] (`ocr.pages@1`, profile `Deep`, requires `document` and
+//! One analyzer, [`OcrPages`] (`ocr.pages@2`, profile `Deep`, requires `document` and
 //! `raster`, provides [`OcrText`] as `"ocr_text"`). It reads only core types: the pages of the
 //! [`Document`](quail_core::Document) that have `needs_ocr`, and their pixels from the
 //! [`Raster`](quail_core::Raster) artifact (the page's embedded scan when
@@ -41,6 +41,7 @@
 //! | [`keys::PAGE`] | Record | one per OCR'd page: `page`, `script`, `mean_conf`, `chars`, `lines`, `dpi`, `source` (`embedded_scan`/`render`), `rotation`; `conf` = the page's mean confidence |
 
 pub mod analyzer;
+pub mod budget;
 pub mod cache;
 pub mod engine;
 pub mod models;
@@ -53,6 +54,7 @@ pub mod text;
 pub mod paddle;
 
 pub use analyzer::{OcrConfig, OcrPages, pages_needing_ocr};
+pub use budget::{OcrPermit, OcrPermits, OcrResources, available_memory};
 pub use cache::{CacheKey, MemoryCache, OcrCache};
 pub use engine::{
     EngineFactory, EngineId, OcrEngine, OcrHints, OcrLine, OcrPage, OcrWord, PxBox, ScriptHint,
