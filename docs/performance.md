@@ -90,7 +90,7 @@ process.
 
 ## OCR
 
-`quail --features ocr --profile deep -j 2`, dev build (the OCR inference is native either way),
+`quail --features ocr --profile deep -j 2 --timeout 15m`, dev build (the OCR inference is native either way),
 on the RealKIE FCC dev files, the same shared laptop. Measured when OCR was wired into the CLI,
 with `item.lines@4`:
 
@@ -104,12 +104,44 @@ with `item.lines@4`:
 | `items` F1 on price and page only | 52.2 | 64.0 |
 | documents with gold rows and no prediction | 49.3 % | 15.7 % |
 
-- About 0.6 to 0.8 GB per OCR worker (ONNX Runtime sessions and page images at 200 to 300
-  DPI). Keep `-j` at 3 or below on a 4 GB machine.
-- 10 to 15 s per page per worker: the default 2-minute `--timeout` covers about 10 scanned
-  pages. These runs used `--timeout 15m`; no file failed or went partial.
 - OCR is two orders of magnitude slower than everything else together, which is why it runs
   only in profile `deep` and only on pages that need it.
+
+### Automatic budgets (`ocr.pages@2`)
+
+The same dev build and laptop (16 logical CPUs, 14 GiB, shared with other work: load average
+4 to 15 during the runs, so times are indicative). The earlier runs needed `-j 2 --timeout 15m`
+by hand; with `ocr.pages@2` the command is just `quail scan --profile deep` (default `-j` = 15).
+quail printed `2 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page;
+timeout 120m per file`. Peak RSS is summed over the process tree, sampled every 0.5 s.
+
+| | RealKIE FCC dev, by hand | RealKIE FCC dev, defaults | Serbian dev, by hand | Serbian dev, defaults |
+|---|---:|---:|---:|---:|
+| files / pages OCR'd | 296 / 701 | 296 / 701 | 91 / 58 | 91 / 58 |
+| wall time | 3,618 s | **2,311 s** | 481 s | **388 s** |
+| files/s | 0.082 | 0.128 | 0.189 | 0.235 |
+| wall per OCR'd page | 5.1 s | 3.3 s | 8.3 s | 6.7 s |
+| peak RSS | 1,835 MB | 2,449 MB | 1,287 MB | 1,428 MB |
+| partial / timeouts | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+
+- OCR output is the same: `ocr.pages` and `ocr.chars` are identical on all 387 files, and so
+  are the OCR-fed Serbian tasks (`tax_id` 99.0, `registration_number` 97.0, `bank_account`
+  94.3 F1). `items` on RealKIE moved from 49.7 to 60.7 F1 and Serbian `party` from 32.1 to
+  29.5 between the two runs, from `item.lines@5` and `party.candidates@4` on master, not from
+  OCR.
+- **Threads.** One 4-page FCC scan (`quail inspect --profile deep`, one job): 15.8 s per page
+  with 1 intra-op thread, 7.5 s with 4 (the default for one job here), 6.3 s with 8. The output
+  is identical across thread counts. Text lines are recognized one at a time
+  (`PaddleConfig::region_batch` 1): batches are padded to their widest line.
+- **Memory.** A job peaks at about 1 GB with 4 threads (3 jobs reached 3.3 to 3.5 GB on the
+  same split, 2 jobs 2.4 GB), so quail plans 1 GiB per job within 40 % of the available and
+  20 % of the total memory: 2 jobs on this 14 GiB laptop, 1 on a 4 GB machine.
+- **Time.** 5 to 15 s per page on an idle CPU, 20 to 45 s on a loaded one. At 20 s per page 3
+  of 91 Serbian files went partial under load; at 45 s none did. OCR keeps
+  `max(10 s, 15 %)` of the file timeout for the analyzers after it, so a file that runs out of
+  time is `partial` with all its text facts for the pages read (before, the 4-page scan above
+  with the 2-minute default timeout on a loaded machine got OCR text and then
+  `engine: timeout; 17 analyzer(s) not run`).
 
 ## LLM summary
 

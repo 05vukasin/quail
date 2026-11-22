@@ -11,7 +11,8 @@ use quail_core::{Limits, Source};
 use quail_engine::{Engine, RunOptions};
 use quail_io::{FsSource, JsonlSink, ListSource, ReadOptions};
 
-use crate::cli::ScanArgs;
+use crate::cli::{LimitArgs, OcrArgs, ScanArgs};
+use crate::registry::OcrSettings;
 use quail_worker::IsolatedRunner;
 
 use crate::dump::DocumentDump;
@@ -31,9 +32,9 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     // a Ctrl-C during startup must cancel cleanly instead of killing the process.
     let cancel = Arc::new(AtomicBool::new(false));
     let interrupted = install_ctrlc(&cancel);
-    let limits = args.limits.limits();
+    let plan = scan_plan(args);
     // Oversized files are refused by the source, before they are read.
-    let read = ReadOptions::new().max_file_bytes(Some(limits.max_bytes));
+    let read = ReadOptions::new().max_file_bytes(Some(plan.limits.max_bytes));
 
     let dump = match &args.dump_documents {
         Some(p) => Some(
@@ -41,7 +42,7 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
         ),
         None => None,
     };
-    let mut mode = mode(args, limits, read)?;
+    let mut mode = mode(args, &plan, read)?;
 
     let sink = sink(args)?;
     let broken_pipe = Arc::new(AtomicBool::new(false));
@@ -54,8 +55,8 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     );
 
     let mut opts = RunOptions::default();
-    if let Some(t) = args.threads {
-        opts.threads = t.max(1);
+    if opts.threads != plan.threads {
+        opts.threads = plan.threads;
         opts.max_in_flight = opts.threads * 2;
     }
     if let Some(n) = args.max_in_flight {
@@ -139,6 +140,25 @@ pub fn run(args: &ScanArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// The [`Plan`] of `scan`, with its note on stderr unless `--quiet`.
+fn scan_plan(args: &ScanArgs) -> Plan {
+    #[cfg(feature = "ocr")]
+    let ocr_args = &args.ocr;
+    #[cfg(not(feature = "ocr"))]
+    let ocr_args = &OcrArgs::default();
+    let plan = plan(
+        args.profile.into(),
+        &args.limits,
+        ocr_args,
+        args.threads,
+        args.isolate,
+    );
+    if !args.quiet {
+        plan.note();
+    }
+    plan
+}
+
 /// Under `--profile deep`, says once why pages needing OCR will not be read.
 pub(crate) fn warn_without_ocr(profile: quail_core::Profile) {
     if profile == quail_core::Profile::Deep
@@ -146,6 +166,88 @@ pub(crate) fn warn_without_ocr(profile: quail_core::Profile) {
     {
         eprintln!("quail: warning: no OCR: {why}");
     }
+}
+
+/// Limits, OCR settings and workers of a run.
+pub(crate) struct Plan {
+    /// Per-file limits, with the timeout raised to fit the OCR budget.
+    pub limits: Limits,
+    /// OCR settings of each engine (`None`: no OCR in this run).
+    pub ocr: Option<OcrSettings>,
+    /// Worker threads (or worker processes with `--isolate`).
+    pub threads: usize,
+}
+
+impl Plan {
+    /// One line on stderr saying how OCR will run, when it will.
+    pub fn note(&self) {
+        if let Some(s) = &self.ocr {
+            let budget = match s.page_time {
+                Some(t) => format!("{} per page", human(t)),
+                None => "no per-page budget".to_owned(),
+            };
+            eprintln!(
+                "quail: ocr: {} page(s) at a time, {} thread(s) each; up to {} pages per file, {budget}; timeout {} per file",
+                s.jobs,
+                s.threads,
+                s.max_pages,
+                human(self.limits.timeout)
+            );
+        }
+    }
+}
+
+/// `90s`, `2m`, `68m40s`, `1500ms`.
+fn human(d: Duration) -> String {
+    let s = d.as_secs();
+    if d.subsec_millis() != 0 || s == 0 {
+        return format!("{}ms", d.as_millis());
+    }
+    match (s / 60, s % 60) {
+        (0, s) => format!("{s}s"),
+        (m, 0) => format!("{m}m"),
+        (m, s) => format!("{m}m{s}s"),
+    }
+}
+
+/// The run's [`Plan`]. Under `--profile deep` with OCR ready: OCR budgets for the workers
+/// ([`OcrSettings::resolve`]); unless `--timeout` was given, a per-file timeout that fits a
+/// file's whole OCR budget even behind the other workers; with `--isolate`, where every
+/// worker process loads its own engine, one OCR job per worker and `-j` defaulting to the
+/// OCR jobs, so memory stays bounded either way.
+pub(crate) fn plan(
+    profile: quail_core::Profile,
+    limit_args: &LimitArgs,
+    ocr_args: &OcrArgs,
+    threads: Option<usize>,
+    isolate: bool,
+) -> Plan {
+    #[cfg_attr(not(feature = "ocr"), allow(unused_mut))]
+    let mut plan = Plan {
+        limits: limit_args.limits(),
+        ocr: None,
+        threads: threads.map_or_else(|| RunOptions::default().threads, |t| t.max(1)),
+    };
+    #[cfg(feature = "ocr")]
+    if profile == quail_core::Profile::Deep && registry::ocr_unavailable().is_none() {
+        let explicit_timeout = limit_args.timeout.is_some();
+        let mut s = OcrSettings::resolve(ocr_args, plan.threads, explicit_timeout);
+        let mut workers = plan.threads;
+        if isolate {
+            if threads.is_none() {
+                plan.threads = s.jobs;
+            }
+            s.jobs = 1;
+            workers = 1;
+        }
+        if !explicit_timeout {
+            plan.limits.timeout = s.file_timeout(plan.limits.timeout, workers);
+        }
+        plan.ocr = Some(s);
+    }
+    #[cfg(not(feature = "ocr"))]
+    let _ = (profile, ocr_args, isolate);
+    plan
 }
 
 /// How the files are processed.
@@ -158,10 +260,11 @@ enum Mode {
 
 /// In process: one engine shared by the threads. Isolated: each worker builds its own and
 /// the supervisor only walks paths (no models are loaded here).
-fn mode(args: &ScanArgs, limits: Limits, read: ReadOptions) -> Result<Mode, String> {
+fn mode(args: &ScanArgs, plan: &Plan, read: ReadOptions) -> Result<Mode, String> {
     let spec = WorkerSpec {
         profile: args.profile.into(),
-        limits,
+        limits: plan.limits.clone(),
+        ocr: plan.ocr.clone(),
     };
     warn_without_ocr(spec.profile);
     if args.isolate {
@@ -171,7 +274,7 @@ fn mode(args: &ScanArgs, limits: Limits, read: ReadOptions) -> Result<Mode, Stri
         let jobs = isolate::jobs(paths, cap);
         return Ok(Mode::Isolated(Box::new((jobs, IsolatedRunner::new(opts)))));
     }
-    let engine = registry::builder(spec.profile, spec.limits)
+    let engine = registry::builder_with(spec.profile, spec.limits, spec.ocr.as_ref())
         .build()
         .map_err(|e| e.to_string())?;
     Ok(Mode::InProcess(source(args, read)?, Box::new(engine)))

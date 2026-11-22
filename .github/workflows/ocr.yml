@@ -1,0 +1,43 @@
+# The `ocr` build feature: ONNX Runtime (prebuilt, downloaded by the `ort` build script) and the
+# PP-OCR models (about 45 MiB, fetched once and cached by the hash of the model manifest).
+# Too heavy for every pull request, so it runs on master and on pull requests that touch the
+# OCR crate, the CLI that wires it, or this file. The default jobs in ci.yml are unchanged.
+name: ocr
+on:
+  push: { branches: [master] }
+  pull_request:
+    paths:
+      - "crates/quail-ocr/**"
+      - "crates/quail-cli/**"
+      - "Cargo.lock"
+      - ".github/workflows/ocr.yml"
+jobs:
+  ocr:
+    strategy:
+      fail-fast: false
+      matrix:
+        # ONNX Runtime has prebuilt binaries for both (Linux x64, macOS arm64).
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QUAIL_OCR_MODELS: ${{ github.workspace }}/.ocr-models
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+        with: { key: ocr }
+      - name: Cache OCR models
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: .ocr-models
+          key: ocr-models-${{ hashFiles('crates/quail-ocr/src/models.rs') }}
+      - name: Fetch OCR models
+        if: steps.models.outputs.cache-hit != 'true'
+        run: cargo run -p quail-ocr --features fetch --example fetch_models -- "$QUAIL_OCR_MODELS"
+      - run: cargo clippy -p quail-ocr -p quail-cli --all-targets --features quail-cli/ocr -- -D warnings
+      - run: cargo test -p quail-ocr --features paddle,fetch
+      - run: cargo test -p quail-cli --features ocr
+      - name: Models check
+        run: cargo run -p quail-cli --features ocr -- models list

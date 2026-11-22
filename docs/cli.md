@@ -82,7 +82,32 @@ quail scan /data --dedup -o records.jsonl
 | `--max-bytes SIZE` | `512M` | larger files are not read; they get a `failed` record naming the limit |
 | `--max-decompressed SIZE` | `256M` | bytes a document may inflate to while it is decoded (ZIP entries, PDF streams); past it the extractor stops with a partial document |
 | `--max-pages N` | 2000 | pages extracted per document |
-| `--timeout DURATION` | `2m` | wall time per file |
+| `--timeout DURATION` | `2m` | wall time per file. Under `--profile deep` with OCR, raised to fit the OCR budget (below) unless given |
+
+### OCR (build feature `ocr`, `--profile deep`)
+
+Every default is derived from the machine and the other options, so a deep scan needs no
+`-j` or `--timeout` tuning. `scan` and `inspect` print the result on stderr (not with `-q`):
+`quail: ocr: 2 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page;
+timeout 120m per file`.
+
+| option | default | effect |
+|---|---|---|
+| `--ocr-jobs N` | `min(-j, min(40 % of available, 20 % of total memory) / 1 GiB, 4)`, at least 1 (2 off Linux) | pages OCR'd at the same time in the process, whatever `-j`; each takes about 0.6 to 1 GB. Other workers keep processing files that need no OCR, or wait for a free job (oldest file first) |
+| `--ocr-threads N` | `CPUs / --ocr-jobs`, 1 to 4 | ONNX Runtime intra-op threads per OCR engine, so that jobs x threads fits the CPUs |
+| `--ocr-max-pages N` | 40 | pages OCR'd per file; later pages are left out with a problem (`partial`) |
+| `--ocr-page-time DURATION` | `45s`, none with `--timeout` | reading time per page needing OCR; a file's OCR stops with a problem (`partial`) once pages x this is spent. Waiting for a free job does not count |
+
+Without `--timeout`, the per-file timeout becomes `2m + max-pages x page-time x
+ceil(-j / ocr-jobs)`, at most 2 hours: enough for a file's whole OCR budget even with every other worker's file
+ahead of it. With `--timeout`, that value is the file's wall time and there is no per-page budget
+unless `--ocr-page-time` is also given. With `--isolate`, each worker process loads its own engine:
+each reads one page at a time and `-j` defaults to the `--ocr-jobs` value.
+
+Whatever the timeout, OCR keeps the last `max(10 s, 15 %)` of it (at most half) for the steps
+after it and does not start a page that would end in that reserve, so the text analyzers always
+run on the pages read so far; the record is then `partial` with the problem
+`ocr: stopped after k of n pages to keep ... for the steps after it`.
 
 ### Isolation
 
@@ -186,8 +211,8 @@ quail models fetch --dir DIR     # another directory
 Without `--dir` the directory is `$QUAIL_OCR_MODELS`, else the user cache directory
 (`quail/ocr-models`). Under `--profile deep`, `scan` and `inspect` print one warning when OCR
 cannot run (no `ocr` feature, no model directory, missing models); each file with a page that
-needs OCR then gets a problem and is `partial`. See [quickstart.md](quickstart.md#7-ocr) for
-memory and timeout advice.
+needs OCR then gets a problem and is `partial`. See [OCR options](#ocr-build-feature-ocr---profile-deep) and [quickstart.md](quickstart.md#7-ocr) for
+memory and time budgets.
 
 ## Build features
 
