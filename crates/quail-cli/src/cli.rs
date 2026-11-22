@@ -127,7 +127,7 @@ impl LimitArgs {
 #[derive(Clone, Debug, Default, Args)]
 pub struct OcrArgs {
     /// Pages OCR'd at the same time, whatever `-j` (default: about 1 GB each within 40 % of
-    /// the available memory, at most 4 and at most `-j`).
+    /// the available memory and 20 % of the total, at most 4 and at most `-j`).
     #[arg(long, value_name = "N")]
     pub ocr_jobs: Option<usize>,
     /// ONNX Runtime threads per OCR engine (default: CPUs / --ocr-jobs, at most 4).

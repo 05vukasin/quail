@@ -93,7 +93,7 @@ timeout 120m per file`.
 
 | option | default | effect |
 |---|---|---|
-| `--ocr-jobs N` | `min(-j, 40 % of available memory / 1 GiB, 4)`, at least 1 (2 off Linux) | pages OCR'd at the same time in the process, whatever `-j`; each takes about 0.6 to 1 GB. Other workers keep processing files that need no OCR, or wait for a free job (oldest file first) |
+| `--ocr-jobs N` | `min(-j, min(40 % of available, 20 % of total memory) / 1 GiB, 4)`, at least 1 (2 off Linux) | pages OCR'd at the same time in the process, whatever `-j`; each takes about 0.6 to 1 GB. Other workers keep processing files that need no OCR, or wait for a free job (oldest file first) |
 | `--ocr-threads N` | `CPUs / --ocr-jobs`, 1 to 4 | ONNX Runtime intra-op threads per OCR engine, so that jobs x threads fits the CPUs |
 | `--ocr-max-pages N` | 40 | pages OCR'd per file; later pages are left out with a problem (`partial`) |
 | `--ocr-page-time DURATION` | `45s`, none with `--timeout` | reading time per page needing OCR; a file's OCR stops with a problem (`partial`) once pages x this is spent. Waiting for a free job does not count |

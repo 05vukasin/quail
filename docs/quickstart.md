@@ -195,7 +195,8 @@ steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 
 
   - **Memory**: each page being read takes about 0.6 to 1 GB (ONNX Runtime sessions and the
     page image). At most `--ocr-jobs` pages are read at once, whatever `-j`: by default as many
-    as fit in 40 % of the available memory at 1 GiB each, at most 4. The other workers keep
+    as fit at 1 GiB each in 40 % of the available memory and 20 % of the total, at most 4. The
+    other workers keep
     processing files that need no OCR, or wait for a free OCR job.
   - **CPU**: each OCR engine gets `--ocr-threads` ONNX Runtime threads, by default
     `CPUs / --ocr-jobs` (at most 4).

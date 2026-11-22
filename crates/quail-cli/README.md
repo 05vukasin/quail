@@ -155,7 +155,7 @@ quail scan --profile deep contracts/ -o records.jsonl
   and read the revised document.
 - Budgets are derived, not hand-picked (`registry::OcrSettings::resolve`, `scan::plan`):
   - `--ocr-jobs` pages are read at once in the process whatever `-j` (default: 1 GiB each
-    within 40 % of the available memory, at most 4 and at most `-j`);
+    within 40 % of the available and 20 % of the total memory, at most 4 and at most `-j`);
   - `--ocr-threads` ONNX Runtime threads per engine (default `CPUs / jobs`, at most 4);
   - per file at most `--ocr-max-pages` (40) pages and `--ocr-page-time` (45 s) of reading per
     page; past either the record is `partial`. The OCR text counts against `max_text_bytes`.
