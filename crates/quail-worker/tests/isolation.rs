@@ -125,7 +125,10 @@ fn test_engine() -> Engine {
     EngineBuilder::new()
         .quiet_panics(true)
         .limits(Limits {
-            timeout: Duration::from_secs(1),
+            // Generous: only `!HANG` and `!SPIN` files may ever run over it, also on a loaded
+            // machine. Small files only: `path_mode_applies_the_source_cap` reads 1 MiB + 1.
+            timeout: Duration::from_secs(2),
+            max_bytes: 1 << 20,
             ..Limits::default()
         })
         .extractor(Box::new(TextExtract))
@@ -144,7 +147,7 @@ fn isolation() -> IsolationOptions {
             stderr: StderrMode::Discard,
             ..WorkerConfig::default()
         },
-        grace: Duration::from_millis(500),
+        grace: Duration::from_secs(2),
         ..IsolationOptions::default()
     }
 }
@@ -341,8 +344,9 @@ fn failure_matrix() {
     // Backpressure: never more than max_in_flight files between source and sink (+1 being
     // pulled).
     assert!(max_gap.load(Ordering::SeqCst) <= 8 + 1, "gap {max_gap:?}");
-    // One hang costs ~2.5 s; crashes cost a respawn each.
-    assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
+    // One hang costs ~4 s (timeout and grace); crashes cost a respawn each. The bound only
+    // catches a run that waits on every file.
+    assert!(elapsed < Duration::from_secs(90), "{elapsed:?}");
     // Dead seats are refilled lazily; the pool is reusable after all that.
     runner.warm_up(4).unwrap();
     assert_eq!(runner.pids().len(), 4);
@@ -487,6 +491,26 @@ fn path_mode_reads_in_the_worker() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+fn path_mode_applies_the_source_cap() {
+    // What an in-process scan does (`quail-io` with `max_file_bytes = max_bytes`): a file over
+    // the engine's `max_bytes` is refused, not read whole into the worker.
+    let dir = tmp_dir("cap");
+    let big = dir.join("big.txt");
+    std::fs::write(&big, vec![b'x'; (1 << 20) + 1]).unwrap();
+    let mut runner = IsolatedRunner::new(isolation());
+    let (rec, _) = runner.process(&Job::path(&big), false);
+    let e = error_of(&rec);
+    assert!(
+        e.contains("1048577 bytes exceeds the source cap of 1048576 bytes"),
+        "{e}"
+    );
+    let at_cap = dir.join("at_cap.txt");
+    std::fs::write(&at_cap, vec![b'x'; 1 << 20]).unwrap();
+    let (rec, _) = runner.process(&Job::path(&at_cap), false);
+    assert!(!matches!(rec.status, Status::Failed { .. }), "{rec:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn documents_reach_the_artifacts_hook() {
     let seen = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
     let s = Arc::clone(&seen);
@@ -561,7 +585,8 @@ fn cpu_limit_kills_a_spinning_worker() {
     let (rec, _) = runner.process(&Job::from(item("spin", "!SPIN")), false);
     let e = error_of(&rec);
     assert!(e.contains("CPU time limit"), "{e}");
-    assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+    // 1 s of CPU, far below the 30 s kill: a slow machine stays well inside.
+    assert!(t.elapsed() < Duration::from_secs(25), "{:?}", t.elapsed());
     // The limit is per file: a second file in the fresh worker is fine.
     let (rec, _) = runner.process(&Job::from(item("ok", "!SLEEP 10")), false);
     assert_eq!(rec.status, Status::Ok);
@@ -570,7 +595,7 @@ fn cpu_limit_kills_a_spinning_worker() {
 fn single_worker_crash_and_respawn() {
     let cfg = isolation().worker;
     let mut w = WorkerProcess::spawn(&cfg).unwrap();
-    assert_eq!(w.engine_timeout(), Duration::from_secs(1));
+    assert_eq!(w.engine_timeout(), Duration::from_secs(2));
     let ok = w
         .process(&Job::from(item("a", "hi")), false, Duration::from_secs(5))
         .unwrap();
@@ -638,6 +663,10 @@ const TESTS: &[Test] = &[
     ("ordered_output_with_crashes", ordered_output_with_crashes),
     ("retry_recovers_a_flaky_file", retry_recovers_a_flaky_file),
     ("cancel_stops_pulling", cancel_stops_pulling),
+    (
+        "path_mode_applies_the_source_cap",
+        path_mode_applies_the_source_cap,
+    ),
     (
         "path_mode_reads_in_the_worker",
         path_mode_reads_in_the_worker,

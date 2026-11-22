@@ -118,7 +118,9 @@ fn serve(engine: &Engine, input: &mut impl Read, out: &mut impl Write, cpu: Opti
                 Ok(_) => return fatal(out, "expected data frame"),
                 Err(e) => return fatal(out, &format!("reading data: {e}")),
             },
-            Some(p) => std::fs::read(frame::path_from_bytes(p)).map(Blob::from),
+            Some(p) => {
+                read_capped(&frame::path_from_bytes(p), engine.limits().max_bytes).map(Blob::from)
+            }
         };
         if let Some(secs) = cpu {
             sys::arm_cpu_limit(secs);
@@ -162,6 +164,31 @@ fn serve(engine: &Engine, input: &mut impl Read, out: &mut impl Write, cpu: Opti
 }
 
 /// The record of a file the child could not read (path mode).
+/// Reads a file as `quail-io` does with `max_file_bytes = cap` (what `quail scan` sets from
+/// `max_bytes`): a file over `cap` is refused, and one that grows while being read stops at
+/// `cap + 1` bytes, so memory stays bounded and the record matches an in-process run.
+fn read_capped(path: &std::path::Path, cap: u64) -> io::Result<Vec<u8>> {
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
+    if len > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!("{len} bytes exceeds the source cap of {cap} bytes"),
+        ));
+    }
+    // The length is a hint only: never pre-allocate more than the cap or 1 GiB.
+    let hint = usize::try_from(len.min(cap).min(1 << 30)).unwrap_or(0);
+    let mut buf = Vec::with_capacity(hint);
+    file.take(cap.saturating_add(1)).read_to_end(&mut buf)?;
+    if buf.len() as u64 > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!("grew past the source cap of {cap} bytes while being read"),
+        ));
+    }
+    Ok(buf)
+}
+
 fn read_failed(locator: String, e: &io::Error) -> FileRecord {
     FileRecord {
         schema: SCHEMA_VERSION,

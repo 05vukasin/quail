@@ -34,7 +34,10 @@ fn main() {
   `on_artifacts` gets the `document` artifact, sent back from the worker. `Err` means only
   that the first workers could not start. Use `warm_up(n)` to find that out early.
 - `run_jobs(&mut dyn JobSource, ...)` with `PathJobs`: the worker reads the file itself, so
-  file bytes never pass through the supervisor or the pipe.
+  file bytes never pass through the supervisor or the pipe. It reads as `quail-io` does with
+  `max_file_bytes = max_bytes` (what `quail scan` uses in process): a file over the engine's
+  `max_bytes` is refused (`… exceeds the source cap …`), and one that grows while being read
+  stops at `max_bytes + 1` bytes (`grew past the source cap …`).
 - `IsolatedRunner::process(&job, want_document)` handles one file, with the same retry
   handling. `WorkerProcess` is a single child, for callers that do their own scheduling.
 
