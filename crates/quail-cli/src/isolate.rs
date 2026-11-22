@@ -187,16 +187,51 @@ fn unix_seconds(t: SystemTime) -> Option<i64> {
     }
 }
 
-/// Test-only crash injection, compiled with the `test-hooks` feature: a worker whose
-/// `QUAIL_TEST_CRASH_ON` environment variable is set aborts on every file whose locator
-/// contains it, standing in for a parser bug that kills the process.
+/// Test-only hooks, compiled with the `test-hooks` feature:
+///
+/// - a worker whose `QUAIL_TEST_CRASH_ON` environment variable is set aborts on every file
+///   whose locator contains it, standing in for a parser bug that kills the process;
+/// - with `QUAIL_TEST_STALL` set (worker or in process), a last step runs until the file's
+///   deadline, so a test can read the file's effective timeout from its timings.
 #[cfg(feature = "test-hooks")]
-mod test_hooks {
+pub(crate) mod test_hooks {
+    use std::time::Duration;
+
     use quail_core::{Analyzer, AnalyzerId, Ctx, Emitter, Result};
     use quail_engine::EngineBuilder;
 
     /// The environment variable naming the locator substring to crash on.
     pub const ENV: &str = "QUAIL_TEST_CRASH_ON";
+    /// Set (not empty): add [`Stall`].
+    pub const STALL_ENV: &str = "QUAIL_TEST_STALL";
+
+    /// A finalizer that waits for the file's deadline, then times out.
+    struct Stall;
+
+    impl Analyzer for Stall {
+        fn id(&self) -> AnalyzerId {
+            AnalyzerId::new("test.stall", 1)
+        }
+
+        fn finalizer(&self) -> bool {
+            true
+        }
+
+        fn run(&self, _: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
+            loop {
+                out.check_deadline()?;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    /// Adds the stall step when its variable is set.
+    pub fn install_stall(b: EngineBuilder) -> EngineBuilder {
+        match std::env::var(STALL_ENV) {
+            Ok(s) if !s.is_empty() => b.analyzer(Box::new(Stall)),
+            _ => b,
+        }
+    }
 
     struct CrashTrap(String);
 
@@ -213,8 +248,9 @@ mod test_hooks {
         }
     }
 
-    /// Adds the trap when the variable is set and not empty.
+    /// Adds the trap when the variable is set and not empty (and the stall step when its is).
     pub fn install(b: EngineBuilder) -> EngineBuilder {
+        let b = install_stall(b);
         match std::env::var(ENV) {
             Ok(s) if !s.is_empty() => b.analyzer(Box::new(CrashTrap(s))),
             _ => b,

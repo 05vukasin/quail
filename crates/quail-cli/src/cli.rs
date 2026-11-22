@@ -96,8 +96,9 @@ pub struct LimitArgs {
     /// Pages extracted per document (default 2000).
     #[arg(long, value_name = "N")]
     pub max_pages: Option<u32>,
-    /// Wall time per file (e.g. `30s`, `500ms`, `2m`; a bare number is seconds; default 2m,
-    /// raised under `--profile deep` with OCR to fit the OCR budget).
+    /// Wall time per file (e.g. `30s`, `500ms`, `2m`; a bare number is seconds; default 2m).
+    /// Under `--profile deep` with OCR, a file with pages to OCR is extended by what its pages
+    /// need, up to the whole OCR budget.
     #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
     pub timeout: Option<Duration>,
 }
@@ -138,7 +139,7 @@ pub struct OcrArgs {
     pub ocr_max_pages: Option<u32>,
     /// Reading time allowed per page needing OCR (default 45s, or none with `--timeout`). A
     /// file's OCR stops, `partial`, once pages x this is spent; waiting for a free OCR job
-    /// does not count.
+    /// does not count. The file's timeout is extended for it.
     #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
     pub ocr_page_time: Option<Duration>,
 }
