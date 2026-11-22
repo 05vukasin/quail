@@ -18,11 +18,16 @@ const MAX_ITEMS: usize = 8;
 
 /// Runs the command; returns what to print.
 pub fn run(args: &InspectArgs) -> Result<(String, ExitCode), String> {
-    let limits = args.limits.limits();
-    let read = ReadOptions::new().max_file_bytes(Some(limits.max_bytes));
+    #[cfg(feature = "ocr")]
+    let ocr_args = &args.ocr;
+    #[cfg(not(feature = "ocr"))]
+    let ocr_args = &crate::cli::OcrArgs::default();
+    // One file: one OCR job, with all the threads it can use.
+    let plan = crate::scan::plan(args.profile.into(), &args.limits, ocr_args, Some(1), false);
+    let read = ReadOptions::new().max_file_bytes(Some(plan.limits.max_bytes));
     let item = read_file(&args.file, &read).map_err(|e| e.to_string())?;
     crate::scan::warn_without_ocr(args.profile.into());
-    let engine = registry::builder(args.profile.into(), limits)
+    let engine = registry::builder_with(args.profile.into(), plan.limits, plan.ocr.as_ref())
         .build()
         .map_err(|e| e.to_string())?;
     let mut doc = None;

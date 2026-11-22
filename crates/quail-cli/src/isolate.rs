@@ -33,6 +33,9 @@ pub struct WorkerSpec {
     pub profile: Profile,
     /// Per-file limits.
     pub limits: Limits,
+    /// OCR settings of each worker (`None`: its defaults).
+    #[serde(default)]
+    pub ocr: Option<registry::OcrSettings>,
 }
 
 impl WorkerSpec {
@@ -64,7 +67,7 @@ pub fn maybe_serve() {
 /// message on stderr; the supervisor reports it as a startup failure.
 fn worker_engine() -> Engine {
     let spec = WorkerSpec::from_args(std::env::args_os()).unwrap_or_else(|e| die(&e));
-    let b = registry::builder(spec.profile, spec.limits);
+    let b = registry::builder_with(spec.profile, spec.limits, spec.ocr.as_ref());
     #[cfg(feature = "test-hooks")]
     let b = test_hooks::install(b);
     b.build().unwrap_or_else(|e| die(&e.to_string()))
@@ -231,6 +234,12 @@ mod tests {
                 max_pages: 7,
                 ..Limits::default()
             },
+            ocr: Some(registry::OcrSettings {
+                jobs: 1,
+                threads: 3,
+                max_pages: 9,
+                page_time: Some(std::time::Duration::from_millis(1500)),
+            }),
         };
         let mut argv = vec![OsString::from("quail"), OsString::from(WORKER_ARG)];
         argv.extend(spec.args());

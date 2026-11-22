@@ -96,7 +96,8 @@ pub struct LimitArgs {
     /// Pages extracted per document (default 2000).
     #[arg(long, value_name = "N")]
     pub max_pages: Option<u32>,
-    /// Wall time per file (e.g. `30s`, `500ms`, `2m`; a bare number is seconds; default 2m).
+    /// Wall time per file (e.g. `30s`, `500ms`, `2m`; a bare number is seconds; default 2m,
+    /// raised under `--profile deep` with OCR to fit the OCR budget).
     #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
     pub timeout: Option<Duration>,
 }
@@ -119,6 +120,27 @@ impl LimitArgs {
         }
         l
     }
+}
+
+/// OCR budgets under `--profile deep` (build feature `ocr`). Every default is derived from
+/// the machine and the other options; these override them.
+#[derive(Clone, Debug, Default, Args)]
+pub struct OcrArgs {
+    /// Pages OCR'd at the same time, whatever `-j` (default: about 0.8 GB each within 40 % of
+    /// the available memory, at most 4 and at most `-j`).
+    #[arg(long, value_name = "N")]
+    pub ocr_jobs: Option<usize>,
+    /// ONNX Runtime threads per OCR engine (default: CPUs / --ocr-jobs, at most 4).
+    #[arg(long, value_name = "N")]
+    pub ocr_threads: Option<usize>,
+    /// Pages OCR'd per file; later pages are left out and the record is `partial` (default 40).
+    #[arg(long, value_name = "N")]
+    pub ocr_max_pages: Option<u32>,
+    /// Reading time allowed per page needing OCR (default 20s, or none with `--timeout`). A
+    /// file's OCR stops, `partial`, once pages x this is spent; waiting for a free OCR job
+    /// does not count.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+    pub ocr_page_time: Option<Duration>,
 }
 
 /// `quail scan`.
@@ -183,6 +205,10 @@ pub struct ScanArgs {
     /// Limit overrides.
     #[command(flatten)]
     pub limits: LimitArgs,
+    /// OCR budgets.
+    #[cfg(feature = "ocr")]
+    #[command(flatten)]
+    pub ocr: OcrArgs,
     /// No progress line and no summary on stderr.
     #[arg(short, long)]
     pub quiet: bool,
@@ -229,6 +255,10 @@ pub struct InspectArgs {
     /// Limit overrides.
     #[command(flatten)]
     pub limits: LimitArgs,
+    /// OCR budgets.
+    #[cfg(feature = "ocr")]
+    #[command(flatten)]
+    pub ocr: OcrArgs,
 }
 
 /// `quail keys`.

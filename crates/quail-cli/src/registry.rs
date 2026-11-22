@@ -5,8 +5,11 @@
 //! [`builder`], describe them in [`STEPS`] and its keys in [`key_tables`] (regenerate
 //! `keydocs.rs` with `tools/genkeys.py`).
 
+use std::time::Duration;
+
 use quail_core::{AnalyzerId, Format, Limits, Profile};
 use quail_engine::{EngineBuilder, SNIFF_ID};
+use serde::{Deserialize, Serialize};
 
 use crate::keydocs::{self, KeyDoc};
 
@@ -221,9 +224,71 @@ pub const STEPS: &[StepDoc] = &[
     },
 ];
 
+/// How OCR runs under `--profile deep`, resolved from the options and the machine
+/// ([`OcrSettings::resolve`]). Travels to `--isolate` workers inside their spec.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OcrSettings {
+    /// Pages OCR'd at the same time in one process.
+    pub jobs: usize,
+    /// ONNX Runtime intra-op threads per engine.
+    pub threads: usize,
+    /// Pages OCR'd per file.
+    pub max_pages: u32,
+    /// Reading time per page needing OCR (`None`: only the file's timeout).
+    pub page_time: Option<Duration>,
+}
+
+impl OcrSettings {
+    /// The settings for `workers` file workers on this machine with the overrides of
+    /// `args`. `explicit_timeout`: the user set `--timeout`, so there is no per-page budget
+    /// unless `--ocr-page-time` asks for one.
+    #[cfg(feature = "ocr")]
+    pub fn resolve(args: &crate::cli::OcrArgs, workers: usize, explicit_timeout: bool) -> Self {
+        let r =
+            quail_ocr::OcrResources::auto(workers).with_overrides(args.ocr_jobs, args.ocr_threads);
+        let d = quail_ocr::OcrConfig::default();
+        Self {
+            jobs: r.jobs,
+            threads: r.threads,
+            max_pages: args.ocr_max_pages.unwrap_or(d.max_pages),
+            page_time: match args.ocr_page_time {
+                Some(t) => Some(t),
+                None if explicit_timeout => None,
+                None => d.page_time,
+            },
+        }
+    }
+
+    /// Wall time per file that fits the OCR budget of a file after `base` for the rest,
+    /// with the other `workers` queued for the OCR jobs ahead of it.
+    #[cfg(feature = "ocr")]
+    pub fn file_timeout(&self, base: Duration, workers: usize) -> Duration {
+        let ahead = workers.max(1).div_ceil(self.jobs.max(1)).saturating_sub(1);
+        self.config()
+            .file_timeout(base, u32::try_from(ahead).unwrap_or(u32::MAX))
+    }
+
+    #[cfg(feature = "ocr")]
+    fn config(&self) -> quail_ocr::OcrConfig {
+        quail_ocr::OcrConfig {
+            max_pages: self.max_pages,
+            page_time: self.page_time,
+            ..quail_ocr::OcrConfig::default()
+        }
+    }
+}
+
 /// An engine builder with every step of this build registered, for `profile` and `limits`.
-/// Callers may register more (e.g. an analyzer of its own) before building.
+/// Callers may register more (e.g. an analyzer of its own) before building. OCR, under
+/// `Profile::Deep`, gets [`OcrSettings::resolve`] defaults for all CPUs.
 pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
+    builder_with(profile, limits, None)
+}
+
+/// [`builder`] with the OCR settings of the run (`None`: defaults for this machine).
+pub fn builder_with(profile: Profile, limits: Limits, ocr: Option<&OcrSettings>) -> EngineBuilder {
+    #[cfg(not(feature = "ocr"))]
+    let _ = ocr;
     let b = EngineBuilder::new()
         .profile(profile)
         .limits(limits)
@@ -263,7 +328,7 @@ pub fn builder(profile: Profile, limits: Limits) -> EngineBuilder {
     // OCR runs in `Profile::Deep` only. The backend (model check, SHA-256 of every file) is
     // built only then; under other profiles the step is inactive and never loads anything.
     #[cfg(feature = "ocr")]
-    let b = b.analyzer(Box::new(ocr_analyzer(profile)));
+    let b = b.analyzer(Box::new(ocr_analyzer(profile, ocr)));
     // Builds its CPV index once; shared by every worker.
     #[cfg(feature = "items")]
     let b = b.analyzer(Box::new(quail_items::ItemLines::new()));
@@ -311,12 +376,22 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
 /// The OCR step for `profile`: with the PP-OCRv6 backend under `Deep`, else a stand-in that
 /// is never planned.
 #[cfg(feature = "ocr")]
-fn ocr_analyzer(profile: Profile) -> quail_ocr::OcrPages {
+fn ocr_analyzer(profile: Profile, ocr: Option<&OcrSettings>) -> quail_ocr::OcrPages {
     if profile < Profile::Deep {
         return quail_ocr::OcrPages::unavailable("ocr runs under --profile deep only");
     }
-    let workers = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    quail_ocr::OcrPages::with_default_backend(workers)
+    let s = ocr.cloned().unwrap_or_else(|| {
+        OcrSettings::resolve(
+            &crate::cli::OcrArgs::default(),
+            quail_ocr::budget::cpus(),
+            false,
+        )
+    });
+    let resources = quail_ocr::OcrResources {
+        jobs: s.jobs,
+        threads: s.threads,
+    };
+    quail_ocr::OcrPages::with_resources(resources, s.config())
 }
 
 /// Why OCR cannot run in this build, if it cannot: no `ocr` feature, no model directory, or

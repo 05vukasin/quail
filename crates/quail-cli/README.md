@@ -141,7 +141,7 @@ cargo build --release -p quail-cli --features ocr
 quail models fetch                 # about 45 MiB into $QUAIL_OCR_MODELS or the user cache dir;
                                    # every file's SHA-256 is checked before it is moved into place
 quail models list                  # each file: size, ok / missing / bad sha-256, license
-quail scan --profile deep -j 2 contracts/ -o records.jsonl
+quail scan --profile deep contracts/ -o records.jsonl
 ```
 
 - OCR runs only under `--profile deep`. Under other profiles the step is inactive, and no model is
@@ -153,11 +153,17 @@ quail scan --profile deep -j 2 contracts/ -o records.jsonl
     pages the OCR text replaces the layer.
 - Text analyzers (`text.*`, `signal.*`, `ref.*`, `party.*`, `item.*`, the summary) run after it
   and read the revised document.
-- Per file: at most 200 pages, under the file's `--timeout`. The same OCR text counts against
-  `max_text_bytes`.
-- Each worker thread keeps one engine, and ONNX Runtime runs one intra-op thread per engine. So
-  `-j N` means N concurrent OCR pages. Budget roughly 250–400 MB per worker, see the numbers in
-  the pull request.
+- Budgets are derived, not hand-picked (`registry::OcrSettings::resolve`, `scan::plan`):
+  - `--ocr-jobs` pages are read at once in the process whatever `-j` (default: 0.8 GB each
+    within 40 % of the available memory, at most 4 and at most `-j`);
+  - `--ocr-threads` ONNX Runtime threads per engine (default `CPUs / jobs`, at most 4);
+  - per file at most `--ocr-max-pages` (40) pages and `--ocr-page-time` (20 s) of reading per
+    page; past either the record is `partial`. The OCR text counts against `max_text_bytes`.
+  - Without `--timeout`, the per-file timeout is raised to fit that budget behind the other
+    workers (`2m + 40 x 20s x ceil(-j / jobs)`). With `--timeout`, it is kept and there is no
+    per-page budget unless `--ocr-page-time` is given.
+  - With `--isolate`, one engine per worker process and `-j` defaults to the OCR jobs.
+  - `scan` and `inspect` print the resulting line `quail: ocr: ...` on stderr (not with `-q`).
 - Under `--profile deep` without models (or without the feature), `scan` and `inspect` print one
   warning. Every file with a page needing OCR then gets the problem `ocr.pages@2: ocr models: …`
   and is `partial`.
