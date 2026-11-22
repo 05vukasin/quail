@@ -34,7 +34,7 @@ mod record;
 mod source;
 mod value;
 
-pub use analyzer::{Analyzer, AnalyzerId, Ctx, Emitter};
+pub use analyzer::{Analyzer, AnalyzerId, Ctx, DeadlineHook, Emitter};
 pub use artifact::{Artifact, Artifacts};
 pub use blob::Blob;
 pub use document::{
