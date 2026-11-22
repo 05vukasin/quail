@@ -24,7 +24,7 @@ clauses = ["dep:quail-clauses"]
 sketch = ["dep:quail-sketch"]
 items = ["dep:quail-items"]
 summary = ["dep:quail-summary"]
-# OCR of pages that need it (`ocr.pages@1`, under `--profile deep`) and `quail models`.
+# OCR of pages that need it (`ocr.pages@2`, under `--profile deep`) and `quail models`.
 # Pulls ONNX Runtime (prebuilt native binaries downloaded by the `ort` build script) and an
 # HTTPS client, so it is not in the default build. Needs `pdf` for page pixels.
 ocr = ["pdf", "dep:quail-ocr", "quail-ocr/paddle", "quail-ocr/fetch"]

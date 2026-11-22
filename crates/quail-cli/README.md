@@ -130,7 +130,7 @@ stored records may be stale. Limits are not part of it.
 
 ## OCR (`ocr` feature, not default)
 
-Scanned pages and garbled text layers are read by `ocr.pages@1` from
+Scanned pages and garbled text layers are read by `ocr.pages@2` from
 [quail-ocr](../quail-ocr/README.md). It uses PP-OCRv6 on ONNX Runtime, and the Cyrillic recognizer
 re-reads Serbian Cyrillic lines. The default build stays pure Rust. The `ocr` feature links
 ONNX Runtime (prebuilt binaries for Linux x64/arm64, macOS arm64 and Windows, downloaded by the
@@ -159,7 +159,7 @@ quail scan --profile deep -j 2 contracts/ -o records.jsonl
   `-j N` means N concurrent OCR pages. Budget roughly 250–400 MB per worker, see the numbers in
   the pull request.
 - Under `--profile deep` without models (or without the feature), `scan` and `inspect` print one
-  warning. Every file with a page needing OCR then gets the problem `ocr.pages@1: ocr models: …`
+  warning. Every file with a page needing OCR then gets the problem `ocr.pages@2: ocr models: …`
   and is `partial`.
 
 Models: `quail models fetch --dir DIR` or `QUAIL_OCR_MODELS=DIR`. They are the PaddleOCR ONNX
@@ -184,7 +184,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `sketch` (default) | quail-sketch | `sketch.minhash@2`, `sketch.simhash_text@2`, `sketch.simhash_template@2`, `sketch.layout@2`, `sketch.invoice_layout@2`, `sketch.text_key@2` (Fast); `sketch.minhash_compat@3` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@4` (Standard, runs only on documents with a scanned page or a page needing OCR) |
 | `items` (default) | quail-items | `item.lines@5` (CPV categories from Standard) |
 | `summary` (default) | quail-summary | `summary.card@2`, `summary.extractive@2`, `summary.outline@1` (finalizers); `summary.digest@1` is in the crate, not registered by default |
-| `ocr` | quail-ocr | `ocr.pages@1` (Deep only; PP-OCRv6 on ONNX Runtime, native, not default) and `quail models` |
+| `ocr` | quail-ocr | `ocr.pages@2` (Deep only; PP-OCRv6 on ONNX Runtime, native, not default) and `quail models` |
 | `zstd` | (quail-io) | `--zstd` output |
 | `test-hooks` | - | test-only: `QUAIL_TEST_CRASH_ON=<substring>` makes `--isolate` workers abort on matching locators. Never ship it |
 

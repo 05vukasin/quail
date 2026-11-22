@@ -18,8 +18,9 @@
 //!    better; when only some do, lines below [`PaddleConfig::mixed_reread_below`] are read
 //!    with both and the more confident Cyrillic reading wins; otherwise the page stays Latin.
 //!
-//! Every engine owns its ONNX Runtime sessions with one intra-op thread and no spinning:
-//! parallelism comes from running one engine per worker thread.
+//! Every engine owns its ONNX Runtime sessions with [`PaddleConfig::intra_threads`] intra-op
+//! threads and no spinning; [`OcrPermits`](crate::OcrPermits) bound how many engines read at
+//! once.
 
 use std::path::{Path, PathBuf};
 
@@ -37,7 +38,8 @@ use crate::engine::{
 use crate::models::{self, Role};
 use crate::script::{ScriptCounts, script_of};
 
-/// Settings of the PP-OCR backend. Everything here is part of the engine fingerprint.
+/// Settings of the PP-OCR backend. Everything here except `intra_threads` is part of the
+/// engine fingerprint.
 // Independent switches, not a state machine.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
@@ -62,7 +64,8 @@ pub struct PaddleConfig {
     pub deskew_degrees: Option<f64>,
     /// Report word boxes.
     pub word_boxes: bool,
-    /// ONNX Runtime intra-op threads per session (1 for one-engine-per-worker).
+    /// ONNX Runtime intra-op threads per session (1 by default;
+    /// [`OcrResources`](crate::OcrResources) picks it so that `jobs × threads` fits the CPUs).
     pub intra_threads: usize,
     /// Text lines recognized per batch. 1 by default: a batch is padded to its widest line,
     /// which costs both time and (kept) arena memory.
@@ -119,7 +122,12 @@ impl PaddleFactory {
             models::verify(dir, m)?;
             fp.push_str(m.sha256);
         }
-        let _ = std::fmt::Write::write_fmt(&mut fp, format_args!("{cfg:?}"));
+        // Threads change speed, not output: not part of the fingerprint (the cache key).
+        let same_output = PaddleConfig {
+            intra_threads: 1,
+            ..cfg.clone()
+        };
+        let _ = std::fmt::Write::write_fmt(&mut fp, format_args!("{same_output:?}"));
         let name = if cfg.cyrillic {
             "paddle/pp-ocrv6-small+cyrillic-v5"
         } else {

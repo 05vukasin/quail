@@ -2,7 +2,7 @@
 
 OCR for pages that have no usable text layer. Namespace `ocr.*`.
 
-One analyzer: **`ocr.pages@1`** (`OcrPages`), profile `Deep`. It requires the `document` and `raster`
+One analyzer: **`ocr.pages@2`** (`OcrPages`), profile `Deep`. It requires the `document` and `raster`
 artifacts and provides `ocr_text` (`OcrText`) and `revised_document`. It uses only core types. It reads the pages that have
 `needs_ocr` and gets their pixels from the `Raster` artifact (`PageRaster`), so it never depends on
 an extractor crate.
@@ -22,8 +22,34 @@ an extractor crate.
    position) and box, plus lines and words with their confidence and script.
 
 `Emitter::check_deadline` runs before each page and before each retry. The caps are
-`OcrConfig::max_pages` (200) and the file's `max_text_bytes`, which OCR text shares with the native
+`OcrConfig::max_pages` (40) and the file's `max_text_bytes`, which OCR text shares with the native
 text. A page that fails is recorded as a problem, and the remaining pages still run.
+
+## Budgets (`budget` module)
+
+OCR is far slower and heavier than every other step, so it has limits of its own:
+
+- **Pages at once.** `OcrPermits` (shared by every worker of the process): a worker takes a permit
+  before it decodes, renders and reads a page, so at most `jobs` pages are in work whatever the
+  number of workers, and page images are bounded too. Waiters are served oldest file first.
+- **Sizing.** `OcrResources::auto(workers)`: `jobs = min(workers, ocr_memory() / 1 GiB, 4)` where `ocr_memory` is
+  40 % of the available memory but at most 20 % of the total, at least 1 (2 when the memory
+  is unknown, i.e. not Linux); `threads`
+  (ONNX Runtime intra-op threads per engine) `= CPUs / jobs`, between 1 and 4, so
+  `jobs × threads ≤ CPUs`. `OcrPages::with_resources` builds the backend with them;
+  `with_default_backend(workers)` uses `auto`.
+- **Time per file.** `OcrConfig::page_time` (45 s): a file's OCR may spend `pages × page_time`
+  reading; time waiting for a permit is not counted. Past it the remaining pages are left out with
+  the problem `ocr: time budget ... (page_time)` (record `partial`). `OcrConfig::file_timeout`
+  gives the file timeout that fits that budget (at most 2 h), for callers that set `Limits::timeout`.
+
+- **Time for the steps after OCR.** OCR ends `reserve(timeout)` = `max(10 s, 15 % of the
+  file timeout)` (at most half of it) before the file's deadline, and does not start a page
+  that the mean of the pages so far says would end past that. The text analyzers that read
+  the revised document then still run, on the pages read so far, and the record is `partial`
+  with the problem `ocr: stopped after k of n pages to keep ... for the steps after it`.
+
+The intra-op thread count is not part of the engine fingerprint (it changes speed, not output).
 
 ## Keys
 
@@ -45,7 +71,7 @@ text. A page that fails is recorded as a problem, and the remaining pages still 
   Cyrillic PP-OCRv5 recognizer re-reads a sample of the longest lines. A page where at least half
   of the sample reads as confident Cyrillic is read in both scripts, line by line. On a page where
   only some lines do, only the weak lines are re-read. Each engine owns its ONNX Runtime sessions
-  (one intra-op thread, no spinning), and `EnginePool` keeps one engine per worker thread.
+  (`PaddleConfig::intra_threads` intra-op threads, no spinning), and `EnginePool` keeps at most one engine per OCR permit.
 - **No backend** (the default build, pure Rust): for every file that has a page needing OCR, the
   analyzer reports the problem `ocr backend not compiled`. For other files it reports nothing.
 
