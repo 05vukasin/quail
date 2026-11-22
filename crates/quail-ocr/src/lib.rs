@@ -54,7 +54,7 @@ pub mod text;
 pub mod paddle;
 
 pub use analyzer::{OcrConfig, OcrPages, pages_needing_ocr};
-pub use budget::{OcrPermit, OcrPermits, OcrResources, available_memory};
+pub use budget::{OcrPermit, OcrPermits, OcrResources, ocr_memory};
 pub use cache::{CacheKey, MemoryCache, OcrCache};
 pub use engine::{
     EngineFactory, EngineId, OcrEngine, OcrHints, OcrLine, OcrPage, OcrWord, PxBox, ScriptHint,

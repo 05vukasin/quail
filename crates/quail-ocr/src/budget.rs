@@ -8,7 +8,8 @@
 //!   the number of workers. A worker waits for a permit before it decodes or renders the page,
 //!   so page images are bounded too. Permits go to the oldest file first, so a file that
 //!   started OCR finishes before newer ones start.
-//! - [`OcrResources`]: `jobs` from the available memory and `threads` (ONNX Runtime intra-op
+//! - [`OcrResources`]: `jobs` from the memory ([`ocr_memory`]: 40 % of the available, at most
+//!   20 % of the total) and `threads` (ONNX Runtime intra-op
 //!   threads per engine) so that `jobs × threads` stays within the logical CPUs.
 //! - [`OcrConfig::page_time`](crate::OcrConfig::page_time): a time allowance per page that
 //!   needs OCR. A file's OCR stops with a problem (record `partial`) once
@@ -23,11 +24,15 @@ use quail_core::{Error, Result};
 
 /// Memory one engine needs while it reads a page with up to 4 intra-op threads: ONNX Runtime
 /// sessions and arenas plus the page images at 200 to 300 DPI, and a share of the files the
-/// workers hold meanwhile (measured: 3 engines x 4 threads peaked at 3.3 GB on RealKIE FCC).
+/// workers hold meanwhile (measured: 3 engines x 4 threads peaked at 3.3 GB on the `RealKIE` FCC set).
 pub const ENGINE_BYTES: u64 = 1 << 30;
 
-/// Share of the available memory that [`OcrResources::plan`] lets OCR engines use.
+/// Share of the available memory that OCR engines may use ([`ocr_memory`]).
 pub const MEMORY_SHARE: f64 = 0.4;
+
+/// Share of the total memory that OCR engines may use ([`ocr_memory`]), so that a moment
+/// with much free memory does not plan for more than the machine can keep.
+pub const TOTAL_SHARE: f64 = 0.2;
 
 /// Most pages read at once by default; more is possible with an explicit `jobs`.
 pub const MAX_AUTO_JOBS: usize = 4;
@@ -48,22 +53,16 @@ pub struct OcrResources {
 }
 
 impl OcrResources {
-    /// The plan for `workers` file workers on `cpus` logical CPUs with `available` bytes of
-    /// memory (`None`: unknown).
+    /// The plan for `workers` file workers on `cpus` logical CPUs with `memory` bytes for
+    /// OCR (`None`: unknown; [`ocr_memory`] on this machine).
     ///
-    /// `jobs` = `min(workers, available × MEMORY_SHARE / ENGINE_BYTES, MAX_AUTO_JOBS)`, at
-    /// least 1 (`min(workers, FALLBACK_JOBS)` when the memory is unknown). `threads` =
-    /// `cpus / jobs`, between 1 and [`MAX_AUTO_THREADS`], so `jobs × threads ≤ cpus`.
-    pub fn plan(workers: usize, cpus: usize, available: Option<u64>) -> Self {
-        let by_memory = match available {
-            #[allow(
-                clippy::cast_precision_loss,
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss
-            )]
-            Some(b) => ((b as f64 * MEMORY_SHARE) / ENGINE_BYTES as f64).floor() as usize,
-            None => FALLBACK_JOBS,
-        };
+    /// `jobs` = `min(workers, memory / ENGINE_BYTES, MAX_AUTO_JOBS)`, at least 1
+    /// (`min(workers, FALLBACK_JOBS)` when the memory is unknown). `threads` = `cpus / jobs`,
+    /// between 1 and [`MAX_AUTO_THREADS`], so `jobs × threads ≤ cpus`.
+    pub fn plan(workers: usize, cpus: usize, memory: Option<u64>) -> Self {
+        let by_memory = memory.map_or(FALLBACK_JOBS, |b| {
+            usize::try_from(b / ENGINE_BYTES).unwrap_or(usize::MAX)
+        });
         let jobs = workers.min(by_memory).clamp(1, MAX_AUTO_JOBS);
         Self {
             jobs,
@@ -72,9 +71,9 @@ impl OcrResources {
     }
 
     /// The plan for this machine: [`plan`](Self::plan) with the logical CPUs and
-    /// [`available_memory`].
+    /// [`ocr_memory`].
     pub fn auto(workers: usize) -> Self {
-        Self::plan(workers, cpus(), available_memory())
+        Self::plan(workers, cpus(), ocr_memory())
     }
 
     /// The plan with explicit values where given. An explicit `jobs` also sets the default
@@ -100,28 +99,57 @@ pub fn cpus() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
+/// Bytes OCR engines may use on this machine: the smaller of [`MEMORY_SHARE`] of
+/// [`available_memory`] and [`TOTAL_SHARE`] of [`total_memory`]. `None` where that is
+/// unknown (other systems than Linux).
+pub fn ocr_memory() -> Option<u64> {
+    Some(share(available_memory()?, MEMORY_SHARE).min(share(total_memory()?, TOTAL_SHARE)))
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn share(bytes: u64, s: f64) -> u64 {
+    (bytes as f64 * s) as u64
+}
+
 /// Memory available to this process in bytes: `MemAvailable` of `/proc/meminfo`, lowered to
 /// the room left under a cgroup v2 limit (`memory.max - memory.current`) in a container.
 /// `None` where that is unknown (other systems).
 pub fn available_memory() -> Option<u64> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let mut avail = parse_meminfo(&meminfo)?;
-    let read = |p: &str| std::fs::read_to_string(p).ok();
-    if let (Some(max), Some(cur)) = (
-        read("/sys/fs/cgroup/memory.max"),
-        read("/sys/fs/cgroup/memory.current"),
-    ) && let (Ok(max), Ok(cur)) = (max.trim().parse::<u64>(), cur.trim().parse::<u64>())
-    {
+    let mut avail = meminfo_field(&meminfo, "MemAvailable")?;
+    if let (Some(max), Some(cur)) = (cgroup("memory.max"), cgroup("memory.current")) {
         avail = avail.min(max.saturating_sub(cur));
     }
     Some(avail)
 }
 
-/// `MemAvailable` in bytes from the text of `/proc/meminfo`.
-fn parse_meminfo(s: &str) -> Option<u64> {
-    let line = s.lines().find(|l| l.starts_with("MemAvailable:"))?;
+/// Memory of the machine in bytes: `MemTotal` of `/proc/meminfo`, lowered to a cgroup v2
+/// limit (`memory.max`). `None` where that is unknown.
+pub fn total_memory() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let total = meminfo_field(&meminfo, "MemTotal")?;
+    Some(cgroup("memory.max").map_or(total, |m| total.min(m)))
+}
+
+/// A number in `/sys/fs/cgroup/<name>` (`None` for `max` or no cgroup v2).
+fn cgroup(name: &str) -> Option<u64> {
+    std::fs::read_to_string(format!("/sys/fs/cgroup/{name}"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// A `kB` field of `/proc/meminfo`, in bytes.
+fn meminfo_field(s: &str, field: &str) -> Option<u64> {
+    let line = s.lines().find(|l| l.split(':').next() == Some(field))?;
     let kib: u64 = line
-        .trim_start_matches("MemAvailable:")
+        .split_once(':')?
+        .1
         .trim()
         .trim_end_matches("kB")
         .trim()
@@ -250,8 +278,8 @@ mod tests {
 
     #[test]
     fn plan_follows_memory_workers_and_cpus() {
-        // 7 GiB available: 40 % is 2.8 GiB, two engines.
-        let p = OcrResources::plan(15, 16, Some(7 * GIB));
+        // 2.8 GiB for OCR (e.g. 20 % of 14 GiB): two engines.
+        let p = OcrResources::plan(15, 16, Some(28 * GIB / 10));
         assert_eq!(
             p,
             OcrResources {
@@ -311,10 +339,16 @@ mod tests {
 
     #[test]
     fn meminfo() {
-        let s = "MemTotal:       14000000 kB\nMemFree:  100 kB\nMemAvailable:    7340032 kB\n";
-        assert_eq!(parse_meminfo(s), Some(7 * GIB));
-        assert_eq!(parse_meminfo("MemTotal: 1 kB\n"), None);
-        assert_eq!(parse_meminfo("MemAvailable: lots\n"), None);
+        let s = "MemTotal:       14680064 kB\nMemFree:  100 kB\nMemAvailable:    7340032 kB\n";
+        assert_eq!(meminfo_field(s, "MemAvailable"), Some(7 * GIB));
+        assert_eq!(meminfo_field(s, "MemTotal"), Some(14 * GIB));
+        assert_eq!(meminfo_field("MemTotal: 1 kB\n", "MemAvailable"), None);
+        assert_eq!(meminfo_field("MemAvailable: lots\n", "MemAvailable"), None);
+        assert_eq!(share(10 * GIB, 0.2), 2 * GIB);
+        // On Linux both are known and OCR gets at most a fifth of the machine.
+        if let (Some(m), Some(t)) = (ocr_memory(), total_memory()) {
+            assert!(m <= share(t, TOTAL_SHARE));
+        }
     }
 
     #[test]
