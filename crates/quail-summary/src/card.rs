@@ -33,6 +33,8 @@ pub const MAX_AMOUNTS: usize = 4;
 pub const MAX_ID_VALUES: usize = 2;
 /// Item categories kept in the card.
 pub const MAX_CATEGORIES: usize = 3;
+/// Keywords kept in the card (`summary.keywords`, best first).
+pub const MAX_KEYWORDS: usize = 8;
 /// Item categories whose top-candidate score is below this are left out (CPV matches of
 /// generic descriptions such as "Phase II" score low).
 pub const MIN_CATEGORY_SCORE: f64 = 0.3;
@@ -164,6 +166,8 @@ pub struct FileCard {
     pub personal_ids: Option<i64>,
     /// Price items.
     pub items: Option<Items>,
+    /// The document's top keywords (`summary.keywords`), best first.
+    pub keywords: Vec<String>,
     /// Similarity sketches.
     pub sketch: Sketch,
     /// Producing application.
@@ -209,6 +213,14 @@ impl FileCard {
         c.ids_from(f);
         c.personal_ids = f.int(k::SIGNAL_JMBG_COUNT).filter(|&n| n > 0);
         c.items_from(f);
+        if let Some(Value::List(ks)) = f.best(crate::keys::KEYWORDS.as_str()).map(|x| &x.value) {
+            c.keywords = ks
+                .iter()
+                .filter_map(|k| field_text(k, "term"))
+                .map(|t| clip(&one_line(t), 40))
+                .take(MAX_KEYWORDS)
+                .collect();
+        }
         c.sketch = Sketch {
             text: f.u64(k::SKETCH_SIMHASH_TEXT),
             template: f.u64(k::SKETCH_SIMHASH_TEMPLATE),
@@ -738,6 +750,12 @@ impl FileCard {
                 ]),
             ));
         }
+        if !self.keywords.is_empty() {
+            r.push((
+                "keywords",
+                Value::List(self.keywords.iter().map(|k| text(k)).collect()),
+            ));
+        }
         let s = &self.sketch;
         if s.text.is_some() || s.template.is_some() || s.text_key.is_some() {
             let mut f = Vec::new();
@@ -780,13 +798,13 @@ impl FileCard {
     ///
     /// Per-field limits first (title 100 characters, names 60, labels 40, list lengths as in
     /// the `MAX_*` constants, `+N` for what is left out), then whole lines are dropped from the
-    /// least useful up (`sketch`, `meta`, `items`, `flags`, `ids`, `refs`, `amounts`,
-    /// `dates`, `parties`) until the text fits; the `doc` line is clipped last.
+    /// least useful up (`sketch`, `meta`, `items`, `flags`, `ids`, `keywords`, `refs`,
+    /// `amounts`, `dates`, `parties`) until the text fits; the `doc` line is clipped last.
     #[allow(clippy::too_many_lines)] // one block per line
     pub fn render(&self, max_tokens: usize) -> CardText {
         // (priority, line); lower priority is dropped first.
         let mut lines: Vec<(u8, String)> = Vec::new();
-        lines.push((10, self.doc_line()));
+        lines.push((20, self.doc_line()));
         if !self.parties.is_empty() {
             let mut parts: Vec<String> = self
                 .parties
@@ -797,7 +815,7 @@ impl FileCard {
                 })
                 .collect();
             more(&mut parts, self.parties_total, self.parties.len());
-            lines.push((9, format!("parties: {}", parts.join("; "))));
+            lines.push((18, format!("parties: {}", parts.join("; "))));
         }
         if !self.dates.is_empty() {
             let parts: Vec<String> = self
@@ -805,7 +823,7 @@ impl FileCard {
                 .iter()
                 .map(|(r, d)| format!("{r}={}", format::date(*d)))
                 .collect();
-            lines.push((8, format!("dates: {}", parts.join(" "))));
+            lines.push((16, format!("dates: {}", parts.join(" "))));
         }
         if !self.amounts.is_empty() {
             let parts: Vec<String> = self
@@ -813,7 +831,7 @@ impl FileCard {
                 .iter()
                 .map(|(r, m)| format!("{r}={}", format::money(*m)))
                 .collect();
-            lines.push((7, format!("amounts: {}", parts.join("; "))));
+            lines.push((14, format!("amounts: {}", parts.join("; "))));
         }
         if !self.cites.is_empty() {
             let mut parts: Vec<String> = self
@@ -835,7 +853,10 @@ impl FileCard {
                 .collect();
             let shown = parts.len();
             more(&mut parts, self.cites_total, shown);
-            lines.push((6, format!("refs: {}", parts.join("; "))));
+            lines.push((12, format!("refs: {}", parts.join("; "))));
+        }
+        if !self.keywords.is_empty() {
+            lines.push((11, format!("keywords: {}", self.keywords.join(", "))));
         }
         if !self.ids.is_empty() || self.personal_ids.is_some() {
             let mut parts: Vec<String> = self
@@ -852,11 +873,11 @@ impl FileCard {
             if let Some(n) = self.personal_ids {
                 parts.push(format!("personal_ids×{n}"));
             }
-            lines.push((5, format!("ids: {}", parts.join(" "))));
+            lines.push((10, format!("ids: {}", parts.join(" "))));
         }
         if !self.flags.is_empty() {
             let parts: Vec<String> = self.flags.iter().map(|f| flag(*f)).collect();
-            lines.push((4, format!("flags: {}", parts.join(" "))));
+            lines.push((8, format!("flags: {}", parts.join(" "))));
         }
         if let Some(it) = &self.items {
             let mut s = format!("items: {}", it.count);
@@ -868,7 +889,7 @@ impl FileCard {
                     .collect();
                 let _ = write!(s, "; top: {}", cats.join(", "));
             }
-            lines.push((3, s));
+            lines.push((6, s));
         }
         let meta: Vec<String> = [
             ("producer", &self.producer),
@@ -879,7 +900,7 @@ impl FileCard {
         .filter_map(|(n, v)| v.as_ref().map(|v| format!("{n}=\"{}\"", clip(v, 40))))
         .collect();
         if !meta.is_empty() {
-            lines.push((2, format!("meta: {}", meta.join(" "))));
+            lines.push((4, format!("meta: {}", meta.join(" "))));
         }
         let s = &self.sketch;
         let mut sk: Vec<String> = Vec::new();
@@ -893,7 +914,7 @@ impl FileCard {
             sk.push(format!("key={x}"));
         }
         if !sk.is_empty() {
-            lines.push((1, format!("sketch: {}", sk.join(" "))));
+            lines.push((2, format!("sketch: {}", sk.join(" "))));
         }
 
         let cost = |ls: &[(u8, String)]| ls.iter().map(|(_, l)| tokens::estimate(l)).sum::<usize>();

@@ -160,7 +160,9 @@ mod tests {
                     text: sentence.into(),
                     page: 0,
                 }],
+                keywords: Vec::new(),
             }],
+            truncated: false,
         }
     }
 

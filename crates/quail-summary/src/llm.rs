@@ -1,4 +1,4 @@
-//! `summary.llm@2`: a local GGUF model (llama.cpp through `llama-cpp-2`) writes
+//! `summary.llm@3`: a local GGUF model (llama.cpp through `llama-cpp-2`) writes
 //! `{summary, subject, title_en}`; every output is fact-checked and falls back to the
 //! extractive summary when it fails. Feature `llm`, `Profile::Deep`, and opt-in: the analyzer
 //! applies only when [`LlmConfig::enabled`] is set.
@@ -43,7 +43,8 @@ use crate::models::{self, ModelFile};
 use crate::outline::{self, OutlineConfig};
 use crate::prompt;
 use crate::summarizer::{
-    LongInput, Method, Summarizer, SummarizerId, Summary, SummaryInput, checked_or_fallback,
+    LongInput, Method, Summarizer, SummarizerId, Summary, SummaryInput, cacheable,
+    checked_or_fallback,
 };
 
 /// Settings of the LLM step.
@@ -367,7 +368,7 @@ impl Summarizer for LlmSummarizer {
     }
 }
 
-/// `summary.llm@2`: the [`LlmSummarizer`] (or any [`Summarizer`]) as an analyzer. Deep and
+/// `summary.llm@3`: the [`LlmSummarizer`] (or any [`Summarizer`]) as an analyzer. Deep and
 /// opt-in ([`LlmConfig::enabled`]); never part of the default pipeline.
 ///
 /// Reads the digest of the document ([`crate::digest`], [`LlmConfig::digest_tokens`]); with
@@ -382,7 +383,7 @@ pub struct SummaryLlm {
 
 impl SummaryLlm {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.llm", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.llm", 3);
 
     /// The step for `summarizer` with `cfg` (which must have `enabled` set to do anything)
     /// and an optional result cache.
@@ -424,6 +425,7 @@ impl Analyzer for SummaryLlm {
         self.cfg.enabled
     }
 
+    #[allow(clippy::too_many_lines)] // one step, in order: input, cache, call, record
     fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
         let card = card_of(ctx);
         if card
@@ -457,6 +459,13 @@ impl Analyzer for SummaryLlm {
             }
             _ => Vec::new(),
         };
+        let truncated = o.truncated || d.truncated || parts.iter().any(|p| p.truncated);
+        if truncated {
+            out.problem(format!(
+                "{}: deadline reached, the model read the first sections only",
+                Self::ID
+            ));
+        }
         let outline_text = o.render(dcfg.max_tokens / 4);
         let input = SummaryInput {
             card: &card,
@@ -492,7 +501,7 @@ impl Analyzer for SummaryLlm {
                 self.summarizer.summarize(&input)
             };
             let s = checked_or_fallback(self.summarizer.as_ref(), &input, got);
-            if let Some(c) = &self.cache {
+            if let Some(c) = self.cache.as_ref().filter(|_| cacheable(&s, truncated)) {
                 c.put(key, Arc::new(s.clone()));
             }
             (s, false)

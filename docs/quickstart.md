@@ -219,7 +219,7 @@ Measured speed, memory and quality: [performance.md](performance.md#ocr).
 
 Every record has a deterministic card (`summary.card_text`) and an English summary
 (`summary.extractive`) made without a model. A more fluent summary written by a small local
-LLM is available as the step `summary.llm@2` in `quail-summary`. It is off unless you ask for
+LLM is available as the step `summary.llm@3` in `quail-summary`. It is off unless you ask for
 it, three times over:
 
 1. it is behind the cargo feature `llm`, which builds llama.cpp (needs CMake and a C++

@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [features]
 default = []
-# `summary.llm@1`: a local GGUF model through llama.cpp (`llama-cpp-2`). Builds llama.cpp with
+# `summary.llm@3`: a local GGUF model through llama.cpp (`llama-cpp-2`). Builds llama.cpp with
 # CMake and a C++ compiler; `dynamic-backends` builds one CPU backend per microarchitecture and
 # picks one at load time (no `target-cpu=native`); `common` adds the JSON-schema-to-grammar
 # compiler (llama.cpp's `common` library is built either way). Never in the default build.
