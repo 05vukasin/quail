@@ -136,7 +136,7 @@ pub struct OcrArgs {
     /// Pages OCR'd per file; later pages are left out and the record is `partial` (default 40).
     #[arg(long, value_name = "N")]
     pub ocr_max_pages: Option<u32>,
-    /// Reading time allowed per page needing OCR (default 20s, or none with `--timeout`). A
+    /// Reading time allowed per page needing OCR (default 45s, or none with `--timeout`). A
     /// file's OCR stops, `partial`, once pages x this is spent; waiting for a free OCR job
     /// does not count.
     #[arg(long, value_name = "DURATION", value_parser = parse_duration)]

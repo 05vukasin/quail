@@ -168,14 +168,14 @@ SHA-256 is checked:
 cargo build --release -p quail-cli --features ocr
 quail models fetch                 # into $QUAIL_OCR_MODELS, else the user cache dir (quail/ocr-models)
 quail models list                  # each file: size, ok / missing / bad sha-256, license
-quail scan contracts --profile deep -j 2 --timeout 15m -o records.jsonl
+quail scan contracts --profile deep -o records.jsonl
 ```
 
 The sample amendment printed to a 200 DPI gray image and wrapped in a PDF has no text layer; with
 OCR the same facts come back (excerpt):
 
 ```console
-$ quail inspect scans/scanned-amendment.pdf --profile deep --timeout 15m
+$ quail inspect scans/scanned-amendment.pdf --profile deep
 status   ok
 steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 µs), sketch.page_phash@4 (50.6 ms), ocr.pages@2 (5.87 s), ...
   ocr.page       {page=0 script="latin" mean_conf=0.9931 chars=974 lines=22 dpi=200 source="embedded_scan" rotation=0}  conf 0.99  src ocr.pages@2  at p1
@@ -187,11 +187,25 @@ steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 
   after it and read the OCR'd pages
   ([concepts.md](concepts.md#11-documents-ocr-and-the-revised-document)); each OCR'd page also
   gets an `ocr.page` fact with its mean confidence.
-- **Memory**: about 0.6 to 0.8 GB per OCR worker (ONNX Runtime sessions and page images at
-  200 to 300 DPI). On a 4 GB machine keep `-j` at 3 or below in deep mode.
-- **Time**: 5 to 15 s per page per worker on a laptop CPU. The default `--timeout` of 2 minutes
-  covers about 10 scanned pages; raise it for long scans. A file that hits the timeout keeps
-  the pages already read and is `partial`.
+- **Budgets are automatic.** No `-j` or `--timeout` is needed; quail prints how it will run:
+
+  ```console
+  quail: ocr: 3 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page; timeout 120m per file
+  ```
+
+  - **Memory**: each page being read takes about 0.6 to 0.8 GB (ONNX Runtime sessions and the
+    page image). At most `--ocr-jobs` pages are read at once, whatever `-j`: by default as many
+    as fit in 40 % of the available memory at 0.8 GB each, at most 4. The other workers keep
+    processing files that need no OCR, or wait for a free OCR job.
+  - **CPU**: each OCR engine gets `--ocr-threads` ONNX Runtime threads, by default
+    `CPUs / --ocr-jobs` (at most 4).
+  - **Time**: a file's OCR may spend 45 s per page that needs it (`--ocr-page-time`), up to 40
+    pages (`--ocr-max-pages`); waiting for a free OCR job does not count. Past either, the
+    pages already read are kept and the record is `partial`. The per-file `--timeout` is
+    raised so that this budget always fits, even behind the other workers. Passing `--timeout`
+    yourself keeps it as is and drops the per-page budget (unless `--ocr-page-time` is given).
+  - With `--isolate`, every worker process loads its own engine, so `-j` defaults to the
+    OCR job count.
 - Without the feature or without the models, `--profile deep` prints one warning
   (`quail: warning: no OCR: ...`), and every file with a page needing OCR gets a problem and is
   `partial`.
