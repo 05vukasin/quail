@@ -21,9 +21,10 @@ use std::time::{Duration, Instant};
 
 use quail_core::{Error, Result};
 
-/// Memory one engine needs while it reads a page: ONNX Runtime sessions and arenas plus the
-/// page image at 200 to 300 DPI (measured 0.6 to 0.8 GB; the upper end is planned for).
-pub const ENGINE_BYTES: u64 = 800 << 20;
+/// Memory one engine needs while it reads a page with up to 4 intra-op threads: ONNX Runtime
+/// sessions and arenas plus the page images at 200 to 300 DPI, and a share of the files the
+/// workers hold meanwhile (measured: 3 engines x 4 threads peaked at 3.3 GB on RealKIE FCC).
+pub const ENGINE_BYTES: u64 = 1 << 30;
 
 /// Share of the available memory that [`OcrResources::plan`] lets OCR engines use.
 pub const MEMORY_SHARE: f64 = 0.4;
@@ -249,12 +250,12 @@ mod tests {
 
     #[test]
     fn plan_follows_memory_workers_and_cpus() {
-        // 7 GiB available: 40 % is 2.8 GiB, three engines.
+        // 7 GiB available: 40 % is 2.8 GiB, two engines.
         let p = OcrResources::plan(15, 16, Some(7 * GIB));
         assert_eq!(
             p,
             OcrResources {
-                jobs: 3,
+                jobs: 2,
                 threads: 4
             }
         );

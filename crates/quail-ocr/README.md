@@ -33,7 +33,7 @@ OCR is far slower and heavier than every other step, so it has limits of its own
   before it decodes, renders and reads a page, so at most `jobs` pages are in work whatever the
   number of workers, and page images are bounded too. Waiters are served oldest file first.
 - **Sizing.** `OcrResources::auto(workers)`: `jobs = min(workers, 40 % of the available memory /
-  0.8 GB, 4)`, at least 1 (2 when the available memory is unknown, i.e. not Linux); `threads`
+  1 GiB, 4)`, at least 1 (2 when the available memory is unknown, i.e. not Linux); `threads`
   (ONNX Runtime intra-op threads per engine) `= CPUs / jobs`, between 1 and 4, so
   `jobs × threads ≤ CPUs`. `OcrPages::with_resources` builds the backend with them;
   `with_default_backend(workers)` uses `auto`.
