@@ -181,7 +181,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `refs` (default) | quail-refs | `ref.references@3` |
 | `parties` (default) | quail-parties | `party.candidates@4` |
 | `clauses` (default) | quail-clauses | `clause.terms@1` |
-| `sketch` (default) | quail-sketch | `sketch.minhash@2`, `sketch.simhash_text@2`, `sketch.simhash_template@2`, `sketch.layout@2`, `sketch.invoice_layout@2`, `sketch.text_key@2` (Fast); `sketch.minhash_compat@3` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@3` (Standard, runs only on documents with a scanned page or a page needing OCR) |
+| `sketch` (default) | quail-sketch | `sketch.minhash@2`, `sketch.simhash_text@2`, `sketch.simhash_template@2`, `sketch.layout@2`, `sketch.invoice_layout@2`, `sketch.text_key@2` (Fast); `sketch.minhash_compat@3` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@4` (Standard, runs only on documents with a scanned page or a page needing OCR) |
 | `items` (default) | quail-items | `item.lines@5` (CPV categories from Standard) |
 | `summary` (default) | quail-summary | `summary.card@2`, `summary.extractive@2`, `summary.outline@1` (finalizers); `summary.digest@1` is in the crate, not registered by default |
 | `ocr` | quail-ocr | `ocr.pages@1` (Deep only; PP-OCRv6 on ONNX Runtime, native, not default) and `quail models` |
