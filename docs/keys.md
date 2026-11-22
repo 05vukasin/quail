@@ -7,7 +7,7 @@ Every step and every fact key of the default `quail` build (features: `docx`, `p
 declares it. Value types and the fields of record values are named in each entry; the
 value encoding is described in [concepts.md](concepts.md#3-values). `quail keys PREFIX`
 prints the same list for your own build. A build with `--features ocr` adds the step
-`ocr.pages@1` (profile `deep`) and the `ocr.*` keys (`ocr.pages`, `ocr.chars`, `ocr.mean_conf`,
+`ocr.pages@2` (profile `deep`) and the `ocr.*` keys (`ocr.pages`, `ocr.chars`, `ocr.mean_conf`,
 `ocr.script`, `ocr.page`), documented in `crates/quail-ocr/README.md`.
 
 Namespaces: [`engine`](#engine) · [`hash`](#hash) · [`docx`](#docx) · [`pdf`](#pdf) · [`text`](#text) · [`signal`](#signal) · [`ref`](#ref) · [`party`](#party) · [`clause`](#clause) · [`sketch`](#sketch) · [`item`](#item) · [`summary`](#summary)

@@ -158,7 +158,7 @@ stored as Latin look-alike letters). The PDF extractor marks such pages (`needs_
 page, `pdf.pages_needing_ocr` and `pdf.is_scanned` in the record), so you can find them
 without OCR.
 
-OCR (`ocr.pages@1`, PP-OCRv6 on ONNX Runtime, with a second recognizer for Serbian Cyrillic)
+OCR (`ocr.pages@2`, PP-OCRv6 on ONNX Runtime, with a second recognizer for Serbian Cyrillic)
 is in the `quail` binary behind the non-default cargo feature `ocr`. ONNX Runtime is a native
 library: the `ort` build script downloads prebuilt binaries (Linux x64/arm64, macOS arm64,
 Windows). The models (7 files, about 45 MiB, Apache-2.0) are downloaded separately and every
@@ -177,8 +177,8 @@ OCR the same facts come back (excerpt):
 ```console
 $ quail inspect scans/scanned-amendment.pdf --profile deep --timeout 15m
 status   ok
-steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 µs), sketch.page_phash@4 (50.6 ms), ocr.pages@1 (5.87 s), ...
-  ocr.page       {page=0 script="latin" mean_conf=0.9931 chars=974 lines=22 dpi=200 source="embedded_scan" rotation=0}  conf 0.99  src ocr.pages@1  at p1
+steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 µs), sketch.page_phash@4 (50.6 ms), ocr.pages@2 (5.87 s), ...
+  ocr.page       {page=0 script="latin" mean_conf=0.9931 chars=974 lines=22 dpi=200 source="embedded_scan" rotation=0}  conf 0.99  src ocr.pages@2  at p1
   pdf.is_scanned           true  src pdf.extract@2
   signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@5  at p1 body [775..802] box(72,333,258,343)
 ```

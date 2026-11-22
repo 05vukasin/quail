@@ -197,7 +197,7 @@ default: `docx`, `pdf`, `text`, `signals`, `refs`, `parties`, `clauses`, `sketch
 
 | feature | effect |
 |---|---|
-| `ocr` | OCR of pages that need it (`ocr.pages@1`, only under `--profile deep`) and the `quail models` command. Links ONNX Runtime (prebuilt binaries downloaded by the `ort` build script) and an HTTPS client for the model download |
+| `ocr` | OCR of pages that need it (`ocr.pages@2`, only under `--profile deep`) and the `quail models` command. Links ONNX Runtime (prebuilt binaries downloaded by the `ort` build script) and an HTTPS client for the model download |
 | `zstd` | `scan --zstd`; links the C zstd library |
 
 `quail version` lists the features of the binary at hand. The LLM summary (`quail-summary`'s
