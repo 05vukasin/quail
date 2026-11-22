@@ -711,6 +711,11 @@ fn no_pages_no_extension() {
 
 /// A file whose deadline would pass while it waits for a permit gets the wait added, up to
 /// the cap, and still reads its pages.
+///
+/// No `page_time`, so nothing but the wait can move the deadline. The permit is held 5 s,
+/// past the 4 s file deadline: without the wait credited, OCR would give up at about 2 s
+/// (deadline minus the 2 s reserve). With it, the deadline moves by about the wait, and the
+/// 2 s reserve leaves the two 10 ms pages a wide margin even on a slow runner.
 #[test]
 fn waiting_for_a_permit_extends_the_deadline() {
     let permits = Arc::new(OcrPermits::new(1));
@@ -719,34 +724,37 @@ fn waiting_for_a_permit_extends_the_deadline() {
             Factory::slow(0.0, Duration::from_millis(10)),
             1,
             OcrConfig {
-                page_time: Some(Duration::from_millis(100)),
+                page_time: None,
                 ..OcrConfig::default()
             },
         )
         .with_permits(permits.clone()),
     );
     let limits = Limits {
-        timeout: Duration::from_secs(1),
-        max_timeout: Duration::from_secs(30),
+        timeout: Duration::from_secs(4),
+        max_timeout: Duration::from_mins(1),
         ..Limits::default()
     };
     let held = permits.acquire(permits.ticket(), None).ok();
     let start = Instant::now();
+    let base = start + limits.timeout;
+    let cap = start + limits.max_timeout;
     let t = {
         let (a, limits) = (a.clone(), limits.clone());
-        std::thread::spawn(move || {
-            let d = (start + limits.timeout, start + limits.max_timeout);
-            run_tiny_until(&a, 2, &limits, Some(d))
-        })
+        std::thread::spawn(move || run_tiny_until(&a, 2, &limits, Some((base, cap))))
     };
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(Duration::from_secs(5));
     drop(held);
     let (out, end) = t
         .join()
         .unwrap_or_else(|_| panic!("analyzer thread panicked"));
     assert_eq!(int(&out, &keys::PAGES), Some(2), "{:?}", out.problems);
     assert!(out.problems.is_empty(), "{:?}", out.problems);
-    assert!(end.unwrap() > start + Duration::from_millis(1500));
+    // Moved by the wait (5 s, less however late the analyzer thread started), never past
+    // the cap.
+    let end = end.unwrap();
+    assert!(end >= base + Duration::from_secs(4), "{:?}", end - start);
+    assert!(end <= cap, "{:?}", end - start);
 }
 
 /// A file timeout of 2 s with pages of 200 ms: OCR keeps the last second (half the timeout,

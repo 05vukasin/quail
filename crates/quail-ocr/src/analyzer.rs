@@ -462,9 +462,9 @@ impl Clock {
             return Some(self.reserve_problem(read));
         }
         if self.until.is_some_and(|u| now >= u) {
-            let secs = self.allowed.map_or(0, |a| a.as_secs());
             return Some(format!(
-                "ocr: time budget of {secs} s for {} pages spent after {read} pages (page_time)",
+                "ocr: time budget of {} for {} pages spent after {read} pages (page_time)",
+                human(self.allowed.unwrap_or_default()),
                 self.pages
             ));
         }
@@ -473,10 +473,21 @@ impl Clock {
 
     fn reserve_problem(&self, read: usize) -> String {
         format!(
-            "ocr: stopped after {read} of {} pages to keep {} s of the file timeout for the steps after it",
+            "ocr: stopped after {read} of {} pages to keep {} before the file deadline for the steps after it",
             self.pages,
-            self.reserve.as_secs()
+            human(self.reserve)
         )
+    }
+}
+
+/// `18 s`, `1.5 s`, `500 ms`: a reserve or budget below a second must not read as `0 s`.
+fn human(d: Duration) -> String {
+    if d.subsec_nanos() == 0 {
+        format!("{} s", d.as_secs())
+    } else if d >= Duration::from_secs(1) {
+        format!("{:.1} s", d.as_secs_f64())
+    } else {
+        format!("{} ms", d.as_millis())
     }
 }
 
@@ -672,4 +683,19 @@ fn effective_dpi(img: &Image, size_pt: Option<(f32, f32)>) -> Option<f32> {
 )]
 fn scaled_side(img: &Image, s: f32) -> u32 {
     ((img.width.max(img.height) as f32 * s).floor() as u32).max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_in_problems_never_read_as_zero() {
+        assert_eq!(human(Duration::from_secs(18)), "18 s");
+        assert_eq!(human(Duration::from_millis(1500)), "1.5 s");
+        assert_eq!(human(Duration::from_millis(500)), "500 ms");
+        assert_eq!(human(Duration::from_millis(3)), "3 ms");
+        // The reserve of a 1 s timeout is half of it.
+        assert_eq!(human(reserve(Duration::from_secs(1))), "500 ms");
+    }
 }
