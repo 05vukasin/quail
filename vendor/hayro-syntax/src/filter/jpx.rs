@@ -17,23 +17,72 @@ impl ImageColorSpace {
     }
 }
 
-/// quail: the image size in the JPEG 2000 codestream's SIZ marker fits the caps, checked
-/// before the decoder allocates. The marker follows SOC (`FF4F FF51`), inside a `jp2c` box for
-/// JP2 files. No SIZ found: refuse.
-pub(crate) fn header_fits(data: &[u8], limits: &crate::budget::DecodeLimits<'_>) -> bool {
-    let Some(at) = data.windows(4).position(|w| w == [0xFF, 0x4F, 0xFF, 0x51]) else {
-        return false;
-    };
-    let Some(siz) = data.get(at + 4..at + 4 + 38) else {
-        return false;
-    };
+/// quail: JP2 file signature box, as hayro-jpeg2000 recognizes it.
+const JP2_MAGIC: &[u8] = b"\x00\x00\x00\x0C\x6A\x50\x20\x20";
+/// quail: SOC followed by SIZ: the start of every codestream.
+const SOC_SIZ: &[u8] = &[0xFF, 0x4F, 0xFF, 0x51];
+/// quail: the contiguous codestream box type, `jp2c`.
+const JP2C: u32 = 0x6A70_3263;
+
+/// quail: the image sizes the decoder will read fit the caps, checked before it allocates.
+/// The data is read the way hayro-jpeg2000 reads it: a raw codestream starts with SOC + SIZ;
+/// a JP2 file is a sequence of top-level boxes (lenient lengths: 0 = to the end, 1 = 64-bit
+/// length, a length past the end takes the rest), and the decoder parses every `jp2c` box,
+/// so the SIZ at the start of every one must fit. A SIZ found anywhere else (a `uuid` or
+/// `xml` box) is not what gets decoded. `Some(false)`: a size over the caps; `None`: neither
+/// format, or a `jp2c` box without SOC + SIZ (corrupt, not a limit).
+pub(crate) fn header_fits(data: &[u8], limits: &crate::budget::DecodeLimits<'_>) -> Option<bool> {
+    if data.starts_with(SOC_SIZ) {
+        return siz_fits(data, limits);
+    }
+    if !data.starts_with(JP2_MAGIC) {
+        return None;
+    }
+    let be32 = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+    let mut rest = data;
+    let mut codestreams = 0usize;
+    while rest.len() >= 8 {
+        let (l_box, t_box) = (be32(&rest[..4]), be32(&rest[4..8]));
+        let (header, len) = match l_box {
+            0 => (8, rest.len() - 8),
+            1 => {
+                let Some(xl) = rest.get(8..16) else { break };
+                let xl =
+                    u64::from_be_bytes([xl[0], xl[1], xl[2], xl[3], xl[4], xl[5], xl[6], xl[7]]);
+                let Some(len) = xl.checked_sub(16) else { break };
+                (16, usize::try_from(len).unwrap_or(usize::MAX))
+            }
+            // Lengths 2..=7 make the decoder stop reading boxes.
+            l if l < 8 => break,
+            l => (8, (l - 8) as usize),
+        };
+        let body = &rest[header..];
+        let len = len.min(body.len());
+        if t_box == JP2C {
+            codestreams += 1;
+            match siz_fits(&body[..len], limits) {
+                Some(true) => {}
+                other => return other,
+            }
+        }
+        rest = &body[len..];
+    }
+    (codestreams > 0).then_some(true)
+}
+
+/// quail: the SIZ marker at the start of `codestream` (after SOC) fits the caps.
+fn siz_fits(codestream: &[u8], limits: &crate::budget::DecodeLimits<'_>) -> Option<bool> {
+    if !codestream.starts_with(SOC_SIZ) {
+        return None;
+    }
+    let siz = codestream.get(4..4 + 38)?;
     let be32 = |o: usize| u32::from_be_bytes([siz[o], siz[o + 1], siz[o + 2], siz[o + 3]]);
     // Lsiz(2) Rsiz(2) Xsiz Ysiz XOsiz YOsiz XTsiz YTsiz XTOsiz YTOsiz Csiz(2)
     let w = be32(4).saturating_sub(be32(12));
     let h = be32(8).saturating_sub(be32(16));
     let comps = u64::from(u16::from_be_bytes([siz[36], siz[37]]));
     // Decoders keep samples wider than a byte: charge 4 bytes per sample.
-    comps > 0 && limits.image_fits(w, h, comps.saturating_mul(4))
+    Some(comps > 0 && limits.image_fits(w, h, comps.saturating_mul(4)))
 }
 
 pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {

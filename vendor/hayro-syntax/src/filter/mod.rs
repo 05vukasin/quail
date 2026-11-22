@@ -126,8 +126,13 @@ impl Filter {
             }
             #[cfg(feature = "images")]
             Self::JpxDecode => {
-                if !jpx::header_fits(data, limits) {
-                    return refuse_image();
+                match jpx::header_fits(data, limits) {
+                    // quail: the dictionary's size too, as for the other image filters.
+                    _ if !declared_fits() => return refuse_image(),
+                    Some(false) => return refuse_image(),
+                    // quail: neither a codestream nor a JP2 file with one: corrupt.
+                    None => return Err(DecodeFailure::ImageDecode),
+                    Some(true) => {}
                 }
                 jpx::decode(data, image_params).ok_or(DecodeFailure::ImageDecode)
             }

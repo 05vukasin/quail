@@ -55,14 +55,18 @@ The crate using them (`quail-pdf`) cannot do that from outside.
   - Data filters (Flate, LZW, ASCIIHex, ASCII85, RunLength) stop just past the cap; a longer
     result is refused and flagged.
   - Image filters (DCT, CCITT, JBIG2, JPX) must fit the pixel and byte caps, as declared by
-    the image dictionary, before their decoders run.
+    the image dictionary, before their decoders run (JPX too since the codestream-box fix).
 - **`filter/lzw_flate.rs`, `filter/run_length.rs`, `filter/ascii_85.rs`:** output caps and
   capped, fallible growth inside the decode loops: flate2 read in 64 KiB chunks, the pdf.js
   fallback, LZW, RunLength, and ASCII85 `z`.
 - **`filter/dct.rs`:** `header_fits` checks the frame size in the JPEG SOF marker. A stream
   without an SOF is refused as corrupt (not as a limit).
-- **`filter/jpx.rs`:** `header_fits` checks the image size in the JPEG 2000 SIZ marker. A
-  stream without one is refused.
+- **`filter/jpx.rs`:** `header_fits` checks the image size in the JPEG 2000 SIZ marker of
+  every codestream the decoder will parse: a raw codestream (SOC + SIZ at the start), or every
+  `jp2c` box of a JP2 file, walking the top-level boxes with the decoder's lenient length
+  rules. A SIZ elsewhere (a decoy in a `uuid` or `xml` box) is not what gets decoded. Data that
+  is neither format, or a `jp2c` box without SOC + SIZ, is refused as corrupt (not as a
+  limit).
 - **`filter/jbig2.rs`:** the JBIG2 page size (from the data, not the dictionary) must fit
   before the 8-bit output is allocated.
 - **`filter/ccitt.rs`:** columns × rows must fit; when the row count is unknown, rows stop at
