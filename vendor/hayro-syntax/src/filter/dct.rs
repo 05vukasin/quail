@@ -89,6 +89,17 @@ pub(crate) fn decode(
         out_colorspace = ColorSpace::RGB;
     }
 
+    // quail: a reduced decode (scaled IDCT) when the caller asked for a target size at most
+    // half the frame. Falls through to the full decode below whenever it does not apply.
+    #[cfg(feature = "std")]
+    if let Some(target) = image_params.target_dimension
+        && let Some(components) = decoder.info().map(|i| i.components)
+        && let Some(reduced) =
+            decode_reduced(&data, input_color_space, out_colorspace, components, target)
+    {
+        return Some(reduced);
+    }
+
     decoder.set_options(DecoderOptions::default().jpeg_set_out_colorspace(out_colorspace));
     let mut decoded = decoder.decode().ok()?;
 
@@ -124,6 +135,93 @@ pub(crate) fn decode(
     Some(FilterResult {
         data: Cow::Owned(decoded),
         image_data: Some(image_data),
+    })
+}
+
+/// quail: the IDCT scale (output pixels per 8 input pixels: 1, 2 or 4) for a `w` × `h` frame
+/// reduced towards `target`: the smallest whose output is still at least `target` in both
+/// dimensions. `None` when no scale below 8 (full size) gets there, or when the frame is
+/// smaller than 16 px on a side (nothing to gain, and rounding could make the output smaller
+/// than asked for).
+pub(crate) fn reduced_scale(w: u32, h: u32, target: (u32, u32)) -> Option<u32> {
+    if w.min(h) < 16 {
+        return None;
+    }
+    [1u32, 2, 4]
+        .into_iter()
+        .find(|&k| (w * k).div_ceil(8) >= target.0 && (h * k).div_ceil(8) >= target.1)
+}
+
+/// quail: decodes `data` at 1/2, 1/4 or 1/8 of its size with jpeg-decoder's scaled IDCT
+/// (zune-jpeg has none). The IDCT then produces only the output pixels, so time and memory of
+/// everything after entropy decoding fall with the square of the scale, and for baseline JPEGs
+/// the frame-sized planes are never allocated. The color handling follows the full decode in
+/// [`decode`] (`out_colorspace` was chosen there from zune-jpeg's reading of the headers and the
+/// PDF's `/ColorTransform`); only gray and three-component output is reduced. Everything else
+/// (CMYK, YCCK, multi-band, 12-bit, lossless), and any jpeg-decoder failure, returns `None` so
+/// that the caller decodes at full size exactly as before.
+#[cfg(feature = "std")]
+fn decode_reduced(
+    data: &[u8],
+    input: ColorSpace,
+    out: ColorSpace,
+    components: u8,
+    target: (u32, u32),
+) -> Option<FilterResult<'static>> {
+    use jpeg_decoder::{ColorTransform, Decoder, PixelFormat};
+
+    let (transform, channels, color_space) = match (components, input, out) {
+        (1, ColorSpace::Luma, ColorSpace::Luma) => {
+            (ColorTransform::Grayscale, 1, ImageColorSpace::Gray)
+        }
+        (3, ColorSpace::YCbCr, ColorSpace::RGB) => (ColorTransform::YCbCr, 3, ImageColorSpace::Rgb),
+        (3, ColorSpace::RGB, ColorSpace::RGB) => (ColorTransform::RGB, 3, ImageColorSpace::Rgb),
+        // `/ColorTransform 0`: the samples as stored, untransformed.
+        (3, ColorSpace::YCbCr, ColorSpace::YCbCr) => {
+            (ColorTransform::None, 3, ImageColorSpace::Rgb)
+        }
+        _ => return None,
+    };
+    let mut decoder = Decoder::new(data);
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    let expected = if channels == 1 {
+        PixelFormat::L8
+    } else {
+        PixelFormat::RGB24
+    };
+    if info.pixel_format != expected || info.coding_process == jpeg_decoder::CodingProcess::Lossless
+    {
+        return None;
+    }
+    let (w, h) = (u32::from(info.width), u32::from(info.height));
+    let k = reduced_scale(w, h, target)?;
+    let (ow, oh) = ((w * k).div_ceil(8), (h * k).div_ceil(8));
+    let scaled = decoder
+        .scale(u16::try_from(ow).ok()?, u16::try_from(oh).ok()?)
+        .ok()?;
+    if (u32::from(scaled.0), u32::from(scaled.1)) != (ow, oh) {
+        return None;
+    }
+    decoder.set_color_transform(transform);
+    // The output buffer is exactly the reduced image; refuse anything larger.
+    let len = (ow as usize)
+        .checked_mul(oh as usize)?
+        .checked_mul(channels)?;
+    decoder.set_max_decoding_buffer_size(len);
+    let decoded = decoder.decode().ok()?;
+    if decoded.len() != len {
+        return None;
+    }
+    Some(FilterResult {
+        data: Cow::Owned(decoded),
+        image_data: Some(ImageData {
+            alpha: None,
+            color_space: Some(color_space),
+            bits_per_component: 8,
+            width: ow,
+            height: oh,
+        }),
     })
 }
 

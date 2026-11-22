@@ -295,10 +295,12 @@ impl PageRaster for PdfRaster {
     }
 
     /// [`PageRaster::embedded_scan`] at a reduced resolution. JPEG 2000 scans are decoded at
-    /// the smallest resolution level whose longer side is still at least `max_side` (time and
-    /// memory fall with the square of the scale); every other filter (DCT, JBIG2, CCITT,
-    /// Flate, ...) decodes at full size, as `embedded_scan` does. Palette JPEG 2000 images
-    /// decode at full size too (hayro cannot reduce them).
+    /// the smallest resolution level whose longer side is still at least `max_side`; JPEG (DCT)
+    /// scans at the smallest IDCT scale (1/8, 1/4 or 1/2) whose output is still at least the
+    /// requested size in both dimensions. Memory (and the work after entropy decoding) falls
+    /// with the square of the scale. Every other filter (JBIG2, CCITT, Flate, ...) decodes at
+    /// full size, as `embedded_scan` does, and so do palette JPEG 2000 images (hayro cannot
+    /// reduce them) and CMYK, YCCK, 12-bit or lossless JPEGs.
     fn embedded_scan_reduced(
         &self,
         page: u32,
@@ -364,7 +366,8 @@ impl PdfRaster {
 /// The target size hayro's decoders get for a reduced decode of a `w` × `h` image: the image
 /// scaled so that its longer side is `max_side`, rounded up; `None` when it is no larger.
 /// hayro's JPEG 2000 decoder skips `⌊log2(w / tw)⌋` or `⌊log2(h / th)⌋` resolution levels,
-/// whichever is smaller, which keeps the longer side at or above `max_side`.
+/// whichever is smaller, which keeps the longer side at or above `max_side`; its DCT decoder
+/// takes the smallest IDCT scale whose output covers the target in both dimensions.
 fn reduced_target(w: u32, h: u32, max_side: u32) -> Option<(u32, u32)> {
     let long = w.max(h);
     if max_side == 0 || long <= max_side {
