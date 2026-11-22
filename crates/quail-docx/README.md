@@ -48,7 +48,7 @@ is kept); notes about the file are warnings.
 |---|---|
 | zip entries | 20 000, read from the EOCD / ZIP64 record before the directory is parsed (`LimitExceeded`) |
 | entry names | absolute, `..`, drive letter, backslash, control characters: ignored (warning); exact repeats: the last is read, case variants: the first (counted in `duplicate_entries`) |
-| inflated bytes | the bytes parts **actually** inflate to, against `max_decompressed` for the whole file; declared sizes never trusted |
+| inflated bytes | the bytes parts **actually** inflate to, against `max_decompressed` for the whole file; declared sizes never trusted. The body is read before footnotes, endnotes and comments, so they cannot starve it; every part left without budget is named in a problem |
 | one XML event | remaining text budget + 1 MiB, at most 17 MiB (a huge text node is not buffered whole) |
 | sections | `max_pages`: the body stops after that many section ends |
 | text | `max_text_bytes`: every byte of page text is charged, separators and numbering labels included (labels at most 32 chars) |

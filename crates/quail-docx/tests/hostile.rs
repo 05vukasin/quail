@@ -330,15 +330,89 @@ fn forged_directory_counts_are_refused_before_parsing() {
 fn deadline_applies_inside_a_skipped_subtree() {
     let body = format!(
         "<w:p><w:r><mc:AlternateContent><mc:Fallback>{}</mc:Fallback></mc:AlternateContent></w:r></w:p>",
-        "<w:p/>".repeat(5_000_000)
+        "<w:p/>".repeat(2_000_000)
     );
     let bytes = Docx::new(&body).build();
-    let mut out =
-        Emitter::with_deadline(quail_docx::ID, Instant::now() + Duration::from_millis(30));
+    // Timed against a run without a deadline on the same machine, so a loaded machine slows
+    // both: the deadline is a tenth of the full skip, and the run must stop well before the
+    // full skip would end.
+    let t = Instant::now();
+    let _ = DocxExtractor.extract(
+        &Blob::from(bytes.clone()),
+        &Limits::default(),
+        &mut Emitter::new(quail_docx::ID),
+    );
+    let full = t.elapsed();
+    let mut out = Emitter::with_deadline(quail_docx::ID, Instant::now() + full / 10);
     let t = Instant::now();
     let _ = DocxExtractor.extract(&Blob::from(bytes), &Limits::default(), &mut out);
     let elapsed = t.elapsed();
     let w = problems(out);
     assert!(w.iter().any(|w| w.contains("deadline")), "{w:?}");
-    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    assert!(
+        elapsed < full / 2,
+        "{elapsed:?} with a deadline, {full:?} without"
+    );
+}
+
+/// `n` comments of about 1 KB each.
+fn big_comments(n: usize) -> String {
+    let filler = "invented comment filler ".repeat(40);
+    let mut inner = String::new();
+    for i in 0..n {
+        inner.push_str(&format!(
+            r#"<w:comment w:id="{i}" w:author="A"><w:p><w:r><w:t>{filler}</w:t></w:r></w:p></w:comment>"#
+        ));
+    }
+    wpart("comments", &inner)
+}
+
+#[test]
+fn a_huge_comments_part_does_not_starve_the_body() {
+    let bytes = Docx::new(&p("The invented body sentence stays."))
+        .related("rId1", "comments", "comments.xml", &big_comments(3_000))
+        .build();
+    let limits = Limits {
+        max_decompressed: 1 << 20,
+        ..Limits::default()
+    };
+    let (doc, w, _) = run(bytes, &limits);
+    assert!(
+        texts_of(&doc)
+            .iter()
+            .any(|t| t.contains("invented body sentence")),
+        "{w:?}"
+    );
+    assert!(
+        w.iter()
+            .any(|w| w.contains("comments.xml") && w.contains("decompression budget")),
+        "{w:?}"
+    );
+}
+
+#[test]
+fn a_body_left_without_budget_is_a_problem_naming_it() {
+    // The styles are read before the body and take the whole budget.
+    let styles = wpart(
+        "styles",
+        &format!(
+            r#"<w:style w:type="paragraph" w:styleId="S"><w:name w:val="{}"/></w:style>"#,
+            "s".repeat(2 << 20)
+        ),
+    );
+    let bytes = Docx::new(&p("The invented body sentence."))
+        .related("rId1", "styles", "styles.xml", &styles)
+        .build();
+    let limits = Limits {
+        max_decompressed: 1 << 20,
+        ..Limits::default()
+    };
+    let (_, out) = extract_with(bytes, &limits);
+    let problems = problems(out);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("document.xml") && p.contains("decompression budget")),
+        "{problems:?}"
+    );
 }

@@ -195,6 +195,11 @@ pub(crate) fn parse_part(
     warn: &mut Notes,
 ) -> (Parsed, Option<Stop>) {
     let Some(reader) = pkg.open_part(part) else {
+        // An earlier part spent the budget: say which part got nothing, it may be the body.
+        if pkg.exhausted() {
+            warn.stop(&Stop::Budget, part);
+            return (Parsed::default(), Some(Stop::Budget));
+        }
         return (Parsed::default(), None);
     };
     // One text node may not be much larger than what the text budget still takes.

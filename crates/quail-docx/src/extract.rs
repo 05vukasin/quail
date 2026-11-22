@@ -124,7 +124,28 @@ pub(crate) fn run(
     };
     add_domains(&doc_rels, &mut domains);
 
-    // Notes and comments first: the body refers to them by id.
+    // The body first: it is what the file is for, so it gets the decompression and text
+    // budgets before notes and comments (the assembler resolves their ids later).
+    let mut counters = Counters::default();
+    let (body, stop) = if timed_out || out.check_deadline().is_err() {
+        timed_out = true;
+        (Parsed::default(), None)
+    } else {
+        parse_part(
+            &mut pkg,
+            &main,
+            Mode::Body,
+            &styles,
+            &numbering,
+            &mut counters,
+            &mut shared,
+            out,
+            warn,
+        )
+    };
+    timed_out |= stop == Some(Stop::Timeout);
+
+    // Notes and comments, which the body refers to by id.
     let notes = |pkg: &mut Package<'_>,
                  kind: &str,
                  shared: &mut Shared,
@@ -203,26 +224,6 @@ pub(crate) fn run(
     let footnotes = by_id(footnotes);
     let endnotes = by_id(endnotes);
     let comments = by_id(comments);
-
-    // The body.
-    let mut counters = Counters::default();
-    let (body, stop) = if timed_out || out.check_deadline().is_err() {
-        timed_out = true;
-        (Parsed::default(), None)
-    } else {
-        parse_part(
-            &mut pkg,
-            &main,
-            Mode::Body,
-            &styles,
-            &numbering,
-            &mut counters,
-            &mut shared,
-            out,
-            warn,
-        )
-    };
-    timed_out |= stop == Some(Stop::Timeout);
 
     // Sections to pages.
     let mut asm = Assembler {

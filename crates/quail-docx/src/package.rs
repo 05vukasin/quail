@@ -134,6 +134,11 @@ impl<'a> Package<'a> {
         })
     }
 
+    /// The decompression budget is spent: no part opens any more.
+    pub fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
     /// Number of entries in the zip directory (all of them, rejected ones included).
     pub fn entry_count(&self) -> usize {
         self.zip.len()
@@ -227,24 +232,26 @@ impl Read for PartReader<'_, '_> {
 /// Entry count and central directory size declared by the end-of-central-directory record
 /// (and the ZIP64 record when present), read without parsing the directory.
 fn declared_entries(b: &[u8]) -> Option<(u64, u64)> {
+    // Offsets come from the file (the ZIP64 locator holds a u64): never add unchecked.
+    let at = |i: usize, n: usize| i.checked_add(n).and_then(|end| b.get(i..end));
     let u16_at = |i: usize| {
-        b.get(i..i + 2)
+        at(i, 2)
             .and_then(|x| <[u8; 2]>::try_from(x).ok())
             .map(|x| u64::from(u16::from_le_bytes(x)))
     };
     let u32_at = |i: usize| {
-        b.get(i..i + 4)
+        at(i, 4)
             .and_then(|x| <[u8; 4]>::try_from(x).ok())
             .map(|x| u64::from(u32::from_le_bytes(x)))
     };
     let u64_at = |i: usize| {
-        b.get(i..i + 8)
+        at(i, 8)
             .and_then(|x| <[u8; 8]>::try_from(x).ok())
             .map(u64::from_le_bytes)
     };
     let lowest = b.len().saturating_sub(22 + 0xFFFF);
     let mut i = b.len().checked_sub(22)?;
-    while b.get(i..i + 4)? != [0x50, 0x4b, 0x05, 0x06] {
+    while at(i, 4)? != [0x50, 0x4b, 0x05, 0x06] {
         if i <= lowest {
             return None;
         }
@@ -253,12 +260,12 @@ fn declared_entries(b: &[u8]) -> Option<(u64, u64)> {
     let mut count = u16_at(i + 10)?;
     let mut size = u32_at(i + 12)?;
     if let Some(loc) = i.checked_sub(20)
-        && b.get(loc..loc + 4) == Some(&[0x50, 0x4b, 0x06, 0x07][..])
+        && at(loc, 4) == Some(&[0x50, 0x4b, 0x06, 0x07][..])
         && let Some(off) = u64_at(loc + 8).and_then(|o| usize::try_from(o).ok())
-        && b.get(off..off + 4) == Some(&[0x50, 0x4b, 0x06, 0x06][..])
+        && at(off, 4) == Some(&[0x50, 0x4b, 0x06, 0x06][..])
     {
-        count = count.max(u64_at(off + 32)?);
-        size = size.max(u64_at(off + 40)?);
+        count = count.max(u64_at(off.checked_add(32)?)?);
+        size = size.max(u64_at(off.checked_add(40)?)?);
     }
     Some((count, size))
 }
@@ -376,5 +383,18 @@ mod tests {
         );
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%4"), "%4");
+    }
+
+    #[test]
+    fn a_zip64_locator_pointing_past_the_address_space_is_ignored() {
+        for off in [u64::MAX, u64::MAX - 3, u64::MAX - 35] {
+            // ZIP64 end-of-central-directory locator, then an empty end-of-central-directory.
+            let mut b = vec![0x50, 0x4b, 0x06, 0x07, 0, 0, 0, 0];
+            b.extend_from_slice(&off.to_le_bytes());
+            b.extend_from_slice(&1u32.to_le_bytes());
+            b.extend_from_slice(&[0x50, 0x4b, 0x05, 0x06]);
+            b.extend_from_slice(&[0; 18]);
+            assert_eq!(declared_entries(&b), Some((0, 0)));
+        }
     }
 }

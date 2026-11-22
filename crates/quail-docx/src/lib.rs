@@ -30,9 +30,10 @@
 //! Zip entry count (at most 20 000, read from the end-of-central-directory record before the
 //! directory is parsed), unsafe entry names (ignored), and the bytes every part *actually*
 //! inflates to, counted against [`Limits::max_decompressed`](quail_core::Limits) for the
-//! whole file; declared sizes are never trusted. `max_pages` stops the body after that many
-//! sections; `max_text_bytes` is charged for every byte of page text (labels and separators
-//! included); one XML event may not exceed the remaining text budget plus 1 MiB; at most
+//! whole file; declared sizes are never trusted. The body is read before notes and comments,
+//! and a part left without budget is named in a problem. `max_pages` stops the body after
+//! that many sections; `max_text_bytes` is charged for every byte of page text (labels and
+//! separators included); one XML event may not exceed the remaining text budget plus 1 MiB; at most
 //! 250 000 items per file. The deadline is checked every 2048 XML events, skipped subtrees
 //! included. Stopping short is reported with `Emitter::problem`; malformed XML ends only its
 //! part.
