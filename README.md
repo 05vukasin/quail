@@ -83,19 +83,19 @@ format   pdf (application/pdf)   size 37.1 kB   pages 1
 status   ok
 
 [ref] 5 fact(s)
-  ref.instrument_kind  "amendment"  conf 0.80  src ref.references@2  at p1 body [0..38] box(72,86,444,121)
-  ref.cites            {kind="msa" relation="amends" raw="114/23" key="11423" date=2023-03-03}  conf 0.75  src ref.references@2  at p1 body [328..383] box(72,130,543,201)
+  ref.instrument_kind  "amendment"  conf 0.80  src ref.references@3  at p1 body [0..38] box(72,86,444,121)
+  ref.cites            {kind="msa" relation="amends" raw="114/23" key="11423" date=2023-03-03}  conf 0.75  src ref.references@3  at p1 body [328..383] box(72,130,543,201)
 
 [party] 5 fact(s)
-  party.candidates  2 record(s)  src party.candidates@3
+  party.candidates  2 record(s)  src party.candidates@4
                       - {key="northwind logistics" surface="Northwind Logistics Ltd" score=0.99 roles=["customer", "signatory"]}
                       - {key="blue river software" surface="Blue River Software GmbH" score=0.99 roles=["supplier", "signatory"]}
 
 [signal] 9 fact(s)
-  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@3  at p1 body [775..802] box(72,280,528,344)
-  signal.amount       4200.00 EUR  conf 0.97  src signal.scan@3  at p1 body [661..673] box(72,280,528,344)
-  signal.date_signed  2023-09-12  conf 0.82  src signal.scan@3  at p1 body [110..127] box(72,130,543,201)
-  signal.date_expiry  2026-12-31  conf 0.78  src signal.scan@3  at p1 body [884..900] box(72,359,531,408)
+  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@4  at p1 body [775..802] box(72,280,528,344)
+  signal.amount       4200.00 EUR  conf 0.97  src signal.scan@4  at p1 body [661..673] box(72,280,528,344)
+  signal.date_signed  2023-09-12  conf 0.82  src signal.scan@4  at p1 body [110..127] box(72,130,543,201)
+  signal.date_expiry  2026-12-31  conf 0.78  src signal.scan@4  at p1 body [884..900] box(72,359,531,408)
 
 [clause] 1 fact(s)
   clause.governing_law  {jurisdiction="England and Wales" code="GB-EAW" raw="laws of England and Wales" basis="laws_of"}  conf 0.97  src clause.terms@1  at p1 [1013..1038]
