@@ -18,7 +18,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 
 | step | kind | formats | profile | what it does |
 |---|---|---|---|---|
-| `engine.sniff@1` | engine | any | fast | Format and MIME type from the bytes (magic numbers, ZIP directory). |
+| `engine.sniff@2` | engine | any | fast | Format and MIME type from the bytes (magic numbers, ZIP directory). |
 | `engine.dedup@1` | engine | any | - | `scan --dedup` only: a file whose bytes were already analyzed in the run reuses that record (`engine.duplicate_of`). |
 | `hash.identity@1` | analyzer | any | fast | BLAKE3 and XXH3-128 of the whole file, FastCDC chunk hashes. |
 | `docx.extract@1` | extractor | docx | fast | Streaming OOXML reader: sections as logical pages, zones, properties, rsids. |
