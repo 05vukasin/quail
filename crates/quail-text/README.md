@@ -56,7 +56,10 @@ PDF and DOCX.
   header/footer inference).
 - **Limits**: reads at most `max_bytes` (and at most 2 × `max_text_bytes` + 4), keeps at most
   `max_text_bytes` (cut on a char boundary), at most `max_pages` pages: each is a `problem`. Deadline
-  checked per page and every 4096 blocks.
+  checked per page and every 4096 blocks. Only the kept text is decoded (`decode::decode_prefix`,
+  streaming for UTF-16 and legacy encodings) and it is held once, twice while a text with form
+  feeds is split into pages: a 100 MB Windows-1251 file peaks at 105 MB above its own bytes
+  (461 MB before).
 
 ## Analyzers
 

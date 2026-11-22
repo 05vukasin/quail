@@ -17,18 +17,18 @@
 //!
 //! Limits: reads at most `max_bytes` (and never more than twice `max_text_bytes`, since a
 //! decoded byte is at least half a source byte), keeps at most `max_text_bytes` of text (cut
-//! at a char boundary), at most `max_pages` pages; each records a problem. Checks the
+//! at a char boundary), at most `max_pages` pages; each records a problem. Only the kept
+//! text is decoded, and it is held about once (twice while a text with form feeds is split
+//! into pages), so peak memory beyond the input stays near `max_text_bytes`. Checks the
 //! deadline per page and every 4096 blocks. All pages are `TextSource::Native`, never
 //! `needs_ocr`.
-
-use std::borrow::Cow;
 
 use quail_core::{
     AnalyzerId, Blob, Block, BlockKind, Document, Emitter, Extractor, Format, Limits, Page,
     PageKind, Result, Span, TextSource, Value, Zone,
 };
 
-use crate::decode::decode;
+use crate::decode::decode_prefix;
 use crate::keys;
 
 /// Longest heading, in characters.
@@ -76,50 +76,43 @@ impl Endings {
     }
 }
 
-/// `text` with CRLF and lone CR as LF, and the endings it had. Borrows when there is no CR.
-fn normalize_endings(text: &str) -> (Cow<'_, str>, Endings) {
-    let b = text.as_bytes();
+/// `text` with CRLF and lone CR as LF, and the endings it had. In place: the text only
+/// shrinks, so no second copy is made.
+fn normalize_endings(text: String) -> (String, Endings) {
     let mut e = Endings::default();
     // One pass counting both (clippy's `naive_bytecount` suggests a crate for one byte).
-    let (crs, lfs) = b.iter().fold((0usize, 0usize), |(r, n), &c| {
+    let (crs, lfs) = text.bytes().fold((0usize, 0usize), |(r, n), c| {
         (r + usize::from(c == b'\r'), n + usize::from(c == b'\n'))
     });
     if crs == 0 {
         e.lf = lfs;
-        return (Cow::Borrowed(text), e);
+        return (text, e);
     }
-    let mut out = String::with_capacity(text.len());
-    let mut from = 0usize;
-    let mut i = 0usize;
-    while i < b.len() {
-        if b[i] == b'\r' {
-            out.push_str(&text[from..i]);
-            out.push('\n');
-            if b.get(i + 1) == Some(&b'\n') {
+    let mut bytes = text.into_bytes();
+    let mut write = 0usize;
+    let mut read = 0usize;
+    while read < bytes.len() {
+        let byte = bytes[read];
+        if byte == b'\r' {
+            bytes[write] = b'\n';
+            if bytes.get(read + 1) == Some(&b'\n') {
                 e.crlf += 1;
-                i += 1;
+                read += 1;
             } else {
                 e.cr += 1;
             }
-            from = i + 1;
+        } else {
+            bytes[write] = byte;
         }
-        i += 1;
+        write += 1;
+        read += 1;
     }
-    out.push_str(&text[from..]);
+    bytes.truncate(write);
     e.lf = lfs - e.crlf;
-    (Cow::Owned(out), e)
-}
-
-/// The longest prefix of `s` of at most `max` bytes, on a char boundary.
-fn cut(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    // Only ASCII bytes were replaced or dropped: still UTF-8.
+    let text = String::from_utf8(bytes)
+        .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned());
+    (text, e)
 }
 
 fn span(start: usize, end: usize) -> Span {
@@ -236,7 +229,7 @@ impl Extractor for TextExtractor {
         let bytes = &all[..all.len().min(max_read)];
         let input_cut = bytes.len() < all.len();
 
-        let decoded = decode(bytes);
+        let (decoded, complete) = decode_prefix(bytes, max_text);
         out.push(
             keys::ENCODING,
             Value::text(decoded.name()),
@@ -267,33 +260,43 @@ impl Extractor for TextExtractor {
             ));
         }
 
-        let kept = cut(&decoded.text, max_text);
-        if input_cut || kept.len() < decoded.text.len() {
+        let kept_len = decoded.text.len();
+        if input_cut || !complete {
             out.problem(format!(
-                "text cut at {} bytes (max_bytes / max_text_bytes)",
-                kept.len()
+                "text cut at {kept_len} bytes (max_bytes / max_text_bytes)"
             ));
         }
-        let (text, endings) = normalize_endings(kept);
+        let (mut text, endings) = normalize_endings(decoded.text.into_owned());
         out.fact(keys::LINE_ENDINGS, Value::text(endings.label()));
 
-        let body = text.strip_suffix('\u{c}').unwrap_or(&text);
+        if text.ends_with('\u{c}') {
+            text.pop();
+        }
+        let page = |i: usize, text: String, blocks: Vec<Block>| Page {
+            text,
+            blocks,
+            text_source: TextSource::Native,
+            needs_ocr: false,
+            ..Page::new(i as u32, PageKind::Logical)
+        };
+        if !text.contains('\u{c}') {
+            // One page: the text moves into it, no copy.
+            out.check_deadline()?;
+            let blocks = blocks(&text, out)?;
+            return Ok(Document {
+                pages: vec![page(0, text, blocks)],
+            });
+        }
         let max_pages = limits.max_pages as usize;
         let mut pages = Vec::new();
-        for (i, chunk) in body.split('\u{c}').enumerate() {
+        for (i, chunk) in text.split('\u{c}').enumerate() {
             out.check_deadline()?;
             if i >= max_pages {
                 out.problem(format!("pages over max_pages ({max_pages}), rest skipped"));
                 break;
             }
             let blocks = blocks(chunk, out)?;
-            pages.push(Page {
-                text: chunk.to_owned(),
-                blocks,
-                text_source: TextSource::Native,
-                needs_ocr: false,
-                ..Page::new(i as u32, PageKind::Logical)
-            });
+            pages.push(page(i, chunk.to_owned(), blocks));
         }
         Ok(Document { pages })
     }
@@ -320,13 +323,15 @@ mod tests {
 
     #[test]
     fn endings_are_normalized_and_labelled() {
-        let (t, e) = normalize_endings("a\r\nb\rc\nd");
+        let n = |s: &str| normalize_endings(s.to_owned());
+        let (t, e) = n("a\r\nb\rc\nd");
         assert_eq!(t, "a\nb\nc\nd");
         assert_eq!(e.label(), "mixed");
-        assert_eq!(normalize_endings("a\r\nb\r\n").1.label(), "crlf");
-        assert_eq!(normalize_endings("a\rb").1.label(), "cr");
-        assert_eq!(normalize_endings("ab").1.label(), "none");
-        assert!(matches!(normalize_endings("a\nb").0, Cow::Borrowed(_)));
+        assert_eq!(n("a\r\nb\r\n").1.label(), "crlf");
+        assert_eq!(n("a\rb").1.label(), "cr");
+        assert_eq!(n("ab").1.label(), "none");
+        assert_eq!(n("a\nb").1.label(), "lf");
+        assert_eq!(n("č\r\nž\r").0, "č\nž\n");
     }
 
     #[test]
