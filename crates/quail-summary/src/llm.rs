@@ -425,6 +425,7 @@ impl Analyzer for SummaryLlm {
         self.cfg.enabled
     }
 
+    #[allow(clippy::too_many_lines)] // one step, in order: input, cache, call, record
     fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
         let card = card_of(ctx);
         if card

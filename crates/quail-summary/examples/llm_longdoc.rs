@@ -80,7 +80,7 @@ fn main() -> ExitCode {
         enabled: true,
         threads,
         map_reduce: Some(mr),
-        timeout: Duration::from_secs(240),
+        timeout: Duration::from_mins(4),
         ..LlmConfig::default()
     };
     let t = Instant::now();
