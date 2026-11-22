@@ -191,7 +191,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `clauses` (default) | quail-clauses | `clause.terms@1` |
 | `sketch` (default) | quail-sketch | `sketch.minhash@2`, `sketch.simhash_text@2`, `sketch.simhash_template@2`, `sketch.layout@2`, `sketch.invoice_layout@2`, `sketch.text_key@2` (Fast); `sketch.minhash_compat@3` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@4` (Standard, runs only on documents with a scanned page or a page needing OCR) |
 | `items` (default) | quail-items | `item.lines@5` (CPV categories from Standard) |
-| `summary` (default) | quail-summary | `summary.card@2`, `summary.extractive@2`, `summary.outline@1` (finalizers); `summary.digest@1` is in the crate, not registered by default |
+| `summary` (default) | quail-summary | `summary.card@3`, `summary.extractive@2`, `summary.outline@1`, `summary.keywords@1`, `summary.topics@1` (Standard, documents of 20+ pages) (finalizers); `summary.digest@2` is in the crate, not registered by default |
 | `ocr` | quail-ocr | `ocr.pages@2` (Deep only; PP-OCRv6 on ONNX Runtime, native, not default) and `quail models` |
 | `zstd` | (quail-io) | `--zstd` output |
 | `test-hooks` | - | test-only: `QUAIL_TEST_CRASH_ON=<substring>` makes `--isolate` workers abort on matching locators. Never ship it |

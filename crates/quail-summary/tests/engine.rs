@@ -8,7 +8,10 @@ use quail_core::{
 use quail_engine::EngineBuilder;
 use std::fmt::Write as _;
 
-use quail_summary::{SummaryCard, SummaryDigest, SummaryExtractive, SummaryOutline, keys};
+use quail_summary::{
+    SummaryCard, SummaryDigest, SummaryExtractive, SummaryKeywords, SummaryOutline, SummaryTopics,
+    keys,
+};
 
 struct TextExtractor;
 
@@ -157,4 +160,57 @@ fn outline_and_digest_of_a_long_text() {
         matches!(tokens, Some(Value::Int(n)) if n > 500 && n <= 2000),
         "{tokens:?}"
     );
+}
+
+#[test]
+fn keywords_reach_the_card_and_topics_reuse_the_term_index() {
+    let engine = EngineBuilder::new()
+        .profile(Profile::Standard)
+        .quiet_panics(true)
+        .extractor(Box::new(TextExtractor))
+        .analyzer(Box::new(Producer("text.lang", Value::text("en"))))
+        // Registered before the step they read from: the plan still orders them after it.
+        .analyzer(Box::new(SummaryCard::new()))
+        .analyzer(Box::new(SummaryTopics::new()))
+        .analyzer(Box::new(SummaryKeywords::new()))
+        .build()
+        .unwrap();
+    let plan: Vec<AnalyzerId> = engine.plan().collect();
+    let pos = |id: AnalyzerId| plan.iter().position(|&x| x == id).unwrap();
+    assert!(pos(SummaryKeywords::ID) < pos(SummaryCard::ID), "{plan:?}");
+    assert!(
+        pos(SummaryKeywords::ID) < pos(SummaryTopics::ID),
+        "{plan:?}"
+    );
+
+    let mut text = String::new();
+    for (c, w) in ["glacier", "volcano", "orchard"].iter().enumerate() {
+        let _ = writeln!(text, "CHAPTER {}\nAbout the {w}", c + 1);
+        for s in 0..60 {
+            let _ = writeln!(
+                text,
+                "The {w} survey team logs {w} samples near marker {s} before the {w} season ends."
+            );
+        }
+    }
+    let rec = engine.process(SourceItem {
+        locator: "long.txt".into(),
+        blob: Blob::new(text.into_bytes()),
+        modified: None,
+    });
+    let key = keys::KEYWORDS;
+    let kws = rec.facts_for(key.as_str()).next().unwrap();
+    let Value::List(list) = &kws.value else {
+        panic!("{kws:?}")
+    };
+    assert!(!list.is_empty() && list.len() <= 16);
+    let card = rec
+        .facts_for(keys::CARD_TEXT.as_str())
+        .next()
+        .and_then(|f| f.value.as_text())
+        .unwrap()
+        .to_owned();
+    assert!(card.contains("\nkeywords: "), "{card}");
+    // One logical page: no topic map (fewer than 20 pages).
+    assert!(rec.facts_for(keys::TOPICS.as_str()).next().is_none());
 }

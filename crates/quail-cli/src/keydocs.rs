@@ -787,6 +787,14 @@ pub const SUMMARY: &[KeyDoc] = &[
         doc: "Estimated tokens of `DIGEST` (Int, see `crate::tokens`).",
     },
     KeyDoc {
+        key: quail_summary::keys::KEYWORDS,
+        doc: "Document keywords and key phrases, best first (List of Record: `term`, `key` = the matching key, stems in ASCII, the same for Latin and Cyrillic, `score` in (0, 1], `count`, `first_page` zero-based, `entities`? = keys of the `party.candidates` it names).",
+    },
+    KeyDoc {
+        key: quail_summary::keys::TOPICS,
+        doc: "Topic map of a long document (Record: `method` = `headings` or `windows`, `threshold`, `sections` = list of `title page end_page keywords shift`, `segments` = list of `title first sections page end_page keywords shift` (`first`: index of its first section), pages zero-based; `truncated`?).",
+    },
+    KeyDoc {
         key: quail_summary::keys::LLM,
         doc: "The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or `map_reduce`, `calls`). Feature `llm`.",
     },

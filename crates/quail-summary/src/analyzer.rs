@@ -1,8 +1,15 @@
-//! The analyzers: `summary.card@2`, `summary.extractive@2`, `summary.outline@1` and
-//! `summary.digest@1`.
+//! The analyzers: `summary.card@3`, `summary.extractive@2`, `summary.outline@1`,
+//! `summary.keywords@1`, `summary.topics@1` and `summary.digest@2`.
 
-use quail_core::{Analyzer, AnalyzerId, Ctx, Emitter, Evidence, Profile, Result, Value};
+use std::borrow::Cow;
+
+use quail_core::{Analyzer, AnalyzerId, Artifact, Ctx, Emitter, Evidence, Profile, Result, Value};
 use quail_text::NormalizedText;
+
+use crate::input::{self as inp, Facts};
+use crate::keywords::{self, KeywordConfig};
+use crate::terms::{self, StemLang, TermIndex};
+use crate::topics::{self, TopicConfig};
 
 use crate::card::{DEFAULT_MAX_TOKENS, FileCard};
 use crate::digest::{self, DigestConfig};
@@ -14,7 +21,39 @@ use crate::outline::{self, OutlineConfig, OutlineMethod};
 /// the summary steps run once those steps are done (see the crate docs on ordering).
 pub const AFTER: &[&str] = &["revised_document", "ocr_text", "raster", "normalized_text"];
 
-/// `summary.card@2`: the file card from every fact produced before it.
+/// [`AFTER`] and the term index of `summary.keywords` (`summary_terms`): the steps that read
+/// keywords (the card) or reuse the index (topics, digest) run after it.
+pub const AFTER_TERMS: &[&str] = &[
+    "revised_document",
+    "ocr_text",
+    "raster",
+    "normalized_text",
+    TermIndex::NAME,
+];
+
+/// The stemming rules for the file in `ctx` (`text.lang`, `text.script`).
+pub fn stem_lang(ctx: &Ctx<'_>) -> StemLang {
+    let f = Facts(ctx.facts);
+    StemLang::of(f.text(inp::TEXT_LANG), f.text(inp::TEXT_SCRIPT))
+}
+
+/// The term index of the file: the one `summary.keywords` provided, else built here (the
+/// same index).
+pub fn term_index<'a>(ctx: &'a Ctx<'_>, out: &Emitter) -> Option<Cow<'a, TermIndex>> {
+    if let Some(t) = ctx.get::<TermIndex>() {
+        return Some(Cow::Borrowed(t));
+    }
+    let doc = ctx.document()?;
+    Some(Cow::Owned(terms::build(
+        doc,
+        ctx.get::<NormalizedText>(),
+        stem_lang(ctx),
+        out.deadline(),
+    )))
+}
+
+/// `summary.card@3`: the file card from every fact produced before it (the keywords of
+/// `summary.keywords` included).
 ///
 /// Emits [`keys::CARD`] (record), [`keys::CARD_TEXT`] (text, at most `max_tokens` estimated
 /// tokens) and [`keys::CARD_TOKENS`].
@@ -25,7 +64,7 @@ pub struct SummaryCard {
 
 impl SummaryCard {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.card", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.card", 3);
 
     /// With the default budget, [`DEFAULT_MAX_TOKENS`].
     pub const fn new() -> Self {
@@ -67,7 +106,7 @@ impl Analyzer for SummaryCard {
     }
 
     fn after(&self) -> &'static [&'static str] {
-        AFTER
+        AFTER_TERMS
     }
 
     fn profile(&self) -> Profile {
@@ -242,7 +281,7 @@ impl Analyzer for SummaryOutline {
     }
 }
 
-/// `summary.digest@1` (Standard): the bounded summary input for a document of any length
+/// `summary.digest@2` (Standard): the bounded summary input for a document of any length
 /// ([`crate::digest`]): card, outline, start and per-section excerpts copied verbatim.
 ///
 /// Emits [`keys::DIGEST`] (text, at most [`DigestConfig::max_tokens`] estimated tokens) and
@@ -256,7 +295,7 @@ pub struct SummaryDigest {
 
 impl SummaryDigest {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.digest", 1);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.digest", 2);
 
     /// With the default configs, for every document with text.
     pub fn new() -> Self {
@@ -293,7 +332,7 @@ impl Analyzer for SummaryDigest {
     }
 
     fn after(&self) -> &'static [&'static str] {
-        AFTER
+        AFTER_TERMS
     }
 
     fn profile(&self) -> Profile {
@@ -313,7 +352,16 @@ impl Analyzer for SummaryDigest {
         let card = card_of(ctx);
         let card_text = card.render(self.digest.card_tokens).text;
         let o = outline::outline(doc, &self.outline, out.deadline());
-        let d = digest::build(doc, &card_text, &o, &self.digest, out.deadline());
+        let t = term_index(ctx, out);
+        let shared = ctx.get::<NormalizedText>();
+        let d = digest::build_with_terms(
+            doc,
+            &card_text,
+            &o,
+            &self.digest,
+            t.as_deref().map(|t| (t, shared)),
+            out.deadline(),
+        );
         if o.truncated || d.truncated {
             out.problem(format!(
                 "{}: deadline reached, later sections have no excerpts",
@@ -328,6 +376,167 @@ impl Analyzer for SummaryDigest {
             keys::DIGEST_TOKENS,
             Value::Int(i64::try_from(d.tokens).unwrap_or(i64::MAX)),
         );
+        Ok(())
+    }
+}
+
+/// `summary.keywords@1`: the document's keywords and key phrases ([`crate::keywords`]).
+///
+/// Emits [`keys::KEYWORDS`] (list of records `term key score count first_page entities?`,
+/// best first) and provides the term index ([`TermIndex`], `summary_terms`) to the card,
+/// topic and digest steps.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SummaryKeywords {
+    cfg: KeywordConfig,
+}
+
+impl SummaryKeywords {
+    /// Id of this analyzer.
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.keywords", 1);
+
+    /// With the default [`KeywordConfig`] (16 keywords).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// With `cfg`.
+    pub fn with_config(cfg: KeywordConfig) -> Self {
+        Self { cfg }
+    }
+}
+
+impl Analyzer for SummaryKeywords {
+    fn finalizer(&self) -> bool {
+        true
+    }
+
+    fn id(&self) -> AnalyzerId {
+        Self::ID
+    }
+
+    fn requires(&self) -> &'static [&'static str] {
+        &["document"]
+    }
+
+    fn provides(&self) -> &'static [&'static str] {
+        &[TermIndex::NAME]
+    }
+
+    fn after(&self) -> &'static [&'static str] {
+        AFTER
+    }
+
+    fn profile(&self) -> Profile {
+        Profile::Fast
+    }
+
+    fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
+        let Some(doc) = ctx.document() else {
+            return Ok(());
+        };
+        let shared = ctx.get::<NormalizedText>();
+        let lang = stem_lang(ctx);
+        let t = terms::build(doc, shared, lang, out.deadline());
+        if t.truncated {
+            out.problem(format!(
+                "{}: deadline reached, keywords of the first pages only",
+                Self::ID
+            ));
+        }
+        let parties = keywords::parties(ctx.facts, lang);
+        let title = Facts(ctx.facts)
+            .text(inp::REF_TITLE)
+            .map(|x| keywords::title_stems(x, lang))
+            .unwrap_or_default();
+        let ks = keywords::extract(doc, shared, &t, &parties, &title, &self.cfg);
+        if !ks.is_empty() {
+            out.push(
+                keys::KEYWORDS,
+                Value::List(ks.iter().map(keywords::Keyword::to_value).collect()),
+                0.7,
+                None,
+            );
+        }
+        out.provide(t);
+        Ok(())
+    }
+}
+
+/// `summary.topics@1` (Standard): the topic map of a long document ([`crate::topics`]):
+/// keywords per outline section, topic shifts and topic segments.
+///
+/// Emits [`keys::TOPICS`] (record `method threshold sections segments truncated?`) for
+/// documents of at least [`TopicConfig::min_pages`] pages.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SummaryTopics {
+    outline: OutlineConfig,
+    cfg: TopicConfig,
+}
+
+impl SummaryTopics {
+    /// Id of this analyzer.
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.topics", 1);
+
+    /// With the default configs.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// With `outline` and `cfg`.
+    pub fn with_config(outline: OutlineConfig, cfg: TopicConfig) -> Self {
+        Self { outline, cfg }
+    }
+}
+
+impl Analyzer for SummaryTopics {
+    fn finalizer(&self) -> bool {
+        true
+    }
+
+    fn id(&self) -> AnalyzerId {
+        Self::ID
+    }
+
+    fn requires(&self) -> &'static [&'static str] {
+        &["document"]
+    }
+
+    fn after(&self) -> &'static [&'static str] {
+        AFTER_TERMS
+    }
+
+    fn profile(&self) -> Profile {
+        // Up to ~10 KB per long document: for services that map long documents.
+        Profile::Standard
+    }
+
+    fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
+        let Some(doc) = ctx.document() else {
+            return Ok(());
+        };
+        if u32::try_from(doc.pages.len()).unwrap_or(u32::MAX) < self.cfg.min_pages {
+            return Ok(());
+        }
+        let o = outline::outline(doc, &self.outline, out.deadline());
+        out.check_deadline()?;
+        let Some(t) = term_index(ctx, out) else {
+            return Ok(());
+        };
+        let Some(m) = topics::map(doc, ctx.get::<NormalizedText>(), &t, &o, &self.cfg) else {
+            return Ok(());
+        };
+        if m.truncated {
+            out.problem(format!(
+                "{}: deadline reached, topic map of the first pages only",
+                Self::ID
+            ));
+        }
+        let conf = if m.method == OutlineMethod::Headings {
+            0.6
+        } else {
+            0.5
+        };
+        out.push(keys::TOPICS, m.to_value(), conf, None);
         Ok(())
     }
 }

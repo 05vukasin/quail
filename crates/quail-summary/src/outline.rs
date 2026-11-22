@@ -346,10 +346,14 @@ pub fn outline(doc: &Document, cfg: &OutlineConfig, deadline: Option<Instant>) -
     }
 }
 
+/// Lines sampled for the body height: the median of the first ones is stable, and a
+/// document of millions of lines costs no more than this.
+const BODY_SAMPLE: usize = 20_000;
+
 /// Median glyph height of the document's lines (PDF line geometry), when there is any.
 fn body_height(doc: &Document) -> Option<f32> {
     let mut hs: Vec<f32> = Vec::new();
-    for p in &doc.pages {
+    'pages: for p in &doc.pages {
         for b in &p.blocks {
             for l in &b.lines {
                 let h = l.bbox.y1 - l.bbox.y0;
@@ -357,8 +361,8 @@ fn body_height(doc: &Document) -> Option<f32> {
                     hs.push(h);
                 }
             }
-            if hs.len() >= 20_000 {
-                break;
+            if hs.len() >= BODY_SAMPLE {
+                break 'pages;
             }
         }
     }
@@ -1026,6 +1030,47 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    /// A page of one block holding `n` lines of glyph height `h`.
+    fn geometry_page(i: u32, n: usize, h: f32) -> Page {
+        let lines = (0..n)
+            .map(|k| {
+                #[allow(clippy::cast_precision_loss)]
+                let y = k as f32 * (h + 2.0);
+                quail_core::LineBox {
+                    span: Span { start: 0, end: 0 },
+                    bbox: quail_core::BBox {
+                        x0: 0.0,
+                        y0: y,
+                        x1: 100.0,
+                        y1: y + h,
+                    },
+                }
+            })
+            .collect();
+        let mut b = Block::new(
+            Span { start: 0, end: 0 },
+            BlockKind::Paragraph,
+            Zone::Body,
+            None,
+        );
+        b.lines = lines;
+        Page {
+            blocks: vec![b],
+            ..Page::new(i, PageKind::Physical)
+        }
+    }
+
+    #[test]
+    fn body_height_stops_sampling_at_the_cap_across_pages() {
+        // 20 pages of 1,000 small lines reach the cap; the 30 pages of large lines after them
+        // must not be read (before the fix the cap only left the page's block loop, so every
+        // later page was still sampled and the median became the large size).
+        let mut pages: Vec<Page> = (0..20).map(|i| geometry_page(i, 1_000, 10.0)).collect();
+        pages.extend((20..50).map(|i| geometry_page(i, 1_000, 30.0)));
+        let d = Document { pages };
+        assert_eq!(body_height(&d), Some(10.0));
     }
 
     fn titles(o: &Outline) -> Vec<(String, u8, u32, u32)> {
