@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use quail_core::{
     Analyzer, AnalyzerId, BlockKind, Ctx, Document, Emitter, Evidence, Page, PageKind, Profile,
@@ -27,6 +28,11 @@ const HINT_BYTES: usize = 256 * 1024;
 /// Largest table handled (rows × columns), against hostile DOCX tables.
 const MAX_ROWS: usize = 5_000;
 const MAX_COLS: usize = 64;
+/// Tables read per page at most (a DOCX "page" is a whole section).
+const MAX_TABLES_PER_PAGE: usize = 2_000;
+/// Cell slots (used rows × columns) of all the tables of one page at most: a full
+/// 5,000 × 64 table fits, hostile pages of thousands of wide tables do not.
+const MAX_PAGE_SLOTS: usize = 1 << 19;
 
 /// Price items per file: one `item.line` per offered or billed line, `item.table_total` per
 /// subtotal / VAT / total row, `item.count`.
@@ -268,9 +274,25 @@ pub(crate) fn hints(doc: &Document) -> DocHints {
 /// A cell with its row and column.
 type CellAt = (u16, u16, GCell);
 
-/// DOCX-style tables of a page: `TableCell` blocks grouped by table index.
-fn cell_grids(page: &Page) -> Vec<Grid> {
-    let mut tables: Vec<(u16, Vec<CellAt>)> = Vec::new();
+/// Why [`cell_grids`] stopped before the page's last table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GridStop {
+    /// More than [`MAX_TABLES_PER_PAGE`] tables.
+    Tables,
+    /// The tables need more than [`MAX_PAGE_SLOTS`] cell slots.
+    Cells,
+    /// The file's deadline.
+    Deadline,
+}
+
+/// DOCX-style tables of a page: `TableCell` blocks grouped by table index, in order of first
+/// appearance. A table holds only the rows that have a cell (row numbers may run to 5,000
+/// with nothing in between). Stops at [`MAX_TABLES_PER_PAGE`], [`MAX_PAGE_SLOTS`] or
+/// `deadline`, keeping the tables built so far.
+fn cell_grids(page: &Page, deadline: Option<Instant>) -> (Vec<Grid>, Option<GridStop>) {
+    let mut index: HashMap<u16, usize> = HashMap::new();
+    let mut tables: Vec<Vec<CellAt>> = Vec::new();
+    let mut stop = None;
     for b in &page.blocks {
         let BlockKind::TableCell { table, row, col } = b.kind else {
             continue;
@@ -278,63 +300,87 @@ fn cell_grids(page: &Page) -> Vec<Grid> {
         if usize::from(row) >= MAX_ROWS || usize::from(col) >= MAX_COLS {
             continue;
         }
+        let t = if let Some(&t) = index.get(&table) {
+            t
+        } else {
+            if tables.len() >= MAX_TABLES_PER_PAGE {
+                stop = Some(GridStop::Tables);
+                continue;
+            }
+            index.insert(table, tables.len());
+            tables.push(Vec::new());
+            tables.len() - 1
+        };
         let cell = GCell {
             text: b.span.slice(&page.text).to_owned(),
             span: b.span,
             bbox: b.bbox,
         };
-        match tables.iter_mut().find(|(t, _)| *t == table) {
-            Some((_, v)) => v.push((row, col, cell)),
-            None => tables.push((table, vec![(row, col, cell)])),
+        if let Some(v) = tables.get_mut(t) {
+            v.push((row, col, cell));
         }
     }
-    tables
-        .into_iter()
-        .map(|(_, cells)| {
-            let nrows = cells
-                .iter()
-                .map(|c| usize::from(c.0) + 1)
-                .max()
-                .unwrap_or(0);
-            let ncols = cells
-                .iter()
-                .map(|c| usize::from(c.1) + 1)
-                .max()
-                .unwrap_or(0);
-            let mut rows: Vec<Vec<Option<GCell>>> = vec![vec![None; ncols]; nrows];
-            for (r, c, cell) in cells {
-                let slot = &mut rows[usize::from(r)][usize::from(c)];
-                match slot {
-                    Some(prev) => {
-                        prev.text.push('\n');
-                        prev.text.push_str(&cell.text);
-                        prev.span = span_union(prev.span, cell.span);
-                        prev.bbox = union(prev.bbox, cell.bbox);
-                    }
-                    None => *slot = Some(cell),
+    let mut grids = Vec::with_capacity(tables.len());
+    let mut slots_left = MAX_PAGE_SLOTS;
+    for mut cells in tables {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            stop = Some(GridStop::Deadline);
+            break;
+        }
+        // Stable: the paragraphs of one cell keep their order.
+        cells.sort_by_key(|c| c.0);
+        let ncols = cells
+            .iter()
+            .map(|c| usize::from(c.1) + 1)
+            .max()
+            .unwrap_or(0);
+        let used_rows = 1 + cells.windows(2).filter(|w| w[0].0 != w[1].0).count();
+        let need = used_rows.saturating_mul(ncols);
+        if need > slots_left {
+            stop = Some(GridStop::Cells);
+            break;
+        }
+        slots_left -= need;
+        let mut rows: Vec<Vec<Option<GCell>>> = Vec::with_capacity(used_rows);
+        let mut last = None;
+        for (r, c, cell) in cells {
+            if last != Some(r) {
+                rows.push(vec![None; ncols]);
+                last = Some(r);
+            }
+            let Some(slot) = rows.last_mut().and_then(|row| row.get_mut(usize::from(c))) else {
+                continue;
+            };
+            match slot {
+                Some(prev) => {
+                    prev.text.push('\n');
+                    prev.text.push_str(&cell.text);
+                    prev.span = span_union(prev.span, cell.span);
+                    prev.bbox = union(prev.bbox, cell.bbox);
                 }
+                None => *slot = Some(cell),
             }
-            // A cell's paragraphs are joined by newlines; table logic wants one line.
-            for c in rows.iter_mut().flatten().flatten() {
-                if c.text.contains('\n') {
-                    c.text = c
-                        .text
-                        .split('\n')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                }
+        }
+        // A cell's paragraphs are joined by newlines; table logic wants one line.
+        for c in rows.iter_mut().flatten().flatten() {
+            if c.text.contains('\n') {
+                c.text = c
+                    .text
+                    .split('\n')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
             }
-            rows.retain(|r| r.iter().any(Option::is_some));
-            Grid {
-                page: page.index,
-                ncols,
-                rows,
-                source: Source::Table,
-            }
-        })
-        .collect()
+        }
+        grids.push(Grid {
+            page: page.index,
+            ncols,
+            rows,
+            source: Source::Table,
+        });
+    }
+    (grids, stop)
 }
 
 fn joined_row(row: &[Option<GCell>]) -> (String, quail_core::Span, Option<quail_core::BBox>) {
@@ -374,7 +420,26 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
         if page.text.is_empty() {
             continue;
         }
-        let mut grids = cell_grids(page);
+        let (mut grids, stop) = cell_grids(page, out.deadline());
+        match stop {
+            Some(GridStop::Tables) => out.problem(format!(
+                "item.lines: more than {MAX_TABLES_PER_PAGE} tables on page {}, rest skipped",
+                page.index
+            )),
+            Some(GridStop::Cells) => out.problem(format!(
+                "item.lines: tables on page {} need more than {MAX_PAGE_SLOTS} cells, rest \
+                 skipped",
+                page.index
+            )),
+            Some(GridStop::Deadline) => {
+                out.problem(format!(
+                    "item.lines: deadline reached in a table on page {}",
+                    page.index
+                ));
+                break;
+            }
+            None => {}
+        }
         let mut text_lines: Vec<(String, quail_core::Span, Option<quail_core::BBox>)> = Vec::new();
         let geometric = page.kind == PageKind::Physical
             && page
@@ -660,4 +725,147 @@ pub(crate) fn emit(found: &Found, cpv: Option<&CpvIndex>, out: &mut Emitter) {
         keys::COUNT,
         Value::Int(i64::try_from(found.items.len()).unwrap_or(i64::MAX)),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quail_core::{Block, Span};
+
+    /// A DOCX-like page: `tables` tables, each with one cell at (`row`, `col`).
+    fn page(tables: u16, row: u16, col: u16) -> Page {
+        let text = "Invented cell 12.50".to_owned();
+        let span = Span {
+            start: 0,
+            end: u32::try_from(text.len()).unwrap_or(0),
+        };
+        Page {
+            blocks: (0..tables)
+                .map(|table| {
+                    Block::new(
+                        span,
+                        BlockKind::TableCell { table, row, col },
+                        Zone::Body,
+                        None,
+                    )
+                })
+                .collect(),
+            text,
+            ..Page::new(0, PageKind::Logical)
+        }
+    }
+
+    #[test]
+    fn a_table_holds_only_the_rows_it_uses() {
+        // 4,999 empty rows before the only cell, which spans to the last column.
+        let (grids, stop) = cell_grids(&page(10, 4_999, 63), None);
+        assert!(stop.is_none());
+        assert_eq!(grids.len(), 10);
+        for g in &grids {
+            assert_eq!((g.rows.len(), g.ncols), (1, 64));
+            assert!(g.rows.capacity() <= 1, "{}", g.rows.capacity());
+        }
+    }
+
+    #[test]
+    fn cells_keep_their_order_and_merge() {
+        let mut p = page(0, 0, 0);
+        p.text = "a b c d".to_owned();
+        let cell = |start: u32, table: u16, row: u16, col: u16| {
+            Block::new(
+                Span {
+                    start,
+                    end: start + 1,
+                },
+                BlockKind::TableCell { table, row, col },
+                Zone::Body,
+                None,
+            )
+        };
+        // Table 1 seen first; two paragraphs in one cell; an empty row 1 in table 1.
+        p.blocks = vec![
+            cell(0, 1, 2, 0),
+            cell(2, 0, 0, 1),
+            cell(4, 1, 0, 0),
+            cell(6, 1, 2, 0),
+        ];
+        let (grids, _) = cell_grids(&p, None);
+        let texts: Vec<Vec<Vec<Option<String>>>> = grids
+            .iter()
+            .map(|g| {
+                g.rows
+                    .iter()
+                    .map(|r| {
+                        r.iter()
+                            .map(|c| c.as_ref().map(|c| c.text.clone()))
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                vec![vec![Some("c".to_owned())], vec![Some("a d".to_owned())]],
+                vec![vec![None, Some("b".to_owned())]],
+            ]
+        );
+    }
+
+    #[test]
+    fn too_many_tables_on_a_page_is_a_problem() {
+        let tables = u16::try_from(MAX_TABLES_PER_PAGE + 5).unwrap_or(u16::MAX);
+        let (grids, stop) = cell_grids(&page(tables, 0, 0), None);
+        assert_eq!(grids.len(), MAX_TABLES_PER_PAGE);
+        assert!(matches!(stop, Some(GridStop::Tables)));
+        let doc = Document {
+            pages: vec![page(tables, 0, 0)],
+        };
+        let mut out = Emitter::new(ItemLines::ID);
+        let _ = extract(&doc, &mut out);
+        let problems = out.take_problems();
+        assert!(
+            problems.iter().any(|p| p.contains("tables")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn the_cells_of_a_page_are_capped() {
+        // Two tables of 5,000 rows, each row one cell in the last column: 320,000 slots each,
+        // more than the page budget together.
+        let mut p = page(0, 0, 0);
+        let span = p
+            .blocks
+            .first()
+            .map_or(Span { start: 0, end: 1 }, |b| b.span);
+        p.blocks = (0..2u16)
+            .flat_map(|table| {
+                (0..u16::try_from(MAX_ROWS).unwrap_or(u16::MAX)).map(move |row| {
+                    Block::new(
+                        span,
+                        BlockKind::TableCell {
+                            table,
+                            row,
+                            col: 63,
+                        },
+                        Zone::Body,
+                        None,
+                    )
+                })
+            })
+            .collect();
+        let (grids, stop) = cell_grids(&p, None);
+        assert!(matches!(stop, Some(GridStop::Cells)));
+        assert_eq!(grids.len(), 1);
+        let used: usize = grids.iter().map(|g| g.rows.len() * g.ncols).sum();
+        assert!(used <= MAX_PAGE_SLOTS, "{used}");
+    }
+
+    #[test]
+    fn a_passed_deadline_stops_building_tables() {
+        let (grids, stop) = cell_grids(&page(3, 0, 0), Some(std::time::Instant::now()));
+        assert!(grids.is_empty());
+        assert!(matches!(stop, Some(GridStop::Deadline)));
+    }
 }

@@ -95,8 +95,10 @@ UJN translation) is embedded; see `data/README.md` for sources and licence, and
 ## Limits
 
 At most `MAX_ITEMS` (5 000) items per file (then a problem), tables up to 5 000 rows × 64
-columns, 24 rebuilt columns per PDF table, 20 000 lines per page; the deadline is checked per
-page and per table. Scanned pages without a text layer produce nothing unless OCR filled a
+columns, 24 rebuilt columns per PDF table, 20 000 lines per page. A DOCX table holds only the
+rows that have cells; a page reads at most 2 000 tables and 524 288 cell slots (used rows ×
+columns) in all, then records a problem. The deadline is checked per page and per table, also
+while the tables are built. Scanned pages without a text layer produce nothing unless OCR filled a
 `RevisedDocument`.
 
 ## Not here
