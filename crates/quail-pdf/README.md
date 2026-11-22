@@ -72,12 +72,14 @@ Early stops are reported with `Emitter::problem`, which keeps the partial docume
 - Memory: hayro caches each page's decoded content for the life of a parse, so the document is re-parsed once 64 MiB were decoded since it was opened. Peak memory stays near one page plus that margin, and never above the budget.
 - `max_render_pixels` caps every decoded image: `/Width` × `/Height`, and the sizes in JPEG SOF, JPEG 2000 SIZ, JBIG2 page-information and CCITT headers. All of them are checked before the decoder allocates. JBIG2 bitmaps are additionally capped at 2^28 pixels.
 - `max_text_bytes`: text is truncated at a block boundary (problem). Text rejected as garbage does not count against it.
+  - Per page, glyph text lookups stop at `max_text_bytes` too: every `ToUnicode` string is charged in full (the lookup allocates it), and a glyph keeps at most 32 chars of it. Later glyphs are counted as dropped without being looked up, and so are glyphs past 400k per page.
 - `timeout`: `Emitter::check_deadline` runs before every page, after interpretation, after layout and before zoning.
-  - Inside a page, the device checks the deadline every 1,024 callbacks and caps a page at 4M draw calls or 250k clips/groups (every form `Do` pushes a clip, so form fan-out of 2^40 in 8 KB stops in about 1.5 s).
-  - Either way it unwinds out of hayro with a sentinel caught per page (problem). Layout is linear apart from sorting (400k glyphs in well under a second).
+  - Inside a page, the device checks the deadline every 1,024 callbacks and caps a page at 4M draw calls or 250k clips/groups (every form `Do` pushes a clip, so form fan-out of 2^40 in 8 KB stops in about 1.5 s). Every glyph of a text run is one draw call, so one huge `Tj` meets the cap and the deadline too.
+  - Either way it unwinds out of hayro with a sentinel caught per page (problem). Layout is linear apart from sorting (400k glyphs in well under a second); at most 64 blocks stay open for continuation, so hundreds of thousands of segments on one line stay linear too.
 - Encrypted with a user password: returns `Error::Encrypted` after emitting the facts it can read (version, encrypted, incremental updates, linearized).
 - Panics in the parser, the interpreter or the renderer are caught per document, per page and per render. A failed page is flagged `needs_ocr` (problem).
 - JavaScript is found through the catalog, a byte scan, and a walk over every object (object streams included).
+- Form-field and embedded-file name-tree walks have a work budget of 200k units (a node visited, a `/Kids` entry resolved, a name counted) and check the deadline every 1,024 units, so shared nodes with huge arrays cannot multiply the work.
 
 ## Development
 

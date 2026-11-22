@@ -176,7 +176,8 @@ fn document_facts(pdf: &Pdf, bytes: &[u8], out: &mut Emitter) {
             }
         }
     }
-    let c = meta::catalog_facts(pdf, bytes);
+    let late = || out.check_deadline().is_err();
+    let c = meta::catalog_facts(pdf, bytes, &late);
     out.fact(keys::HAS_XMP, Value::Bool(c.has_xmp));
     out.fact(keys::FORM_FIELDS, int(c.form_fields));
     out.fact(keys::SIGNATURE_FIELDS, int(c.signature_fields));
@@ -196,6 +197,9 @@ struct Walk<'o> {
     out: &'o mut Emitter,
     budget: &'o DecodeBudget,
     text_left: usize,
+    /// Bytes of glyph text one page may look up (`max_text_bytes`): bounds the `ToUnicode`
+    /// work of a page, whatever is left of the file's text.
+    page_text: usize,
     fonts: BTreeSet<String>,
     pending: Vec<Pending>,
     image_only_pages: usize,
@@ -239,6 +243,7 @@ fn pages(
         out,
         budget,
         text_left: usize::try_from(limits.max_text_bytes).unwrap_or(usize::MAX),
+        page_text: usize::try_from(limits.max_text_bytes).unwrap_or(usize::MAX),
         fonts: BTreeSet::new(),
         pending: Vec::new(),
         image_only_pages: 0,
@@ -400,6 +405,7 @@ impl Walk<'_> {
         let _ = catch_unwind(AssertUnwindSafe(|| meta::page_fonts(page, &mut self.fonts)));
 
         let (w, h) = page.render_dimensions();
+        let page_text = self.page_text;
         let captured = {
             let out: &Emitter = self.out;
             catch_unwind(AssertUnwindSafe(|| {
@@ -410,6 +416,7 @@ impl Walk<'_> {
                     w,
                     h,
                     Watchdog::new(Clock::Emitter(out)),
+                    page_text,
                 )
             }))
         };
@@ -578,6 +585,7 @@ pub(crate) fn capture<'a>(
     w: f32,
     h: f32,
     watchdog: Watchdog<'_>,
+    text_budget: usize,
 ) -> Captured {
     let (w, h) = (f64::from(w), f64::from(h));
     let mut ctx = Context::new(
@@ -587,7 +595,7 @@ pub(crate) fn capture<'a>(
         page.xref(),
         settings.clone(),
     );
-    let mut dev = PageCapture::new(w, h, watchdog);
+    let mut dev = PageCapture::new(w, h, watchdog, text_budget);
     interpret_page(page, &mut ctx, &mut dev);
     dev.finish()
 }

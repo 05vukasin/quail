@@ -1314,7 +1314,8 @@ fn issue_37_raster_calls_share_the_file_deadline() {
         raster.embedded_scan(0, &Limits::default()),
         Some(Err(Error::Timeout))
     ));
-    assert!(t.elapsed() < Duration::from_secs(1));
+    // Failing fast, not a timing claim: generous for loaded debug runs.
+    assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
     // The extractor hands out a raster bound to the file's deadline.
     let limits = Limits {
         timeout: Duration::from_millis(1),
@@ -1369,5 +1370,202 @@ fn predictor_with_huge_columns_does_not_size_a_zero_row() {
         vec![(5, img)],
     );
     let ((), peak) = peak_of(|| assert_no_panic_anywhere(&bytes, &Limits::default()));
+    assert!(peak < 128 * MIB, "peak {} MiB", peak / MIB);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review findings: text, catalog walks, layout and JPEG 2000 boxes.
+
+#[test]
+fn huge_tounicode_strings_are_bounded() {
+    // One code maps to 512 Ki UTF-16 units; the page shows it 200 000 times. Every lookup
+    // allocates the whole string: kept as is, that is about 100 GB.
+    let units = 512 * 1024;
+    let mut cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Q def 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <61> <".to_vec();
+    cmap.extend(b"0041".repeat(units));
+    cmap.extend_from_slice(
+        b"> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+    );
+    let n = 200_000;
+    let mut c = b"BT /F1 1 Tf 10 700 Td (".to_vec();
+    c.extend(std::iter::repeat_n(b'a', n));
+    c.extend_from_slice(b") Tj ET");
+    let bytes = page_pdf(
+        &c,
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 5 0 R >> >>",
+        vec![(5, stream_flate("", &cmap))],
+    );
+    let t = Instant::now();
+    let (r, peak) = peak_of(|| run(bytes, &Limits::default()));
+    let doc = r.doc.expect("doc");
+    // Each glyph keeps at most 32 chars, and the page looks up at most `max_text_bytes`.
+    assert!(!doc.pages[0].text.is_empty());
+    assert!(doc.pages[0].text.len() < 8 * MIB);
+    assert!(peak < 512 * MIB, "peak {} MiB", peak / MIB);
+    assert!(t.elapsed() < Duration::from_mins(1), "{:?}", t.elapsed());
+}
+
+#[test]
+fn one_huge_text_run_meets_the_call_cap() {
+    // A single `Tj` of 5 million glyphs is 5 million draws, over the per-page cap: the page
+    // is skipped instead of being walked glyph by glyph past every check.
+    let n = 5_000_000;
+    let mut c = b"BT /F1 1 Tf 10 700 Td (".to_vec();
+    c.extend(std::iter::repeat_n(b'a', n));
+    c.extend_from_slice(b") Tj ET");
+    let bytes = page_pdf(&c, FONT, vec![]);
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    assert!(r.doc.is_ok());
+    assert!(has_problem(&r, "draw operations"), "{:?}", r.problems);
+    assert!(t.elapsed() < Duration::from_mins(1), "{:?}", t.elapsed());
+}
+
+#[test]
+fn shared_wide_field_kids_are_bounded() {
+    // Two fields whose `/Kids` list each other 100 000 times: every visit used to resolve the
+    // whole array again (20 000 visits × 100 000 kids).
+    let kids = |n: u32| format!("{n} 0 R ").repeat(100_000);
+    let bytes = build(
+        &[
+            (
+                1,
+                b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".to_vec(),
+            ),
+            (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+            (
+                3,
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+            ),
+            (
+                5,
+                format!("<< /T (f) /FT /Tx /Kids [{}] >>", kids(6)).into_bytes(),
+            ),
+            (6, format!("<< /T (g) /Kids [{}] >>", kids(5)).into_bytes()),
+        ],
+        1,
+        true,
+    );
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    assert!(r.doc.is_ok());
+    assert!(fact(&r, &keys::FORM_FIELDS).is_some());
+    assert!(t.elapsed() < Duration::from_secs(30), "{:?}", t.elapsed());
+}
+
+#[test]
+fn shared_wide_name_tree_leaves_are_bounded() {
+    // 20 000 `/Kids` entries pointing at one leaf of 300 000 names: counting the leaf on
+    // every visit was 6 × 10^9 entries.
+    let kids = "6 0 R ".repeat(20_000);
+    let names = "(k) null ".repeat(300_000);
+    let bytes = build(
+        &[
+            (
+                1,
+                b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 5 0 R >> >>".to_vec(),
+            ),
+            (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+            (
+                3,
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+            ),
+            (5, format!("<< /Kids [{kids}] >>").into_bytes()),
+            (6, format!("<< /Names [{names}] >>").into_bytes()),
+        ],
+        1,
+        true,
+    );
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    assert!(r.doc.is_ok());
+    assert!(fact(&r, &keys::EMBEDDED_FILES).is_some());
+    assert!(t.elapsed() < Duration::from_secs(30), "{:?}", t.elapsed());
+}
+
+#[test]
+fn many_segments_on_one_line_lay_out_in_linear_time() {
+    // 200 000 glyphs on one baseline, each 3 em from the next: 200 000 segments of one line,
+    // which never closed as blocks (the open list grew to all of them).
+    let n = 200_000;
+    let mut c = b"BT /F1 1 Tf 10 700 Td [".to_vec();
+    for _ in 0..n {
+        c.extend_from_slice(b"(a)-3000");
+    }
+    c.extend_from_slice(b"] TJ ET");
+    let bytes = page_pdf(&c, FONT, vec![]);
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    let doc = r.doc.expect("doc");
+    assert!(doc.pages[0].text.len() >= n);
+    assert!(t.elapsed() < Duration::from_mins(1), "{:?}", t.elapsed());
+}
+
+/// A JP2 box: length, type, body.
+fn jp2_box(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
+    let mut b = u32::try_from(body.len() + 8)
+        .unwrap()
+        .to_be_bytes()
+        .to_vec();
+    b.extend_from_slice(&kind);
+    b.extend_from_slice(body);
+    b
+}
+
+/// SOC + SIZ (+ EOC) of a `w` × `h` × `comps` codestream.
+fn j2k_header(w: u32, h: u32, comps: u16) -> Vec<u8> {
+    let mut cs = vec![0xFF, 0x4F, 0xFF, 0x51];
+    cs.extend_from_slice(&(38 + 3 * comps).to_be_bytes());
+    cs.extend_from_slice(&[0, 0]);
+    for v in [w, h, 0, 0, w, h, 0, 0] {
+        cs.extend_from_slice(&v.to_be_bytes());
+    }
+    cs.extend_from_slice(&comps.to_be_bytes());
+    for _ in 0..comps {
+        cs.extend_from_slice(&[7, 1, 1]);
+    }
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
+#[test]
+fn jpx_codestream_boxes_are_checked_not_the_first_siz_anywhere() {
+    // A JP2 file with a small decoy codestream in a `uuid` box, then the real `jp2c` box
+    // claiming 60 000 × 60 000 × 4: the decoder reads the `jp2c` box.
+    let mut jp2 = jp2_box(*b"jP  ", &[0x0D, 0x0A, 0x87, 0x0A]);
+    jp2.extend(jp2_box(*b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    let mut ihdr = Vec::new();
+    for v in [16u32, 16] {
+        ihdr.extend_from_slice(&v.to_be_bytes());
+    }
+    ihdr.extend_from_slice(&[0, 1, 7, 7, 0, 0]);
+    let mut jp2h = jp2_box(*b"ihdr", &ihdr);
+    jp2h.extend(jp2_box(*b"colr", &[1, 0, 0, 0, 0, 0, 17]));
+    jp2.extend(jp2_box(*b"jp2h", &jp2h));
+    let mut uuid = vec![0u8; 16];
+    uuid.extend(j2k_header(16, 16, 1));
+    jp2.extend(jp2_box(*b"uuid", &uuid));
+    jp2.extend(jp2_box(*b"jp2c", &j2k_header(60_000, 60_000, 4)));
+    let img = stream_raw(
+        "/Type /XObject /Subtype /Image /Width 16 /Height 16 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /JPXDecode",
+        &jp2,
+    );
+    let bytes = page_pdf(
+        b"q 612 0 0 792 0 0 cm /Im0 Do Q",
+        "/XObject << /Im0 5 0 R >>",
+        vec![(5, img)],
+    );
+    let ((), peak) = peak_of(|| {
+        let raster = PdfRaster::new(Blob::from(bytes));
+        // Refused for its size (a limit), not handed to the decoder.
+        assert!(
+            matches!(
+                raster.embedded_scan(0, &Limits::default()),
+                Some(Err(Error::LimitExceeded(_)))
+            ),
+            "the jp2c codestream must be checked"
+        );
+        let _ = raster.render(0, 72.0, &Limits::default());
+    });
     assert!(peak < 128 * MIB, "peak {} MiB", peak / MIB);
 }

@@ -1,15 +1,21 @@
 //! File-level facts from the document catalog and the Info dictionary: forms, signatures,
 //! JavaScript, embedded files, XMP, fonts. Every tree walk is bounded in depth and size.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use hayro_syntax::Pdf;
-use hayro_syntax::object::{Array, DateTime, Dict, Name, Object, Stream};
+use hayro_syntax::object::{Array, DateTime, Dict, MaybeRef, Name, ObjRef, Object, Stream};
 use hayro_syntax::page::Page;
+use hayro_syntax::xref::XRef;
 use quail_core::Date;
 
-/// Nodes visited in one tree walk (fields, name trees).
-const MAX_NODES: usize = 20_000;
+/// Work allowed in one tree walk (fields, name trees): every node visited, every `/Kids`
+/// entry looked at and every name-tree entry counted costs one. Indirect nodes are visited
+/// once per walk, however often they are referenced, so a shared node with a wide array is
+/// not walked again per reference.
+const MAX_WORK: usize = 200_000;
+/// The deadline is checked every this many units of work.
+const DEADLINE_EVERY: usize = 1024;
 /// Nesting depth of one tree walk.
 const MAX_DEPTH: u32 = 32;
 /// Distinct font names kept.
@@ -26,7 +32,75 @@ pub(crate) struct CatalogFacts {
     pub embedded_files: usize,
 }
 
-pub(crate) fn catalog_facts(pdf: &Pdf, raw: &[u8]) -> CatalogFacts {
+/// The work budget of one tree walk, the file's deadline, and the indirect nodes seen.
+struct Budget<'a, 'l> {
+    left: usize,
+    since_check: usize,
+    late: &'l dyn Fn() -> bool,
+    xref: &'a XRef,
+    seen: HashSet<ObjRef>,
+}
+
+impl<'a, 'l> Budget<'a, 'l> {
+    fn new(xref: &'a XRef, late: &'l dyn Fn() -> bool) -> Self {
+        Self {
+            left: MAX_WORK,
+            since_check: 0,
+            late,
+            xref,
+            seen: HashSet::new(),
+        }
+    }
+
+    /// The dictionaries of `array`, each charged one unit; a reference already seen in this
+    /// walk is skipped without being resolved again.
+    fn dicts(&mut self, array: &Array<'a>) -> Vec<Dict<'a>> {
+        let mut out = Vec::new();
+        for item in array.raw_iter() {
+            if !self.take(1) {
+                break;
+            }
+            match item {
+                MaybeRef::Ref(r) => {
+                    if self.seen.insert(r)
+                        && let Some(d) = self.xref.get::<Dict<'a>>(r.into())
+                    {
+                        out.push(d);
+                    }
+                }
+                MaybeRef::NotRef(Object::Dict(d)) => out.push(d),
+                MaybeRef::NotRef(_) => {}
+            }
+        }
+        out
+    }
+
+    /// Charges `n` units; `false` (and nothing left from then on) when the budget or the
+    /// deadline ran out.
+    fn take(&mut self, n: usize) -> bool {
+        if self.left < n {
+            self.left = 0;
+            return false;
+        }
+        self.left -= n;
+        self.since_check += n;
+        if self.since_check >= DEADLINE_EVERY {
+            self.since_check = 0;
+            if (self.late)() {
+                self.left = 0;
+                return false;
+            }
+        }
+        true
+    }
+
+    fn spent(&self) -> bool {
+        self.left == 0
+    }
+}
+
+/// `late` says whether the file's deadline has passed; the tree walks stop when it does.
+pub(crate) fn catalog_facts(pdf: &Pdf, raw: &[u8], late: &dyn Fn() -> bool) -> CatalogFacts {
     let mut out = CatalogFacts::default();
     let xref = pdf.xref();
     let Some(catalog) = xref.get::<Dict<'_>>(xref.root_id()) else {
@@ -37,8 +111,8 @@ pub(crate) fn catalog_facts(pdf: &Pdf, raw: &[u8]) -> CatalogFacts {
     if let Some(form) = catalog.get::<Dict<'_>>(b"AcroForm")
         && let Some(fields) = form.get::<Array<'_>>(b"Fields")
     {
-        let mut budget = MAX_NODES;
-        for f in fields.iter::<Dict<'_>>() {
+        let mut budget = Budget::new(xref, late);
+        for f in budget.dicts(&fields) {
             walk_field(&f, None, 0, &mut budget, &mut out);
         }
         if form.contains_key(b"XFA") {
@@ -52,7 +126,7 @@ pub(crate) fn catalog_facts(pdf: &Pdf, raw: &[u8]) -> CatalogFacts {
         .as_ref()
         .and_then(|n| n.get::<Dict<'_>>(b"EmbeddedFiles"))
     {
-        let mut budget = MAX_NODES;
+        let mut budget = Budget::new(xref, late);
         out.embedded_files = name_tree_len(&ef, 0, &mut budget);
     }
     let js_tree = names
@@ -94,25 +168,26 @@ fn is_js_action(a: &Dict<'_>) -> bool {
 
 /// Counts terminal fields (those without `Kids`, or whose kids are only widgets) and
 /// signature fields. `FT` is inheritable.
-fn walk_field(
-    f: &Dict<'_>,
+fn walk_field<'a>(
+    f: &Dict<'a>,
     inherited_ft: Option<&str>,
     depth: u32,
-    budget: &mut usize,
+    budget: &mut Budget<'a, '_>,
     out: &mut CatalogFacts,
 ) {
-    if depth > MAX_DEPTH || *budget == 0 {
+    if depth > MAX_DEPTH || !budget.take(1) {
         return;
     }
-    *budget -= 1;
     let own_ft = f.get::<Name<'_>>(b"FT").map(|n| n.as_str().to_owned());
     let ft = own_ft.as_deref().or(inherited_ft);
-    let kids: Vec<Dict<'_>> = f
-        .get::<Array<'_>>(b"Kids")
-        .map(|k| k.iter::<Dict<'_>>().collect())
-        .unwrap_or_default();
     // Kids that carry a field name (`T`) are fields; the rest are widget annotations.
-    let field_kids: Vec<&Dict<'_>> = kids.iter().filter(|k| k.contains_key(b"T")).collect();
+    let field_kids: Vec<Dict<'a>> = f
+        .get::<Array<'a>>(b"Kids")
+        .map(|kids| budget.dicts(&kids))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|k| k.contains_key(b"T"))
+        .collect();
     if field_kids.is_empty() {
         out.form_fields += 1;
         if ft == Some("Sig") {
@@ -124,27 +199,39 @@ fn walk_field(
         }
         return;
     }
-    for k in field_kids {
+    for k in &field_kids {
+        if budget.spent() {
+            return;
+        }
         walk_field(k, ft, depth + 1, budget, out);
     }
 }
 
 /// Number of entries in a name tree (`Names` arrays hold key/value pairs).
-fn name_tree_len(node: &Dict<'_>, depth: u32, budget: &mut usize) -> usize {
-    if depth > MAX_DEPTH || *budget == 0 {
+/// Every entry counted is charged to the budget: a node with a huge `/Names` array can be
+/// shared by many `/Kids` entries.
+fn name_tree_len<'a>(node: &Dict<'a>, depth: u32, budget: &mut Budget<'a, '_>) -> usize {
+    if depth > MAX_DEPTH || !budget.take(1) {
         return 0;
     }
-    *budget -= 1;
     let mut n = 0;
     if let Some(names) = node.get::<Array<'_>>(b"Names") {
-        n += names.raw_iter().count() / 2;
-    }
-    if let Some(kids) = node.get::<Array<'_>>(b"Kids") {
-        for k in kids.iter::<Dict<'_>>() {
-            n += name_tree_len(&k, depth + 1, budget);
-            if *budget == 0 {
+        let mut items = 0usize;
+        for _ in names.raw_iter() {
+            items += 1;
+            // One unit per key/value pair.
+            if items.is_multiple_of(2) && !budget.take(1) {
                 break;
             }
+        }
+        n += items / 2;
+    }
+    if let Some(kids) = node.get::<Array<'a>>(b"Kids") {
+        for k in budget.dicts(&kids) {
+            if budget.spent() {
+                break;
+            }
+            n += name_tree_len(&k, depth + 1, budget);
         }
     }
     n
