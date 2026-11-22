@@ -1049,7 +1049,12 @@ mod tests {
                 }
             })
             .collect();
-        let mut b = Block::new(Span { start: 0, end: 0 }, BlockKind::Paragraph, Zone::Body, None);
+        let mut b = Block::new(
+            Span { start: 0, end: 0 },
+            BlockKind::Paragraph,
+            Zone::Body,
+            None,
+        );
         b.lines = lines;
         Page {
             blocks: vec![b],

@@ -206,7 +206,7 @@ pub const STEPS: &[StepDoc] = &[
         id: quail_summary::SummaryCard::ID,
         kind: StepKind::Analyzer,
         formats: &[],
-        doc: "File card from all facts (finalizer): kind, parties, dates, amounts, ids, items, flags.",
+        doc: "File card from all facts (finalizer): kind, parties, dates, amounts, refs, keywords, ids, items, flags.",
     },
     #[cfg(feature = "summary")]
     StepDoc {
@@ -221,6 +221,20 @@ pub const STEPS: &[StepDoc] = &[
         kind: StepKind::Analyzer,
         formats: &[],
         doc: "Document outline: headings (numbered, keyword, capitals, type size) with page ranges, bounded.",
+    },
+    #[cfg(feature = "summary")]
+    StepDoc {
+        id: quail_summary::SummaryKeywords::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Keywords and key phrases (YAKE-style, English and Serbian Latin/Cyrillic as one), linked to parties.",
+    },
+    #[cfg(feature = "summary")]
+    StepDoc {
+        id: quail_summary::SummaryTopics::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Topic map of documents of 20+ pages: keywords per section, topic shifts, topic segments.",
     },
 ];
 
@@ -337,7 +351,9 @@ pub fn builder_with(profile: Profile, limits: Limits, ocr: Option<&OcrSettings>)
     let b = b
         .analyzer(Box::new(quail_summary::SummaryCard::new()))
         .analyzer(Box::new(quail_summary::SummaryExtractive))
-        .analyzer(Box::new(quail_summary::SummaryOutline::new()));
+        .analyzer(Box::new(quail_summary::SummaryOutline::new()))
+        .analyzer(Box::new(quail_summary::SummaryKeywords::new()))
+        .analyzer(Box::new(quail_summary::SummaryTopics::new()));
     b
 }
 

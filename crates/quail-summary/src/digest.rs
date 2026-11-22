@@ -41,13 +41,16 @@ use std::fmt::Write as _;
 use std::time::Instant;
 
 use quail_core::{BlockKind, Document};
+use quail_text::NormalizedText;
 use quail_text::normalize::{NormalizeOptions, Whitespace, normalize};
 
 use crate::extractive::{
     ABBREVIATIONS, Flags, PhraseIndex, STOP, folded, fragment, strip_enumerator,
 };
 use crate::outline::{Outline, OutlineMethod, page_range};
+use crate::terms::TermIndex;
 use crate::tokens;
+use crate::topics;
 
 /// Settings of [`build`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,6 +75,8 @@ pub struct DigestConfig {
     pub candidates_per_group: usize,
     /// Relevance against redundancy in the sentence pick (1 = relevance only).
     pub mmr_lambda: f64,
+    /// Keywords per section (0: none), when a term index is given.
+    pub section_keywords: usize,
 }
 
 impl Default for DigestConfig {
@@ -89,6 +94,7 @@ impl Default for DigestConfig {
             bytes_per_group: 12 * 1024,
             candidates_per_group: 120,
             mmr_lambda: 0.7,
+            section_keywords: 5,
         }
     }
 }
@@ -138,6 +144,8 @@ pub struct DigestSection {
     pub candidates: usize,
     /// The picked sentences, in document order.
     pub excerpts: Vec<Excerpt>,
+    /// Its distinctive keywords ([`crate::topics::range_keywords`]), printed under its title.
+    pub keywords: Vec<String>,
 }
 
 /// The bounded summary input of one document.
@@ -235,6 +243,19 @@ pub fn build(
     cfg: &DigestConfig,
     deadline: Option<Instant>,
 ) -> Digest {
+    build_with_terms(doc, card_text, outline, cfg, None, deadline)
+}
+
+/// [`build`], with a `keywords: …` line under each section title from the document's term
+/// index (and the shared normalized pages, for the keywords' surface forms).
+pub fn build_with_terms(
+    doc: &Document,
+    card_text: &str,
+    outline: &Outline,
+    cfg: &DigestConfig,
+    terms: Option<(&TermIndex, Option<&NormalizedText>)>,
+    deadline: Option<Instant>,
+) -> Digest {
     let max = cfg.max_tokens.max(300);
     let facts = format!("FACTS:\n{}\n\n", card_text.trim());
     let facts_tokens = tokens::estimate(&facts);
@@ -294,12 +315,29 @@ pub fn build(
     let groups = groups(doc, outline, max_groups(cfg, max));
     let header = "EXCERPTS (sentences copied from each section):\n";
     let fixed = facts_tokens + tokens::estimate(&body) + tokens::estimate(header);
+    let kws: Vec<Vec<String>> = match terms {
+        Some((t, shared)) if cfg.section_keywords > 0 => {
+            let ranges: Vec<(u32, u32)> = groups.iter().map(|g| (g.page, g.end_page)).collect();
+            topics::range_keywords(doc, shared, t, &ranges, cfg.section_keywords)
+        }
+        _ => Vec::new(),
+    };
     let titles: usize = groups
         .iter()
-        .map(|g| tokens::estimate(&section_title(&g.title, g.page, g.end_page)) + 1)
+        .enumerate()
+        .map(|(i, g)| {
+            tokens::estimate(&section_title(&g.title, g.page, g.end_page))
+                + 1
+                + kws.get(i).map_or(0, |k| {
+                    keyword_line(k).map_or(0, |l| tokens::estimate(&l) + 1)
+                })
+        })
         .sum();
     let avail = max.saturating_sub(fixed + titles + 8);
-    let (sections, truncated) = select(doc, &groups, None, avail, &lead, cfg, deadline);
+    let (mut sections, truncated) = select(doc, &groups, None, avail, &lead, cfg, deadline);
+    for (s, k) in sections.iter_mut().zip(kws) {
+        s.keywords = k;
+    }
     body.push_str(header);
     let mut digest = render(&facts, &body, &sections, doc_tokens, truncated);
     // The estimate of the parts and of the whole can differ by a few tokens: trim to fit.
@@ -342,6 +380,11 @@ fn finish(
     }
 }
 
+/// `keywords: a, b, c`, or nothing without keywords.
+fn keyword_line(k: &[String]) -> Option<String> {
+    (!k.is_empty()).then(|| format!("keywords: {}", k.join(", ")))
+}
+
 fn section_title(title: &str, page: u32, end: u32) -> String {
     format!("## {title} {}", page_range(page, end))
 }
@@ -357,6 +400,10 @@ fn render(
     for s in sections {
         body.push_str(&section_title(&s.title, s.page, s.end_page));
         body.push('\n');
+        if let Some(l) = keyword_line(&s.keywords) {
+            body.push_str(&l);
+            body.push('\n');
+        }
         let joined: Vec<&str> = s.excerpts.iter().map(|e| e.text.as_str()).collect();
         if !joined.is_empty() {
             body.push_str(&joined.join(" "));
@@ -1024,6 +1071,7 @@ fn select(
                     page: cs[i].page,
                 })
                 .collect(),
+            keywords: Vec::new(),
         });
     }
     (sections, truncated)

@@ -38,6 +38,7 @@ pub mod extractive;
 pub mod factcheck;
 pub mod format;
 pub mod input;
+pub mod keywords;
 #[cfg(feature = "llm")]
 pub mod llm;
 pub mod mapreduce;
@@ -45,18 +46,26 @@ pub mod models;
 pub mod outline;
 pub mod prompt;
 pub mod summarizer;
+pub mod terms;
 pub mod tokens;
+pub mod topics;
 
-pub use analyzer::{AFTER, SummaryCard, SummaryDigest, SummaryExtractive, SummaryOutline, card_of};
+pub use analyzer::{
+    AFTER, AFTER_TERMS, SummaryCard, SummaryDigest, SummaryExtractive, SummaryKeywords,
+    SummaryOutline, SummaryTopics, card_of,
+};
 pub use card::{CardText, FileCard};
 pub use digest::{Digest, DigestConfig, DigestMethod, MapPart, MapReduceConfig};
 pub use extractive::Subject;
+pub use keywords::{Keyword, KeywordConfig};
 #[cfg(feature = "llm")]
 pub use llm::{LlmConfig, LlmSummarizer, SummaryLlm};
 pub use outline::{Outline, OutlineConfig, OutlineEntry, OutlineMethod};
 pub use summarizer::{
     ExtractiveSummarizer, LongInput, Method, Summarizer, SummarizerId, Summary, SummaryInput,
 };
+pub use terms::{StemLang, TermIndex};
+pub use topics::{TopicConfig, TopicMap, TopicSection, TopicSegment};
 
 /// The keys this crate emits.
 pub mod keys {
@@ -85,6 +94,14 @@ pub mod keys {
     pub const DIGEST: FactKey = FactKey::new("summary.digest");
     /// Estimated tokens of [`DIGEST`] (Int, see [`crate::tokens`]).
     pub const DIGEST_TOKENS: FactKey = FactKey::new("summary.digest_tokens");
+    /// Document keywords and key phrases, best first (List of Record: `term`, `key` = the
+    /// matching key, stems in ASCII, the same for Latin and Cyrillic, `score` in (0, 1],
+    /// `count`, `first_page` zero-based, `entities`? = keys of the `party.candidates` it names).
+    pub const KEYWORDS: FactKey = FactKey::new("summary.keywords");
+    /// Topic map of a long document (Record: `method` = `headings` or `windows`, `threshold`,
+    /// `sections` = list of `title page end_page keywords shift`, `segments` = list of `title
+    /// titles sections page end_page keywords shift`, pages zero-based; `truncated`?).
+    pub const TOPICS: FactKey = FactKey::new("summary.topics");
     /// The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or
     /// `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or
     /// `map_reduce`, `calls`). Feature `llm`.
