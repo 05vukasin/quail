@@ -26,7 +26,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `text.extract@1` | extractor | text | fast | Plain text: encoding (BOM, UTF-8/16, chardetng legacy guess), LF line endings, form-feed pages, paragraphs and headings. |
 | `text.stats@3` | analyzer | any | fast | Characters, words, scripts and garbage ratio of the extracted text. |
 | `text.lang@2` | analyzer | any | fast | Document language with top candidates (lingua + sr/hr/bs layer). |
-| `signal.scan@4` | analyzer | any | fast | Identifiers with check digits, dates with roles, amounts, contact domains. |
+| `signal.scan@5` | analyzer | any | fast | Identifiers with check digits, dates with roles, amounts, contact domains. |
 | `ref.references@3` | analyzer | any | fast | Own document numbers, cited documents, title, instrument kind, page/version markers. |
 | `party.candidates@4` | analyzer | any | fast | Company mentions with roles and defined terms, ranked candidates, name statements. |
 | `clause.terms@1` | analyzer | any | fast | Contract clauses: governing law, term and renewal, survival and notice periods, termination rights. |

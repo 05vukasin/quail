@@ -89,9 +89,9 @@ steps    engine.sniff@2 (10 µs), pdf.extract@2 (9.3 ms), hash.identity@1 (111 �
                       - {key="blue river software" surface="Blue River Software GmbH" score=0.99 roles=["supplier", "signatory"]}
 
 [signal] 9 fact(s)
-  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@4  at p1 body [775..802] box(72,280,528,344)
-  signal.amount       4200.00 EUR  conf 0.97  src signal.scan@4  at p1 body [661..673] box(72,280,528,344)
-  signal.date_signed  2023-09-12  conf 0.82  src signal.scan@4  at p1 body [110..127] box(72,130,543,201)
+  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@5  at p1 body [775..802] box(72,280,528,344)
+  signal.amount       4200.00 EUR  conf 0.97  src signal.scan@5  at p1 body [661..673] box(72,280,528,344)
+  signal.date_signed  2023-09-12  conf 0.82  src signal.scan@5  at p1 body [110..127] box(72,130,543,201)
   ...
 ```
 
@@ -180,7 +180,7 @@ status   ok
 steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 µs), sketch.page_phash@3 (50.6 ms), ocr.pages@1 (5.87 s), ...
   ocr.page       {page=0 script="latin" mean_conf=0.9931 chars=974 lines=22 dpi=200 source="embedded_scan" rotation=0}  conf 0.99  src ocr.pages@1  at p1
   pdf.is_scanned           true  src pdf.extract@2
-  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@4  at p1 body [775..802] box(72,333,258,343)
+  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@5  at p1 body [775..802] box(72,333,258,343)
 ```
 
 - OCR runs only under `--profile deep`, and only on pages that need it. The text analyzers run

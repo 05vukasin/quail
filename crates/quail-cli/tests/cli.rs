@@ -581,7 +581,7 @@ fn keys_and_version() {
         expected.extend(["text.stats@3", "text.lang@2"]);
     }
     if cfg!(feature = "signals") {
-        expected.push("signal.scan@4");
+        expected.push("signal.scan@5");
     }
     if cfg!(feature = "refs") {
         expected.push("ref.references@3");

@@ -4,7 +4,7 @@ Rule-based **candidates** (not verdicts) for formatted business data: identifier
 dates, money and contacts. Namespace `signal.*`. Contract and document numbers, cross-document
 references and titles belong to `quail-refs`; company names, legal forms and parties to `quail-parties`.
 
-One analyzer: **`signal.scan@4`** (`SignalScan`), profile `Fast`, requires the `document` artifact.
+One analyzer: **`signal.scan@5`** (`SignalScan`), profile `Fast`, requires the `document` artifact.
 
 Every fact carries a calibrated `conf` and `Evidence { page, zone, span, bbox }`: the span is a byte
 range of the **original** page text (scanning runs on normalized text and maps back through
@@ -69,7 +69,7 @@ One fact per distinct (key, value) per file, with the evidence of its most confi
   3. a date alone on its line in the first 25 lines of the first page (a letter or cover-page date, a
      place before it and `godine` after it allowed) → `date_signed`.
 
-  **Per document**, once every page is read (`signal.scan@4`): the first `date_effective` phrase on
+  **Per document**, once every page is read (`signal.scan@5`): the first `date_effective` phrase on
   the first two pages is the agreement's own (role conf 0.92 instead of 0.78), and so is the first
   signing phrase there (0.85 instead of 0.65). Against the most confident effective date, an
   expiry before it keeps 0.3 of its role conf, and a signing date two years or more before it
