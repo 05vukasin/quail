@@ -2,6 +2,7 @@
 //! the problems a file gets past them. Needs the models in `$QUAIL_OCR_MODELS` (CI fetches and
 //! caches them); without them every test here skips.
 #![cfg(feature = "ocr")]
+#![allow(clippy::many_single_char_names)]
 
 use std::fs;
 use std::path::Path;
@@ -166,6 +167,74 @@ fn explicit_jobs_threads_and_timeout_are_kept() {
         "{stderr}"
     );
     assert_eq!(int(&records(&o)[0], "ocr.pages"), Some(3));
+}
+
+/// A scan longer than the file timeout allows: OCR stops early enough that the text
+/// analyzers still run on the pages read, instead of the engine skipping them at the deadline.
+#[test]
+fn ocr_leaves_time_for_the_analyzers_after_it() {
+    let Some(m) = models() else { return };
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("long.pdf");
+    let pages: Vec<PdfPage<'_>> = (0..40).map(|_| PdfPage::Scan).collect();
+    fs::write(&p, pdf(&pages, "Long scan")).unwrap();
+    let file = p.to_str().unwrap();
+    let o = quail(
+        &m,
+        &[
+            "scan",
+            file,
+            "--profile",
+            "deep",
+            "-q",
+            "--ocr-jobs",
+            "1",
+            "--ocr-threads",
+            "1",
+            "--timeout",
+            "20s",
+        ],
+    );
+    let r = &records(&o)[0];
+    let probs = problems(r);
+    assert!(
+        !probs.iter().any(|p| p.contains("analyzer(s) not run")),
+        "{probs:?}"
+    );
+    for step in ["ocr.pages", "signal.scan", "summary.card"] {
+        assert!(
+            r.steps.iter().any(|s| s.name == step),
+            "{step}: {:?}",
+            r.steps
+        );
+    }
+    if int(r, "ocr.pages") != Some(40) {
+        assert!(
+            probs.iter().any(|p| p.contains("steps after it")),
+            "{probs:?}"
+        );
+    }
+}
+
+/// `inspect` gets the same derived budgets as `scan` (one OCR job, raised timeout).
+#[test]
+fn inspect_gets_the_auto_budget() {
+    let Some(m) = models() else { return };
+    let t = tempfile::tempdir().unwrap();
+    let file = three_scans(t.path());
+    let o = quail(&m, &["inspect", &file, "--profile", "deep"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(
+        stderr.contains("quail: ocr: 1 page(s) at a time"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("45s per page; timeout 32m per file"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(stdout.contains("ocr.pages"), "{stdout}");
 }
 
 /// `--isolate`: one engine per worker process, and `-j` defaults to the OCR jobs.

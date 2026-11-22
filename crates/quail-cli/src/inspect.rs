@@ -24,6 +24,7 @@ pub fn run(args: &InspectArgs) -> Result<(String, ExitCode), String> {
     let ocr_args = &crate::cli::OcrArgs::default();
     // One file: one OCR job, with all the threads it can use.
     let plan = crate::scan::plan(args.profile.into(), &args.limits, ocr_args, Some(1), false);
+    plan.note();
     let read = ReadOptions::new().max_file_bytes(Some(plan.limits.max_bytes));
     let item = read_file(&args.file, &read).map_err(|e| e.to_string())?;
     crate::scan::warn_without_ocr(args.profile.into());

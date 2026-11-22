@@ -104,6 +104,11 @@ ahead of it. With `--timeout`, that value is the file's wall time and there is n
 unless `--ocr-page-time` is also given. With `--isolate`, each worker process loads its own engine:
 each reads one page at a time and `-j` defaults to the `--ocr-jobs` value.
 
+Whatever the timeout, OCR keeps the last `max(10 s, 15 %)` of it (at most half) for the steps
+after it and does not start a page that would end in that reserve, so the text analyzers always
+run on the pages read so far; the record is then `partial` with the problem
+`ocr: stopped after k of n pages to keep ... for the steps after it`.
+
 ### Isolation
 
 | option | default | effect |
