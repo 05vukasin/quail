@@ -1,7 +1,8 @@
 # Vendored, patched crates
 
-These are copies of published crates with small patches: hardening for hostile PDFs (hayro)
-and speed (lingua). The root
+These are copies of published crates with small patches: hardening for hostile PDFs (hayro),
+speed (lingua) and a thread-free, unsafe-free JPEG decoder for reduced decodes (jpeg-decoder).
+The root
 `Cargo.toml` routes the crates.io versions here through `[patch.crates-io]`. They are not
 workspace members (`exclude = ["vendor"]`), so workspace lints and `cargo fmt` do not touch
 them.
@@ -16,9 +17,11 @@ pristine sources in `~/.cargo/registry/src/*/<crate>-<version>/`.
 | `hayro-jbig2` | 0.4.0 | https://github.com/LaurenzV/hayro |
 | `hayro` | 0.9.0 | https://github.com/LaurenzV/hayro |
 | `lingua` | 1.8.0 | https://github.com/pemistahl/lingua-rs |
+| `jpeg-decoder` | 0.3.2 | https://github.com/image-rs/jpeg-decoder |
 
 `quail-pdf` pins `hayro`, `hayro-syntax` and `hayro-interpret` at `=0.9.0`, and `quail-text`
-pins `lingua` at `=1.8.0`, so that the patches always apply to the version they were written
+pins `lingua` at `=1.8.0`, and the vendored `hayro-syntax` pins `jpeg-decoder` at `=0.3.2`
+(a path dependency, `../jpeg-decoder`, so it needs no `[patch]` entry), so that the patches always apply to the version they were written
 for.
 
 `lingua` is trimmed to the library: no accuracy reports, images, tests, benchmarks or binding
@@ -61,6 +64,16 @@ The crate using them (`quail-pdf`) cannot do that from outside.
   fallback, LZW, RunLength, and ASCII85 `z`.
 - **`filter/dct.rs`:** `header_fits` checks the frame size in the JPEG SOF marker. A stream
   without an SOF is refused as corrupt (not as a limit).
+- **`filter/dct.rs` (reduced decode):** when the caller passes a `target_dimension` at most
+  half the JPEG frame, the image is decoded with jpeg-decoder's scaled IDCT at 1/8, 1/4 or
+  1/2: the smallest scale whose output still covers the target in both dimensions
+  (`reduced_scale`). zune-jpeg has no scaled IDCT. Only gray and three-component 8-bit
+  DCT images take this path, with the color transform zune-jpeg's header reading and the PDF's
+  `/ColorTransform` chose (YCbCr → RGB, RGB, or untransformed); CMYK, YCCK, multi-band,
+  12-bit and lossless JPEGs, frames under 16 px on a side, and any jpeg-decoder error fall
+  back to the unchanged full zune-jpeg decode. The decoding buffer is capped at the reduced
+  output size. The pixel and byte caps from `header_fits` still run first, on the full frame.
+  `Cargo.toml`: `jpeg-decoder` (`std` feature).
 - **`filter/jpx.rs`:** `header_fits` checks the image size in the JPEG 2000 SIZ marker of
   every codestream the decoder will parse: a raw codestream (SOC + SIZ at the start), or every
   `jp2c` box of a JP2 file, walking the top-level boxes with the decoder's lenient length
@@ -134,6 +147,21 @@ The crate using them (`quail-pdf`) cannot do that from outside.
 - **`paint.rs`:** gradient and sampled-shading charges.
 - **`glyph_cache.rs`:** glyph positions are summed in `f64` (the `i32` sum overflowed).
 
+### jpeg-decoder 0.3.2 (scaled IDCT for reduced DCT decodes)
+
+Used by hayro-syntax's `filter/dct.rs` only for reduced decodes (see above); full-size decodes
+stay on zune-jpeg.
+
+- **`worker/mod.rs`:** the decoder always uses its same-thread (`Immediate`) worker. Upstream
+  spawns a `std::thread` per color component (or uses rayon) for every image above 128 × 128
+  output pixels, from inside quail's own worker pool; `worker/multithreaded.rs` and
+  `worker/rayon.rs` are removed.
+- **`lib.rs`, `decoder.rs`, `idct.rs`:** `#![forbid(unsafe_code)]`. The SIMD `arch` module
+  (SSSE3/NEON/wasm IDCT and color conversion, the crate's only unsafe code) is removed; the
+  portable paths upstream builds with `platform_independent` are the only ones.
+- **`Cargo.toml`:** library only, no features, no dependencies (no rayon); tests, benches and
+  examples are not vendored.
+
 ### lingua 1.8.0 (speed; output unchanged)
 
 quail's `text.lang` spent most of its time inside `compute_language_confidence_values`. The
@@ -174,6 +202,6 @@ corpus and CUAD, at `-j1` and `-j4`.
 1. Copy the new upstream sources over the directory.
 2. Re-apply every `// quail:` change.
 3. Run `cargo test -p quail-pdf`. Its `tests/hostile.rs` regenerates the hostile inputs and
-   fails if any of them gets through.
+   fails if any of them gets through; `tests/dct_reduced.rs` checks the scaled JPEG decode.
 4. For lingua, run `cargo test -p quail-text` and compare `quail scan` records (minus
    `timings`) on a corpus before and after: they must be identical.

@@ -15,7 +15,7 @@
 //! | [`InvoiceLayout`] `sketch.invoice_layout@2` | Fast | invoice labels + number-pattern digest | equality |
 //! | [`TextKey`] `sketch.text_key@2` | Fast | 128-bit key of the folded words | equality |
 //! | [`CompatMinHash`] `sketch.minhash_compat@3` | Standard | byte-compatible port of an existing deployment's sketches (compatibility mode) | as in that deployment, see [`compat`] |
-//! | [`PagePHash`] `sketch.page_phash@3` | Standard | 64-bit DCT pHash of up to 4 scanned pages (first 3 + last; scans decoded at reduced resolution) | [`hamming`] ≤ [`phash::PAGE_HAMMING_MAX`] per page |
+//! | [`PagePHash`] `sketch.page_phash@4` | Standard | 64-bit DCT pHash of up to 4 scanned pages (first 3 + last; scans decoded at reduced resolution) | [`hamming`] ≤ [`phash::PAGE_HAMMING_MAX`] per page |
 //!
 //! Everything builds on `quail-text`: its normalization, tokens, folding and pinned XXH3
 //! hashes. Golden tests (`tests/golden.rs`) pin every sketch; a golden diff means a new

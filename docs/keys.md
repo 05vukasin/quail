@@ -37,7 +37,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `sketch.invoice_layout@2` | analyzer | any | fast | Invoice labels and number-pattern digest. |
 | `sketch.text_key@2` | analyzer | any | fast | 128-bit key of the folded words (same words whatever the bytes). |
 | `sketch.minhash_compat@3` | analyzer | any | standard | Compatibility mode: byte-compatible port of an existing deployment's MinHash and template sketches. |
-| `sketch.page_phash@3` | analyzer | any | standard | 64-bit DCT pHash of each scanned page (embedded scan or 36 dpi render; needs `raster`). |
+| `sketch.page_phash@4` | analyzer | any | standard | 64-bit DCT pHash of each scanned page (embedded scan or 36 dpi render; needs `raster`). |
 | `item.lines@5` | analyzer | any | fast | Price items from tables and rate lines: description, quantity, unit, prices, CPV top-3. |
 | `summary.card@2` | analyzer | any | fast | File card from all facts (finalizer): kind, parties, dates, amounts, ids, items, flags. |
 | `summary.extractive@2` | analyzer | any | fast | 1-3 sentence English summary without a model: card template + subject clause. |

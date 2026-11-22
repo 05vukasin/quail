@@ -1541,6 +1541,7 @@ dependencies = [
  "hayro-ccitt",
  "hayro-jbig2",
  "hayro-jpeg2000",
+ "jpeg-decoder",
  "memchr",
  "rustc-hash",
  "smallvec",
@@ -1751,6 +1752,10 @@ dependencies = [
  "getrandom 0.4.3",
  "libc",
 ]
+
+[[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
 
 [[package]]
 name = "js-sys"

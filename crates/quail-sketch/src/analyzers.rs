@@ -414,22 +414,23 @@ pub fn phash_pages(n: usize) -> impl Iterator<Item = usize> {
     (0..head).chain((n > MAX_PHASH_PAGES).then(|| n - 1))
 }
 
-/// `sketch.page_phash@3`: 64-bit pHash ([`crate::phash`]) of scanned pages
+/// `sketch.page_phash@4`: 64-bit pHash ([`crate::phash`]) of scanned pages
 /// ([`quail_core::Page::is_scan`]) and pages needing OCR: all of them up to 4, else the first
 /// 3 and the last ([`phash_pages`]) ([`keys::PAGE_PHASH`], [`keys::PAGE_PHASH_PAGES`]). Takes
 /// the embedded scan when there is one, decoded at reduced resolution (at least
 /// [`PHASH_SCAN_SIDE`] px on the longer side, see
 /// [`PageRaster::embedded_scan_reduced`](quail_core::PageRaster::embedded_scan_reduced)),
-/// else renders the page at 36 dpi. Requires the `raster` artifact. `@2` hashed the
-/// full-resolution scan; `@3` hashes of JPEG 2000 scans differ from `@2` by a few bits, so
-/// do not compare hashes across versions. `@2` hashed the same pages as `@3`; `@1` the first 16.
+/// else renders the page at 36 dpi. Requires the `raster` artifact. `@4` gets JPEG (DCT) scans
+/// at reduced resolution too (scaled IDCT), so their hashes differ from `@3` by a few bits;
+/// `@3` did so for JPEG 2000 scans, `@2` hashed every scan at full resolution. Do not compare
+/// hashes across versions. `@2` to `@4` hash the same pages; `@1` the first 16.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PagePHash;
 
 analyzer!(
     PagePHash,
     "sketch.page_phash",
-    3,
+    4,
     Profile::Standard,
     &["document", "raster"],
     &[],

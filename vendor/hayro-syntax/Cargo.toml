@@ -39,6 +39,7 @@ images = [
     "dep:hayro-jpeg2000",
 ]
 std = [
+    "dep:jpeg-decoder",
     "hayro-jbig2?/std",
     "hayro-jpeg2000?/std",
     "dep:rustc-hash",
@@ -94,6 +95,13 @@ optional = true
 
 [dependencies.smallvec]
 version = "1"
+
+# quail: scaled (1/2, 1/4, 1/8) IDCT for reduced DCT decodes; see src/filter/dct.rs.
+[dependencies.jpeg-decoder]
+version = "=0.3.2"
+path = "../jpeg-decoder"
+optional = true
+default-features = false
 
 [dependencies.zune-jpeg]
 version = "0.5"
