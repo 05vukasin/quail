@@ -285,44 +285,47 @@ impl Analyzer for OcrPages {
                 todo.len()
             ));
         }
-        let mut clock = Clock::new(&self.config, todo.len().min(cap), out.deadline());
+        let mut clock = Clock::new(
+            &self.config,
+            todo.len().min(cap),
+            out.deadline(),
+            ctx.limits.timeout,
+        );
         let ticket = self.permits.as_ref().map(|p| p.ticket());
         for page in todo.into_iter().take(cap) {
-            if out.check_deadline().is_err() {
-                out.problem(format!("ocr: deadline reached after {} pages", pages.len()));
-                break;
-            }
-            if clock.spent() {
-                out.problem(clock.spent_problem(pages.len()));
+            if let Some(why) = clock.stop(pages.len()) {
+                out.problem(why);
                 break;
             }
             // Held while the page is decoded, rendered and read.
             let _permit = match (&self.permits, ticket) {
                 (Some(p), Some(t)) => {
-                    if let Ok((permit, waited)) = p.acquire(t, out.deadline()) {
+                    if let Ok((permit, waited)) = p.acquire(t, clock.end) {
                         clock.waited(waited);
                         Some(permit)
                     } else {
-                        out.problem(format!(
-                            "ocr: deadline reached waiting for an OCR slot after {} pages",
-                            pages.len()
-                        ));
+                        out.problem(clock.reserve_problem(pages.len()));
                         break;
                     }
                 }
                 _ => None,
             };
+            // Waiting took time: check again before starting the page.
+            if let Some(why) = clock.stop(pages.len()) {
+                out.problem(why);
+                break;
+            }
+            let started = Instant::now();
             match run.page(page, budget, clock.deadline(), out) {
                 Ok(t) => {
+                    clock.read(started.elapsed());
                     budget = budget.saturating_sub(t.text.len());
                     pages.push(t);
                 }
-                Err(Error::Timeout) if clock.spent() && out.check_deadline().is_ok() => {
-                    out.problem(clock.spent_problem(pages.len()));
-                    break;
-                }
                 Err(Error::Timeout) => {
-                    out.problem(format!("ocr: deadline reached on page {}", page.index));
+                    out.problem(clock.stop(pages.len()).unwrap_or_else(|| {
+                        format!("ocr: deadline reached on page {}", page.index)
+                    }));
                     break;
                 }
                 Err(e @ Error::Resource(_)) => {
@@ -346,26 +349,53 @@ impl Analyzer for OcrPages {
     }
 }
 
+/// Share of the file's timeout kept free for the steps after OCR (see [`reserve`]).
+pub const RESERVE_SHARE: f64 = 0.15;
+
+/// Smallest time kept free for the steps after OCR (see [`reserve`]).
+pub const MIN_RESERVE: Duration = Duration::from_secs(10);
+
+/// Time kept free at the end of a file's `timeout` for the steps after OCR (the text
+/// analyzers that read the OCR'd pages): `max(MIN_RESERVE, RESERVE_SHARE × timeout)`, at
+/// most half the timeout.
+pub fn reserve(timeout: Duration) -> Duration {
+    timeout
+        .mul_f64(RESERVE_SHARE)
+        .max(MIN_RESERVE)
+        .min(timeout / 2)
+}
+
 /// The OCR time budget of one file: `pages × page_time` from the start, moved later by the
-/// time spent waiting for permits, never past the file's deadline.
+/// time spent waiting for permits, and in any case ending [`reserve`] before the file's
+/// deadline, so that the analyzers after OCR still run on the pages read so far. A page is
+/// not started when the mean of the pages so far says it would end past that.
 struct Clock {
-    /// End of the budget; `None` without a `page_time`.
+    /// End of the per-page budget; `None` without a `page_time`.
     until: Option<Instant>,
-    file: Option<Instant>,
+    /// The file's deadline minus the reserve.
+    end: Option<Instant>,
+    reserve: Duration,
     allowed: Option<Duration>,
     pages: usize,
+    /// Reading time of the pages read so far.
+    read: Duration,
+    read_pages: u32,
 }
 
 impl Clock {
-    fn new(cfg: &OcrConfig, pages: usize, file: Option<Instant>) -> Self {
+    fn new(cfg: &OcrConfig, pages: usize, file: Option<Instant>, timeout: Duration) -> Self {
         let allowed = cfg
             .page_time
             .map(|t| t.saturating_mul(u32::try_from(pages).unwrap_or(u32::MAX)));
+        let reserve = reserve(timeout);
         Self {
             until: allowed.and_then(|a| Instant::now().checked_add(a)),
-            file,
+            end: file.map(|f| f.checked_sub(reserve).unwrap_or(f)),
+            reserve,
             allowed,
             pages,
+            read: Duration::ZERO,
+            read_pages: 0,
         }
     }
 
@@ -373,23 +403,45 @@ impl Clock {
         self.until = self.until.and_then(|u| u.checked_add(d));
     }
 
-    /// The earlier of the budget's end and the file's deadline.
+    fn read(&mut self, d: Duration) {
+        self.read += d;
+        self.read_pages += 1;
+    }
+
+    /// Mean reading time per page so far (zero before the first).
+    fn per_page(&self) -> Duration {
+        self.read.checked_div(self.read_pages).unwrap_or_default()
+    }
+
+    /// The earlier of the budget's end and the reserve.
     fn deadline(&self) -> Option<Instant> {
-        match (self.until, self.file) {
+        match (self.until, self.end) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
     }
 
-    fn spent(&self) -> bool {
-        self.until.is_some_and(|u| Instant::now() >= u)
+    /// Why no further page should be started, after `read` pages.
+    fn stop(&self, read: usize) -> Option<String> {
+        let now = Instant::now();
+        if self.end.is_some_and(|e| now + self.per_page() >= e) {
+            return Some(self.reserve_problem(read));
+        }
+        if self.until.is_some_and(|u| now >= u) {
+            let secs = self.allowed.map_or(0, |a| a.as_secs());
+            return Some(format!(
+                "ocr: time budget of {secs} s for {} pages spent after {read} pages (page_time)",
+                self.pages
+            ));
+        }
+        None
     }
 
-    fn spent_problem(&self, read: usize) -> String {
-        let secs = self.allowed.map_or(0, |a| a.as_secs());
+    fn reserve_problem(&self, read: usize) -> String {
         format!(
-            "ocr: time budget of {secs} s for {} pages spent after {read} pages (page_time)",
-            self.pages
+            "ocr: stopped after {read} of {} pages to keep {} s of the file timeout for the steps after it",
+            self.pages,
+            self.reserve.as_secs()
         )
     }
 }

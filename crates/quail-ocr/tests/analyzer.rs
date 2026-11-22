@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use quail_core::{
     Analyzer, Artifacts, BBox, Blob, Ctx, Document, Emitter, Error, Format, Image, Limits, Page,
-    PageImage, PageKind, PageRaster, Profile, Raster, Result, TextSource, Value,
+    PageImage, PageKind, PageRaster, Profile, Raster, Result, RevisedDocument, TextSource, Value,
 };
 use quail_ocr::{
     EngineFactory, EngineId, MemoryCache, OcrConfig, OcrEngine, OcrHints, OcrLine, OcrPage,
@@ -424,7 +424,7 @@ fn deadline_and_page_cap_give_partial_results() {
     );
     assert_eq!(f.calls.load(Ordering::SeqCst), 0);
     assert!(
-        out.problems.iter().any(|p| p.contains("deadline")),
+        out.problems.iter().any(|p| p.contains("steps after it")),
         "{:?}",
         out.problems
     );
@@ -581,16 +581,85 @@ impl PageRaster for TinyRaster {
     }
 }
 
-/// Two small pages that need OCR.
-fn tiny_doc() -> Document {
+/// `n` small pages that need OCR.
+fn tiny_doc(n: u32) -> Document {
     let page = |i| Page {
         size: Some((23.0, 23.0)),
         needs_ocr: true,
         ..Page::new(i, PageKind::Physical)
     };
     Document {
-        pages: vec![page(0), page(1)],
+        pages: (0..n).map(page).collect(),
     }
+}
+
+/// Runs `a` on [`tiny_doc`]`(n)`.
+fn run_tiny(a: &OcrPages, n: u32, limits: &Limits, deadline: Option<Instant>) -> Out {
+    let blob = Blob::new(Vec::<u8>::new());
+    let mut arts = Artifacts::new();
+    arts.insert(tiny_doc(n));
+    arts.insert(Raster(Arc::new(TinyRaster)));
+    let ctx = Ctx {
+        blob: &blob,
+        format: Format::Pdf,
+        locator: "mem://tiny.pdf",
+        artifacts: &arts,
+        facts: &[],
+        limits,
+        profile: Profile::Deep,
+    };
+    let mut out = match deadline {
+        Some(d) => Emitter::with_deadline(OcrPages::ID, d),
+        None => Emitter::new(OcrPages::ID),
+    };
+    a.run(&ctx, &mut out).unwrap_or_else(|e| panic!("run: {e}"));
+    let problems = out.take_problems();
+    let (facts, artifacts, _) = out.into_parts();
+    Out {
+        facts,
+        artifacts,
+        problems,
+    }
+}
+
+/// A file timeout of 2 s with pages of 200 ms: OCR keeps the last second (half the timeout,
+/// as the 10 s minimum is more) for the analyzers after it, does not start a page that would
+/// end in it, and still provides the revised document of the pages read.
+#[test]
+fn ocr_leaves_time_for_the_steps_after_it() {
+    let a = OcrPages::new(
+        Factory::slow(0.0, Duration::from_millis(200)),
+        1,
+        OcrConfig {
+            page_time: None,
+            ..OcrConfig::default()
+        },
+    );
+    let limits = Limits {
+        timeout: Duration::from_secs(2),
+        ..Limits::default()
+    };
+    let start = Instant::now();
+    let out = run_tiny(&a, 20, &limits, Some(start + limits.timeout));
+    let took = start.elapsed();
+    assert!(took < Duration::from_millis(1100), "{took:?}");
+    let read = int(&out, &keys::PAGES).unwrap_or(0);
+    assert!((1..20).contains(&read), "{read}");
+    assert!(
+        out.problems.iter().any(|p| p.contains("steps after it")),
+        "{:?}",
+        out.problems
+    );
+    assert!(out.artifacts.get::<RevisedDocument>().is_some());
+}
+
+#[test]
+fn reserve_is_a_share_with_a_floor_and_a_ceiling() {
+    use quail_ocr::analyzer::reserve;
+    assert_eq!(reserve(Duration::from_mins(2)), Duration::from_secs(18));
+    assert_eq!(reserve(Duration::from_secs(30)), Duration::from_secs(10));
+    assert_eq!(reserve(Duration::from_secs(4)), Duration::from_secs(2));
+    assert_eq!(reserve(Duration::from_hours(2)), Duration::from_mins(18));
 }
 
 /// Time spent waiting for a permit (600 ms) does not count against the page budget
@@ -612,31 +681,7 @@ fn waiting_for_a_permit_is_not_reading_time() {
     let held = permits.acquire(permits.ticket(), None).ok();
     let t = {
         let a = a.clone();
-        std::thread::spawn(move || {
-            let blob = Blob::new(Vec::<u8>::new());
-            let mut arts = Artifacts::new();
-            arts.insert(tiny_doc());
-            arts.insert(Raster(Arc::new(TinyRaster)));
-            let limits = Limits::default();
-            let ctx = Ctx {
-                blob: &blob,
-                format: Format::Pdf,
-                locator: "mem://tiny.pdf",
-                artifacts: &arts,
-                facts: &[],
-                limits: &limits,
-                profile: Profile::Deep,
-            };
-            let mut out = Emitter::new(OcrPages::ID);
-            a.run(&ctx, &mut out).unwrap_or_else(|e| panic!("run: {e}"));
-            let problems = out.take_problems();
-            let (facts, artifacts, _) = out.into_parts();
-            Out {
-                facts,
-                artifacts,
-                problems,
-            }
-        })
+        std::thread::spawn(move || run_tiny(&a, 2, &Limits::default(), None))
     };
     std::thread::sleep(Duration::from_millis(600));
     drop(held);
@@ -663,7 +708,7 @@ fn deadline_while_waiting_for_a_permit() {
     );
     assert_eq!(int(&out, &keys::PAGES), Some(0));
     assert!(
-        out.problems.iter().any(|p| p.contains("OCR slot")),
+        out.problems.iter().any(|p| p.contains("steps after it")),
         "{:?}",
         out.problems
     );

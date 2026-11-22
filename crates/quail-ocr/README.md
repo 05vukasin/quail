@@ -43,6 +43,12 @@ OCR is far slower and heavier than every other step, so it has limits of its own
   the problem `ocr: time budget ... (page_time)` (record `partial`). `OcrConfig::file_timeout`
   gives the file timeout that fits that budget (at most 2 h), for callers that set `Limits::timeout`.
 
+- **Time for the steps after OCR.** OCR ends `reserve(timeout)` = `max(10 s, 15 % of the
+  file timeout)` (at most half of it) before the file's deadline, and does not start a page
+  that the mean of the pages so far says would end past that. The text analyzers that read
+  the revised document then still run, on the pages read so far, and the record is `partial`
+  with the problem `ocr: stopped after k of n pages to keep ... for the steps after it`.
+
 The intra-op thread count is not part of the engine fingerprint (it changes speed, not output).
 
 ## Keys
