@@ -88,12 +88,12 @@ quail scan /data --dedup -o records.jsonl
 
 Every default is derived from the machine and the other options, so a deep scan needs no
 `-j` or `--timeout` tuning. `scan` and `inspect` print the result on stderr (not with `-q`):
-`quail: ocr: 3 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page;
+`quail: ocr: 2 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page;
 timeout 120m per file`.
 
 | option | default | effect |
 |---|---|---|
-| `--ocr-jobs N` | `min(-j, 40 % of available memory / 0.8 GB, 4)`, at least 1 (2 off Linux) | pages OCR'd at the same time in the process, whatever `-j`; each takes about 0.6 to 0.8 GB. Other workers keep processing files that need no OCR, or wait for a free job (oldest file first) |
+| `--ocr-jobs N` | `min(-j, 40 % of available memory / 1 GiB, 4)`, at least 1 (2 off Linux) | pages OCR'd at the same time in the process, whatever `-j`; each takes about 0.6 to 1 GB. Other workers keep processing files that need no OCR, or wait for a free job (oldest file first) |
 | `--ocr-threads N` | `CPUs / --ocr-jobs`, 1 to 4 | ONNX Runtime intra-op threads per OCR engine, so that jobs x threads fits the CPUs |
 | `--ocr-max-pages N` | 40 | pages OCR'd per file; later pages are left out with a problem (`partial`) |
 | `--ocr-page-time DURATION` | `45s`, none with `--timeout` | reading time per page needing OCR; a file's OCR stops with a problem (`partial`) once pages x this is spent. Waiting for a free job does not count |

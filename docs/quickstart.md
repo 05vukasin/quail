@@ -190,12 +190,12 @@ steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 
 - **Budgets are automatic.** No `-j` or `--timeout` is needed; quail prints how it will run:
 
   ```console
-  quail: ocr: 3 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page; timeout 120m per file
+  quail: ocr: 2 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page; timeout 120m per file
   ```
 
-  - **Memory**: each page being read takes about 0.6 to 0.8 GB (ONNX Runtime sessions and the
+  - **Memory**: each page being read takes about 0.6 to 1 GB (ONNX Runtime sessions and the
     page image). At most `--ocr-jobs` pages are read at once, whatever `-j`: by default as many
-    as fit in 40 % of the available memory at 0.8 GB each, at most 4. The other workers keep
+    as fit in 40 % of the available memory at 1 GiB each, at most 4. The other workers keep
     processing files that need no OCR, or wait for a free OCR job.
   - **CPU**: each OCR engine gets `--ocr-threads` ONNX Runtime threads, by default
     `CPUs / --ocr-jobs` (at most 4).

@@ -126,7 +126,7 @@ impl LimitArgs {
 /// the machine and the other options; these override them.
 #[derive(Clone, Debug, Default, Args)]
 pub struct OcrArgs {
-    /// Pages OCR'd at the same time, whatever `-j` (default: about 0.8 GB each within 40 % of
+    /// Pages OCR'd at the same time, whatever `-j` (default: about 1 GB each within 40 % of
     /// the available memory, at most 4 and at most `-j`).
     #[arg(long, value_name = "N")]
     pub ocr_jobs: Option<usize>,
