@@ -698,6 +698,9 @@ fn file_timeout_covers_the_ocr_budget() {
     let ocr = OcrConfig::PAGE_TIME * c.max_pages;
     assert_eq!(c.file_timeout(base, 0), base + ocr);
     assert_eq!(c.file_timeout(base, 2), base + ocr * 3);
+    assert_eq!(c.file_timeout(base, 10), OcrConfig::MAX_FILE_TIMEOUT);
+    let long = Duration::from_hours(3);
+    assert_eq!(c.file_timeout(long, 10), long);
     let none = OcrConfig {
         page_time: None,
         ..OcrConfig::default()

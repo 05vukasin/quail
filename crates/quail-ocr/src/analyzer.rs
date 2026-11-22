@@ -44,20 +44,25 @@ pub struct OcrConfig {
 }
 
 impl OcrConfig {
-    /// Default [`page_time`](Self::page_time): 20 s, about twice the measured 5 to 15 s per
-    /// page of one engine on a laptop CPU, so a 300 DPI retry still fits.
-    pub const PAGE_TIME: Duration = Duration::from_secs(20);
+    /// Default [`page_time`](Self::page_time): 45 s. One engine reads a page in 5 to 15 s on
+    /// an idle laptop CPU and in 20 to 45 s on a loaded one (a 300 DPI retry included), so
+    /// the budget stops runaway files, not slow machines.
+    pub const PAGE_TIME: Duration = Duration::from_secs(45);
+
+    /// Largest timeout [`file_timeout`](Self::file_timeout) gives (unless `base` is larger).
+    pub const MAX_FILE_TIMEOUT: Duration = Duration::from_hours(2);
 
     /// Wall time to give a whole file so that its OCR (at most `max_pages` pages at
     /// `page_time` each) fits after `base` for everything else, with `queue` files ahead of
-    /// it for the OCR permits (in a scan, `ceil(workers / jobs) - 1`). Without a
-    /// `page_time`: `base`.
+    /// it for the OCR permits (in a scan, `ceil(workers / jobs) - 1`), capped at
+    /// [`MAX_FILE_TIMEOUT`](Self::MAX_FILE_TIMEOUT). Without a `page_time`: `base`.
     pub fn file_timeout(&self, base: Duration, queue: u32) -> Duration {
         let Some(t) = self.page_time else {
             return base;
         };
         let ocr = t.saturating_mul(self.max_pages);
         base.saturating_add(ocr.saturating_mul(queue.saturating_add(1)))
+            .min(Self::MAX_FILE_TIMEOUT.max(base))
     }
 }
 

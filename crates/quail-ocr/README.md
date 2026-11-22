@@ -37,10 +37,10 @@ OCR is far slower and heavier than every other step, so it has limits of its own
   (ONNX Runtime intra-op threads per engine) `= CPUs / jobs`, between 1 and 4, so
   `jobs × threads ≤ CPUs`. `OcrPages::with_resources` builds the backend with them;
   `with_default_backend(workers)` uses `auto`.
-- **Time per file.** `OcrConfig::page_time` (20 s): a file's OCR may spend `pages × page_time`
+- **Time per file.** `OcrConfig::page_time` (45 s): a file's OCR may spend `pages × page_time`
   reading; time waiting for a permit is not counted. Past it the remaining pages are left out with
   the problem `ocr: time budget ... (page_time)` (record `partial`). `OcrConfig::file_timeout`
-  gives the file timeout that fits that budget, for callers that set `Limits::timeout`.
+  gives the file timeout that fits that budget (at most 2 h), for callers that set `Limits::timeout`.
 
 The intra-op thread count is not part of the engine fingerprint (it changes speed, not output).
 
