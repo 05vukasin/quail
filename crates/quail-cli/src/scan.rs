@@ -222,6 +222,7 @@ pub(crate) fn plan(
     threads: Option<usize>,
     isolate: bool,
 ) -> Plan {
+    #[cfg_attr(not(feature = "ocr"), allow(unused_mut))]
     let mut plan = Plan {
         limits: limit_args.limits(),
         ocr: None,
