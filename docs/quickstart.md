@@ -26,7 +26,7 @@ profile      standard
 fingerprint  7799f963965d3df0
 features     docx, pdf, text, signals, refs, parties, clauses, sketch, items, summary
 steps
-  engine            engine.sniff@1
+  engine            engine.sniff@2
   extractor pdf     pdf.extract@2
   extractor docx    docx.extract@1
   analyzer          hash.identity@1
@@ -81,7 +81,7 @@ $ quail inspect contracts/amendment-2.pdf
 file     contracts/amendment-2.pdf
 format   pdf (application/pdf)   size 37.1 kB   pages 1
 status   ok
-steps    engine.sniff@1 (10 µs), pdf.extract@2 (9.3 ms), hash.identity@1 (111 µs), ...
+steps    engine.sniff@2 (10 µs), pdf.extract@2 (9.3 ms), hash.identity@1 (111 µs), ...
 
 [party] 5 fact(s)
   party.candidates  2 record(s)  src party.candidates@4
@@ -177,7 +177,7 @@ OCR the same facts come back (excerpt):
 ```console
 $ quail inspect scans/scanned-amendment.pdf --profile deep --timeout 15m
 status   ok
-steps    engine.sniff@1 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 µs), sketch.page_phash@3 (50.6 ms), ocr.pages@1 (5.87 s), ...
+steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 µs), sketch.page_phash@3 (50.6 ms), ocr.pages@1 (5.87 s), ...
   ocr.page       {page=0 script="latin" mean_conf=0.9931 chars=974 lines=22 dpi=200 source="embedded_scan" rotation=0}  conf 0.99  src ocr.pages@1  at p1
   pdf.is_scanned           true  src pdf.extract@2
   signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@4  at p1 body [775..802] box(72,333,258,343)

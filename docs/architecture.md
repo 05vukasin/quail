@@ -72,7 +72,7 @@ quail-cli ──▶ quail-worker ──▶ quail-engine ──▶ quail-core
 ```
 bytes ──▶ sniff ──▶ extractor for the format ──▶ analyzers in plan order ──▶ finalizers ──▶ record
           engine.    pdf / docx / text.extract     hash, text, signal, ref,      summary.card,
-          sniff@1    (Document, Raster)            party, clause, sketch, item   summary.extractive
+          sniff@2    (Document, Raster)            party, clause, sketch, item   summary.extractive
 ```
 
 1. **Sniff.** The format comes from the bytes only, never the file name: `%PDF-` near the

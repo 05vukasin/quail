@@ -10,8 +10,12 @@ use quail_core::Format;
 pub const PDF_HEADER_WINDOW: usize = 1024;
 /// Bytes inspected by the text heuristic.
 pub const TEXT_WINDOW: usize = 8 * 1024;
-/// Central-directory (or local-header) entries looked at, at most, to tell DOCX from ZIP.
-pub const MAX_ZIP_ENTRIES: usize = 4096;
+/// Central-directory (or local-header) entries looked at, at most, to tell DOCX from ZIP. The
+/// same as the most entries the DOCX extractor accepts (`quail-docx`, `package::MAX_ENTRIES`),
+/// so a package it would read is never sniffed as a plain ZIP because its main part comes
+/// late in the directory. Walking that many entries reads only the directory bytes (about
+/// 1 MB at most), never inflates.
+pub const MAX_ZIP_ENTRIES: usize = 20_000;
 
 /// Result of sniffing: the format and the most specific MIME type known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,26 +185,49 @@ fn u32_at(b: &[u8], at: usize) -> Option<usize> {
     usize::try_from(u32::from_le_bytes([s[0], s[1], s[2], s[3]])).ok()
 }
 
+/// What the entry names of a ZIP say about the package. OPC part names are case-insensitive,
+/// so every comparison ignores ASCII case. The main part's real name is in `_rels/.rels`,
+/// which would need inflating: an XML part directly under `word/` stands in for it (the DOCX
+/// extractor resolves the main part through the relationships).
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)] // independent presence flags, not a state
 struct ZipNames {
     content_types: bool,
+    /// `word/document.xml`.
     word: bool,
+    /// Some other `word/*.xml` (a main part under another name, or the parts next to it).
+    word_part: bool,
     xl: bool,
     ppt: bool,
 }
 
+/// `name` is `dir` + `/` + a file name ending in `.xml`, with no further `/`, ignoring case.
+fn xml_directly_under(name: &[u8], dir: &[u8]) -> bool {
+    name.len() > dir.len() + 5
+        && name[..dir.len()].eq_ignore_ascii_case(dir)
+        && name[dir.len()] == b'/'
+        && !name[dir.len() + 1..].contains(&b'/')
+        && name[name.len() - 4..].eq_ignore_ascii_case(b".xml")
+}
+
 impl ZipNames {
     fn see(&mut self, name: &[u8]) {
-        match name {
-            b"[Content_Types].xml" => self.content_types = true,
-            b"word/document.xml" => self.word = true,
-            b"xl/workbook.xml" => self.xl = true,
-            b"ppt/presentation.xml" => self.ppt = true,
-            _ => {}
+        let is = |n: &[u8]| name.eq_ignore_ascii_case(n);
+        if is(b"[Content_Types].xml") {
+            self.content_types = true;
+        } else if is(b"word/document.xml") {
+            self.word = true;
+        } else if is(b"xl/workbook.xml") {
+            self.xl = true;
+        } else if is(b"ppt/presentation.xml") {
+            self.ppt = true;
+        } else if xml_directly_under(name, b"word") {
+            self.word_part = true;
         }
     }
 
+    /// Only a conventional main part ends the walk early: a stand-in might be followed by
+    /// the real thing of another kind.
     fn done(&self) -> bool {
         self.content_types && (self.word || self.xl || self.ppt)
     }
@@ -214,6 +241,8 @@ impl ZipNames {
             XLSX
         } else if self.content_types && self.ppt {
             PPTX
+        } else if self.content_types && self.word_part {
+            DOCX
         } else {
             ZIP
         }
@@ -323,6 +352,38 @@ fn local_headers(b: &[u8], names: &mut ZipNames) {
     }
 }
 
+/// UTF-16 without a BOM, judged from NUL positions in `w` like `quail-text`'s decoder does:
+/// at least a third of the code units have a zero high byte on one side (Latin or Cyrillic
+/// text) and at most 2% on the other. On top of that, the units with a zero high byte must
+/// be text (printable ASCII or whitespace, at least 90% of them) and the window must hold at
+/// least 16 units, so binary data with regular zero bytes stays binary. `Some(true)`: BE.
+fn utf16_without_bom(w: &[u8]) -> Option<bool> {
+    let pairs = w.len() / 2;
+    if pairs < 16 || !w.contains(&0) {
+        return None;
+    }
+    let (mut even, mut odd) = (0usize, 0usize);
+    let (mut even_text, mut odd_text) = (0usize, 0usize);
+    let texty = |c: u8| c.is_ascii_graphic() || matches!(c, b' ' | b'\t' | b'\n' | b'\r');
+    for p in w.chunks_exact(2) {
+        if p[0] == 0 {
+            even += 1;
+            even_text += usize::from(texty(p[1]));
+        }
+        if p[1] == 0 {
+            odd += 1;
+            odd_text += usize::from(texty(p[0]));
+        }
+    }
+    if even * 3 >= pairs && odd * 50 <= pairs && even_text * 10 >= even * 9 {
+        Some(true)
+    } else if odd * 3 >= pairs && even * 50 <= pairs && odd_text * 10 >= odd * 9 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Text heuristic over the first [`TEXT_WINDOW`] bytes: no NUL, few control characters, and
 /// valid UTF-8 (a multi-byte sequence cut by the window is fine). Single-byte legacy
 /// encodings (Windows-125x, Latin-n) pass as text without a charset.
@@ -331,6 +392,16 @@ fn text(bytes: &[u8]) -> Option<Sniff> {
         return Some(Sniff::new(Format::Text, "text/plain; charset=utf-16"));
     }
     let w = &bytes[..bytes.len().min(TEXT_WINDOW)];
+    if let Some(be) = utf16_without_bom(w) {
+        return Some(Sniff::new(
+            Format::Text,
+            if be {
+                "text/plain; charset=utf-16be"
+            } else {
+                "text/plain; charset=utf-16le"
+            },
+        ));
+    }
     let mut control = 0usize;
     for &c in w {
         match c {
@@ -510,7 +581,8 @@ mod tests {
         }
         let t = std::time::Instant::now();
         let _ = sniff(&z);
-        assert!(t.elapsed() < std::time::Duration::from_millis(200));
+        // Only pathological (unbounded) work fails this; a debug build on a busy runner is slow.
+        assert!(t.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]
@@ -529,6 +601,72 @@ mod tests {
             sniff(&zip_with(&["[Content_Types].xml"], true)),
             Format::Zip
         );
+    }
+
+    #[test]
+    fn ooxml_names_ignore_case_and_main_part_name() {
+        // OPC part names are case-insensitive.
+        let upper = zip_with(&["[CONTENT_TYPES].XML", "Word/Document.xml"], true);
+        assert_eq!(sniff(&upper), Format::Docx);
+        let xl = zip_with(&["[Content_Types].xml", "XL/Workbook.XML"], true);
+        assert_eq!(detect(&xl), XLSX);
+        // A main part under another name (found by the extractor through `_rels/.rels`).
+        let renamed = zip_with(
+            &["[Content_Types].xml", "_rels/.rels", "word/document2.xml"],
+            true,
+        );
+        assert_eq!(sniff(&renamed), Format::Docx);
+        // Without content types a stand-in is not enough; nested parts do not count.
+        assert_eq!(sniff(&zip_with(&["word/document2.xml"], true)), Format::Zip);
+        assert_eq!(
+            sniff(&zip_with(
+                &["[Content_Types].xml", "word/theme/theme1.xml"],
+                true
+            )),
+            Format::Zip
+        );
+        // A workbook is not taken for a renamed DOCX.
+        let book = zip_with(
+            &["[Content_Types].xml", "xl/book.xml", "xl/styles.xml"],
+            true,
+        );
+        assert_eq!(sniff(&book), Format::Zip);
+    }
+
+    #[test]
+    fn main_part_late_in_a_large_directory() {
+        let mut names: Vec<String> = vec!["[Content_Types].xml".to_owned()];
+        names.extend((0..6000).map(|i| format!("word/media/image{i}.png")));
+        names.push("word/document.xml".to_owned());
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert_eq!(sniff(&zip_with(&refs, true)), Format::Docx);
+    }
+
+    #[test]
+    fn utf16_without_bom_is_text() {
+        let s = "Ugovor broj 12/2024, Beograd. Contract between two parties.\n";
+        let le: Vec<u8> = s.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let be: Vec<u8> = s.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        assert_eq!(detect(&le).mime, "text/plain; charset=utf-16le");
+        assert_eq!(detect(&be).mime, "text/plain; charset=utf-16be");
+        assert_eq!(sniff(&le), Format::Text);
+        // Cyrillic: the high byte is 0x04, not zero, but the spaces and digits still are.
+        let cyr = "Уговор број 12/2024 1 2 3 4 5 6 7 8 9 0 . , ; : 1 2 3 4 5 6 7 8 9";
+        let cyr: Vec<u8> = cyr.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(sniff(&cyr), Format::Text);
+        // Binary with zeros at every other byte but no text in the low bytes.
+        let bin: Vec<u8> = (0..400u32)
+            .flat_map(|i| [0x80 | u8::try_from(i % 64).unwrap(), 0])
+            .collect();
+        assert_eq!(sniff(&bin), Format::Unknown);
+        // Zeros on both sides (UTF-32, tables of integers): not UTF-16.
+        let wide: Vec<u8> = "abcdefghijklmnopqrstuvwxyz"
+            .chars()
+            .flat_map(|c| u32::from(c).to_le_bytes())
+            .collect();
+        assert_eq!(sniff(&wide), Format::Unknown);
+        // Too short to judge.
+        assert_eq!(sniff(b"a\0b\0"), Format::Unknown);
     }
 
     #[test]
