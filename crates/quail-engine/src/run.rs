@@ -47,7 +47,8 @@ pub struct RunOptions {
     /// Write records in source order. Records that finish early wait in a reorder buffer,
     /// bounded by `max_in_flight`. One slow file holds back every record after it (and,
     /// once the buffer is full, the whole run) until it finishes; such waits longer than
-    /// twice [`Limits::timeout`](quail_core::Limits) are counted in [`RunStats::stalls`].
+    /// twice [`Limits::timeout_cap`](quail_core::Limits::timeout_cap) are counted in
+    /// [`RunStats::stalls`].
     pub ordered: bool,
     /// Stop pulling new files after the first sink error (broken pipe, full disk). Records
     /// already in flight are dropped and counted in [`RunStats::unwritten`].
@@ -78,8 +79,9 @@ pub struct RunOptions {
     /// record's only timing. No step runs for it and `on_artifacts` is not called.
     ///
     /// A copy that arrives while the first is still being processed waits for it, up to
-    /// twice [`Limits::timeout`](quail_core::Limits), then is processed normally. A first
-    /// copy that ends `Failed` (or panics) is not reused: the next copy is processed.
+    /// twice [`Limits::timeout_cap`](quail_core::Limits::timeout_cap), then is processed
+    /// normally. A first copy that ends `Failed` (or panics) is not reused: the next copy is
+    /// processed.
     /// Finished records are kept in an LRU cache bounded by `dedup_max_records` and
     /// `dedup_max_bytes`; a copy whose first record was evicted is processed again.
     ///
@@ -176,7 +178,7 @@ pub struct RunStats {
     /// The run stopped early because [`RunOptions::cancel`] was set.
     pub cancelled: bool,
     /// Ordered mode: times the head record held back finished ones for over twice the
-    /// file timeout.
+    /// file timeout cap ([`Limits::timeout_cap`](quail_core::Limits::timeout_cap)).
     pub stalls: u64,
     /// The writer thread died (a bug); counts above are those it reached.
     pub writer_panicked: bool,
@@ -366,7 +368,7 @@ impl Engine {
             ordered: opts.ordered,
             stop_on_sink_error: opts.stop_on_sink_error,
             quiet,
-            stall_after: self.limits().timeout.saturating_mul(2),
+            stall_after: self.limits().timeout_cap().saturating_mul(2),
         };
         let shared = Shared::default();
         let cancel = opts.cancel.as_deref();
@@ -382,7 +384,7 @@ impl Engine {
             Dedup::new(
                 opts.dedup_max_records,
                 opts.dedup_max_bytes,
-                self.limits().timeout.saturating_mul(2),
+                self.limits().timeout_cap().saturating_mul(2),
             )
         });
 
@@ -498,7 +500,7 @@ impl Engine {
             // Last-resort net for a bug in the engine itself: the file still gets a record.
             let processed = contain(self.is_quiet(), || {
                 let SourceItem { locator, blob, .. } = item;
-                self.process_parts(locator, &blob)
+                self.process_parts(locator, &blob, None)
             });
             let record = match processed {
                 Ok((r, artifacts)) => {

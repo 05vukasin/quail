@@ -306,6 +306,140 @@ fn deadline_exceeded_stops_the_plan() {
     assert_eq!(p[1], "engine: timeout; 2 analyzer(s) not run");
 }
 
+/// An analyzer that runs until the file's deadline, then fails with `timeout`.
+fn until_deadline(name: &'static str) -> Mock {
+    Mock::new(name).run(|_, out| {
+        loop {
+            out.check_deadline()?;
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    })
+}
+
+/// An analyzer that asks for `by` more time and records what it got in `mock.granted` (ms).
+fn extender(by: Duration) -> Mock {
+    Mock::new("mock.extend").run(move |_, out| {
+        let got = out.extend_deadline(by);
+        out.fact(
+            FactKey::new("mock.granted"),
+            Value::Int(i64::try_from(got.as_millis()).unwrap()),
+        );
+        Ok(())
+    })
+}
+
+fn granted(rec: &quail_core::FileRecord) -> Duration {
+    match rec.facts_for("mock.granted").next().map(|f| &f.value) {
+        Some(Value::Int(ms)) => Duration::from_millis(u64::try_from(*ms).unwrap()),
+        v => panic!("no mock.granted: {v:?}"),
+    }
+}
+
+#[test]
+fn an_extension_holds_for_the_later_steps() {
+    let engine = EngineBuilder::new()
+        .limits(Limits {
+            timeout: Duration::from_millis(300),
+            max_timeout: Duration::from_mins(1),
+            ..Limits::default()
+        })
+        .analyzer(extender(Duration::from_millis(700)).boxed())
+        .analyzer(until_deadline("mock.slow").boxed())
+        .build()
+        .unwrap();
+    let t = Instant::now();
+    let rec = engine.process(item("x.txt", b"hi"));
+    let took = t.elapsed();
+    assert_eq!(granted(&rec), Duration::from_millis(700));
+    // The slow step ran to the extended deadline (300 + 700 ms), not to the cap.
+    assert!(took >= Duration::from_secs(1), "{took:?}");
+    assert!(took < Duration::from_secs(30), "{took:?}");
+    assert_eq!(problems(&rec), ["mock.slow@1: timeout"]);
+}
+
+#[test]
+fn an_extension_stops_at_max_timeout() {
+    let engine = EngineBuilder::new()
+        .limits(Limits {
+            timeout: Duration::from_millis(200),
+            max_timeout: Duration::from_millis(900),
+            ..Limits::default()
+        })
+        .analyzer(extender(Duration::from_hours(1)).boxed())
+        .analyzer(until_deadline("mock.slow").boxed())
+        .build()
+        .unwrap();
+    let t = Instant::now();
+    let rec = engine.process(item("x.txt", b"hi"));
+    let took = t.elapsed();
+    // At most the 700 ms between the timeout and the cap, less what the steps before took.
+    let g = granted(&rec);
+    assert!(
+        g <= Duration::from_millis(700) && g > Duration::ZERO,
+        "{g:?}"
+    );
+    assert!(took >= Duration::from_millis(900), "{took:?}");
+    assert!(took < Duration::from_secs(30), "{took:?}");
+}
+
+#[test]
+fn without_an_extension_the_base_timeout_holds() {
+    // A large cap changes nothing for a file whose steps ask for no extension.
+    let engine = EngineBuilder::new()
+        .limits(Limits {
+            timeout: Duration::from_millis(200),
+            max_timeout: Duration::from_mins(1),
+            ..Limits::default()
+        })
+        .analyzer(until_deadline("mock.slow").boxed())
+        .analyzer(Mock::new("mock.never").boxed())
+        .build()
+        .unwrap();
+    let t = Instant::now();
+    let rec = engine.process(item("x.txt", b"hi"));
+    let took = t.elapsed();
+    assert!(took >= Duration::from_millis(200), "{took:?}");
+    assert!(took < Duration::from_secs(20), "{took:?}");
+    assert_eq!(
+        problems(&rec),
+        [
+            "mock.slow@1: timeout",
+            "engine: timeout; 1 analyzer(s) not run"
+        ]
+    );
+}
+
+#[test]
+fn process_watched_reports_the_extended_budget() {
+    let engine = EngineBuilder::new()
+        .limits(Limits {
+            timeout: Duration::from_secs(10),
+            max_timeout: Duration::from_secs(25),
+            ..Limits::default()
+        })
+        .analyzer(extender(Duration::from_secs(5)).boxed())
+        .analyzer({
+            let mut m = extender(Duration::from_mins(1));
+            m.name = "mock.extend_more";
+            m.boxed()
+        })
+        .build()
+        .unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hook = {
+        let seen = std::sync::Arc::clone(&seen);
+        std::sync::Arc::new(move |b: Duration| seen.lock().unwrap().push(b))
+    };
+    let rec = engine.process_watched(item("x.txt", b"hi"), hook, |_, _| {});
+    assert_eq!(rec.status, Status::Ok);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [Duration::from_secs(15), Duration::from_secs(25)]
+    );
+    // Without a hook, nothing changes in the record.
+    assert_eq!(engine.process(item("x.txt", b"hi")).status, Status::Ok);
+}
+
 #[test]
 fn deadline_expiring_during_extraction() {
     // The extractor never checks the deadline and overruns it: its document is kept, the

@@ -33,6 +33,20 @@ pub struct Limits {
     pub max_render_pixels: u64,
     /// Wall time for the whole file.
     pub timeout: Duration,
+    /// Longest the wall time of one file may become when a step extends its deadline
+    /// ([`Emitter::extend_deadline`](crate::Emitter::extend_deadline)), e.g. OCR for the
+    /// pages it found to read. Anything up to `timeout` (the default, zero) allows no
+    /// extension; see [`timeout_cap`](Self::timeout_cap).
+    #[serde(default)]
+    pub max_timeout: Duration,
+}
+
+impl Limits {
+    /// Wall time one file can take at most: `timeout` plus every extension a step may get,
+    /// `max(timeout, max_timeout)`. Watchdogs and stall detection measure against this.
+    pub fn timeout_cap(&self) -> Duration {
+        self.timeout.max(self.max_timeout)
+    }
 }
 
 impl Default for Limits {
@@ -44,6 +58,7 @@ impl Default for Limits {
             max_text_bytes: 64 << 20,
             max_render_pixels: 40_000_000,
             timeout: Duration::from_mins(2),
+            max_timeout: Duration::ZERO,
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::fmt;
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -92,6 +93,11 @@ impl Ctx<'_> {
     }
 }
 
+/// Called with the file's new deadline each time a step extends it
+/// ([`Emitter::extend_deadline`]), while the step runs. A supervisor that enforces wall time
+/// from outside (a watchdog) uses it to move its own limit along.
+pub type DeadlineHook = Arc<dyn Fn(Instant) + Send + Sync>;
+
 /// Collects what one analyzer run produces. The engine merges it into the file's state after
 /// the run, so analyzers never see each other's half-finished output.
 pub struct Emitter {
@@ -101,6 +107,9 @@ pub struct Emitter {
     warnings: Vec<String>,
     problems: Vec<String>,
     deadline: Option<Instant>,
+    /// Latest the deadline may be moved to; never before `deadline`.
+    cap: Option<Instant>,
+    on_extend: Option<DeadlineHook>,
 }
 
 impl Emitter {
@@ -113,21 +122,66 @@ impl Emitter {
             warnings: Vec::new(),
             problems: Vec::new(),
             deadline: None,
+            cap: None,
+            on_extend: None,
         }
     }
 
-    /// New emitter whose work must finish by `deadline` (the file's time budget).
+    /// New emitter whose work must finish by `deadline` (the file's time budget). The
+    /// deadline cannot be extended.
     pub fn with_deadline(src: AnalyzerId, deadline: Instant) -> Self {
+        Self::with_extensible_deadline(src, deadline, deadline)
+    }
+
+    /// New emitter whose work must finish by `deadline`, which
+    /// [`extend_deadline`](Self::extend_deadline) may move up to `cap` (the file's start plus
+    /// [`Limits::timeout_cap`]). A `cap` before `deadline` counts as `deadline`.
+    pub fn with_extensible_deadline(src: AnalyzerId, deadline: Instant, cap: Instant) -> Self {
         Self {
             deadline: Some(deadline),
+            cap: Some(cap.max(deadline)),
             ..Self::new(src)
         }
+    }
+
+    /// Calls `hook` with the new deadline whenever [`extend_deadline`](Self::extend_deadline)
+    /// moves it.
+    #[must_use]
+    pub fn on_extend(mut self, hook: DeadlineHook) -> Self {
+        self.on_extend = Some(hook);
+        self
     }
 
     /// The file's deadline, when the engine set one. Steps that hand work to other components
     /// (a renderer, an OCR engine) pass it on instead of starting a fresh time budget.
     pub fn deadline(&self) -> Option<Instant> {
         self.deadline
+    }
+
+    /// The latest the deadline can be extended to (the deadline itself when it cannot be).
+    pub fn deadline_cap(&self) -> Option<Instant> {
+        self.cap
+    }
+
+    /// Moves the file's deadline `by` later, never past [`deadline_cap`](Self::deadline_cap),
+    /// and returns how much was granted (zero without a deadline, at the cap, or for a zero
+    /// `by`). The new deadline holds for this step and every step after it in the same file.
+    ///
+    /// For a step whose work is known only once it looked at the file, e.g. OCR asking for
+    /// its pages' time: a file that needs none keeps the normal timeout.
+    pub fn extend_deadline(&mut self, by: Duration) -> Duration {
+        let (Some(d), Some(cap)) = (self.deadline, self.cap) else {
+            return Duration::ZERO;
+        };
+        let new = d.checked_add(by).map_or(cap, |n| n.min(cap));
+        if new <= d {
+            return Duration::ZERO;
+        }
+        self.deadline = Some(new);
+        if let Some(hook) = &self.on_extend {
+            hook(new);
+        }
+        new - d
     }
 
     /// `Err(Error::Timeout)` once the file's time budget is spent. Long loops (per page, per
@@ -240,4 +294,80 @@ pub trait Analyzer: Send + Sync {
     /// Does the work. An error marks the file partial; it never stops other analyzers that do
     /// not depend on this one.
     fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    const ID: AnalyzerId = AnalyzerId::new("test.step", 1);
+
+    #[test]
+    fn extension_is_granted_up_to_the_cap() {
+        let now = Instant::now();
+        let base = now + Duration::from_secs(10);
+        let cap = now + Duration::from_secs(25);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook: DeadlineHook = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |d| seen.lock().unwrap().push(d))
+        };
+        let mut out = Emitter::with_extensible_deadline(ID, base, cap).on_extend(hook);
+        assert_eq!(out.deadline_cap(), Some(cap));
+        assert_eq!(
+            out.extend_deadline(Duration::from_secs(5)),
+            Duration::from_secs(5)
+        );
+        assert_eq!(out.deadline(), Some(base + Duration::from_secs(5)));
+        // Capped: only the 10 s left are granted, then nothing.
+        assert_eq!(
+            out.extend_deadline(Duration::from_mins(1)),
+            Duration::from_secs(10)
+        );
+        assert_eq!(out.deadline(), Some(cap));
+        assert_eq!(out.extend_deadline(Duration::from_secs(1)), Duration::ZERO);
+        assert_eq!(out.extend_deadline(Duration::MAX), Duration::ZERO);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![base + Duration::from_secs(5), cap]
+        );
+    }
+
+    #[test]
+    fn plain_deadlines_do_not_move() {
+        let d = Instant::now() + Duration::from_secs(10);
+        let mut out = Emitter::with_deadline(ID, d);
+        assert_eq!(out.extend_deadline(Duration::from_secs(5)), Duration::ZERO);
+        assert_eq!(out.deadline(), Some(d));
+        let mut out = Emitter::new(ID);
+        assert_eq!(out.extend_deadline(Duration::from_secs(5)), Duration::ZERO);
+        assert_eq!(out.deadline(), None);
+        // A cap before the deadline is the deadline.
+        let mut out = Emitter::with_extensible_deadline(
+            ID,
+            d,
+            d.checked_sub(Duration::from_secs(1)).unwrap(),
+        );
+        assert_eq!(out.extend_deadline(Duration::from_secs(5)), Duration::ZERO);
+        assert_eq!(out.deadline(), Some(d));
+    }
+
+    #[test]
+    fn timeout_cap_is_the_larger_timeout() {
+        let l = Limits::default();
+        assert_eq!(l.max_timeout, Duration::ZERO);
+        assert_eq!(l.timeout_cap(), l.timeout);
+        let l = Limits {
+            max_timeout: Duration::from_mins(30),
+            ..Limits::default()
+        };
+        assert_eq!(l.timeout_cap(), Duration::from_mins(30));
+        // Limits serialized before `max_timeout` existed still parse, without extension.
+        let mut v = serde_json::to_value(Limits::default()).unwrap();
+        v.as_object_mut().unwrap().remove("max_timeout");
+        let back: Limits = serde_json::from_value(v).unwrap();
+        assert_eq!(back, Limits::default());
+    }
 }

@@ -15,8 +15,8 @@ use quail_core::{Document, FileRecord};
 
 use crate::child::WORKER_ARG;
 use crate::frame::{
-    self, DATA, DOC, FATAL, HELLO, Hello, JOB, JobMsg, READY, RESULT, Ready, read_frame,
-    split_result, write_frame,
+    self, DATA, DOC, EXTEND, FATAL, HELLO, Hello, JOB, JobMsg, READY, RESULT, Ready, read_frame,
+    split_extend, split_result, write_frame,
 };
 use crate::job::{Job, JobInput};
 use crate::sys::{self, Death, nt, sig};
@@ -219,6 +219,7 @@ pub struct WorkerProcess {
     max_response: u64,
     pid: u32,
     timeout: Duration,
+    timeout_cap: Duration,
     max_bytes: u64,
     notes: Vec<String>,
     alive: bool,
@@ -284,6 +285,7 @@ impl WorkerProcess {
             max_response: cfg.max_response_bytes,
             pid,
             timeout: Duration::ZERO,
+            timeout_cap: Duration::ZERO,
             max_bytes: 0,
             notes: Vec::new(),
             alive: true,
@@ -291,6 +293,7 @@ impl WorkerProcess {
         match w.handshake(cfg) {
             Ok(ready) => {
                 w.timeout = Duration::from_millis(ready.timeout_ms);
+                w.timeout_cap = Duration::from_millis(ready.timeout_cap_ms).max(w.timeout);
                 w.max_bytes = ready.max_bytes;
                 w.notes = ready.notes;
                 Ok(w)
@@ -364,6 +367,12 @@ impl WorkerProcess {
         self.timeout
     }
 
+    /// The child engine's [`Limits::timeout_cap`](quail_core::Limits::timeout_cap): the
+    /// longest a file's budget can become when a step extends its deadline.
+    pub fn engine_timeout_cap(&self) -> Duration {
+        self.timeout_cap
+    }
+
     /// The child engine's [`Limits::max_bytes`](quail_core::Limits).
     pub fn engine_max_bytes(&self) -> u64 {
         self.max_bytes
@@ -381,7 +390,11 @@ impl WorkerProcess {
     }
 
     /// Processes one file in the child. Kills the child if no result arrives within
-    /// `kill_after` (from the moment the job is sent).
+    /// `kill_after` (from the moment the job is sent), moved later by twice every extension
+    /// of the file's deadline the child reports
+    /// ([`Emitter::extend_deadline`](quail_core::Emitter::extend_deadline)), in all at most
+    /// twice the difference between [`engine_timeout_cap`](Self::engine_timeout_cap) and
+    /// [`engine_timeout`](Self::engine_timeout).
     ///
     /// `want_document` asks for the extracted [`Document`] too (it costs a JSON round trip of
     /// the whole text).
@@ -403,8 +416,9 @@ impl WorkerProcess {
             .clear();
         let id = self.next_id;
         self.next_id += 1;
-        self.watchdog.arm(Instant::now() + kill_after);
-        match self.exchange(id, job, want_document) {
+        let sent = Instant::now();
+        self.watchdog.arm(sent + kill_after);
+        match self.exchange(id, job, want_document, sent + kill_after) {
             Ok(p) => {
                 if self.watchdog.disarm() {
                     // Killed just after it answered: the record is good, the process is not.
@@ -417,7 +431,13 @@ impl WorkerProcess {
         }
     }
 
-    fn exchange(&mut self, id: u64, job: &Job, want_document: bool) -> Result<Processed, Fail> {
+    fn exchange(
+        &mut self,
+        id: u64,
+        job: &Job,
+        want_document: bool,
+        kill_at: Instant,
+    ) -> Result<Processed, Fail> {
         let msg = JobMsg {
             id,
             locator: job.locator.clone(),
@@ -434,7 +454,26 @@ impl WorkerProcess {
         if let JobInput::Bytes(blob) = &job.input {
             write_frame(input, DATA, &[blob.as_bytes()])?;
         }
-        let f = self.next_frame()?;
+        let f = loop {
+            let f = self.next_frame()?;
+            if f.tag != EXTEND {
+                break f;
+            }
+            let (got, budget_ms) = split_extend(&f.payload)
+                .ok_or_else(|| Fail::Protocol("bad extend frame".to_owned()))?;
+            if got != id {
+                return Err(Fail::Protocol(format!(
+                    "extend for job {got}, expected {id}"
+                )));
+            }
+            // Never more than the engine's cap allows, whatever the child says.
+            let extra = Duration::from_millis(budget_ms)
+                .min(self.timeout_cap)
+                .saturating_sub(self.timeout);
+            if let Some(at) = kill_at.checked_add(extra.saturating_mul(2)) {
+                self.watchdog.extend(at);
+            }
+        };
         if f.tag != RESULT {
             return Err(unexpected(&f));
         }
@@ -697,6 +736,20 @@ impl Watchdog {
             shared,
             thread: Some(thread),
         })
+    }
+
+    /// Moves an armed deadline later (never earlier); does nothing once it fired or when
+    /// disarmed.
+    fn extend(&self, deadline: Instant) {
+        let (lock, cv) = &*self.shared;
+        let mut st = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(d) = st.deadline
+            && deadline > d
+            && !st.fired
+        {
+            st.deadline = Some(deadline);
+            cv.notify_one();
+        }
     }
 
     fn arm(&self, deadline: Instant) {
