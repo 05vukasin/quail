@@ -92,10 +92,10 @@ status   ok
                       - {key="blue river software" surface="Blue River Software GmbH" score=0.99 roles=["supplier", "signatory"]}
 
 [signal] 9 fact(s)
-  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@4  at p1 body [775..802] box(72,280,528,344)
-  signal.amount       4200.00 EUR  conf 0.97  src signal.scan@4  at p1 body [661..673] box(72,280,528,344)
-  signal.date_signed  2023-09-12  conf 0.82  src signal.scan@4  at p1 body [110..127] box(72,130,543,201)
-  signal.date_expiry  2026-12-31  conf 0.78  src signal.scan@4  at p1 body [884..900] box(72,359,531,408)
+  signal.iban         "DE89370400440532013000"  conf 0.99  src signal.scan@5  at p1 body [775..802] box(72,280,528,344)
+  signal.amount       4200.00 EUR  conf 0.97  src signal.scan@5  at p1 body [661..673] box(72,280,528,344)
+  signal.date_signed  2023-09-12  conf 0.82  src signal.scan@5  at p1 body [110..127] box(72,130,543,201)
+  signal.date_expiry  2026-12-31  conf 0.78  src signal.scan@5  at p1 body [884..900] box(72,359,531,408)
 
 [clause] 1 fact(s)
   clause.governing_law  {jurisdiction="England and Wales" code="GB-EAW" raw="laws of England and Wales" basis="laws_of"}  conf 0.97  src clause.terms@1  at p1 [1013..1038]

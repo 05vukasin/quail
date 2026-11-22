@@ -321,7 +321,9 @@ pub fn eu_vat(country: &str, body: &str) -> VatCheck {
             }
             let head: u64 = n[..8].parse().unwrap_or(0);
             let tail: u64 = n[8..].parse().unwrap_or(0);
-            judge(head > 0 && (head + tail).is_multiple_of(97))
+            // The check is 97 - head % 97 (01..=97). python-stdnum only tests
+            // (head + tail) % 97 == 0, which also passes 00, 98 and 99: never issued.
+            judge(head > 0 && tail == 97 - head % 97)
         }
         "DE" => {
             if b.len() == 9 && all_digits && b[0] != b'0' {
@@ -683,6 +685,18 @@ mod tests {
             eu_vat("BE", &format!("0{head}{:02}", (tail + 1) % 97)),
             VatCheck::BadChecksum
         );
+        // BE check digits are 97 - head % 97, so 01..=97: a head that is a multiple of 97
+        // takes 97, never 00, and 98/99 never occur. (head + tail) % 97 == 0 alone accepts
+        // all three. Invented numbers.
+        let head = 9_700_000_u64; // 97 * 100_000
+        assert_eq!(eu_vat("BE", &format!("0{head}97")), VatCheck::Valid);
+        assert_eq!(eu_vat("BE", &format!("0{head}00")), VatCheck::BadChecksum);
+        let head = 9_700_096_u64; // head % 97 == 96, check 01
+        assert_eq!(eu_vat("BE", &format!("0{head}01")), VatCheck::Valid);
+        assert_eq!(eu_vat("BE", &format!("0{head}98")), VatCheck::BadChecksum);
+        let head = 9_700_095_u64; // head % 97 == 95, check 02
+        assert_eq!(eu_vat("BE", &format!("0{head}02")), VatCheck::Valid);
+        assert_eq!(eu_vat("BE", &format!("0{head}99")), VatCheck::BadChecksum);
         assert_eq!(eu_vat("PL", "7104219052"), VatCheck::Valid);
         assert_eq!(eu_vat("PL", "7104219053"), VatCheck::BadChecksum);
         assert_eq!(eu_vat("GB", "717296178"), VatCheck::Valid);
