@@ -1,11 +1,13 @@
 //! Run-level content dedup ([`RunOptions::dedup_by_content`](crate::RunOptions)).
 //!
-//! Every file is hashed (BLAKE3) on its worker before it is processed. The first copy of a
-//! content is processed as usual and its finished record kept in a bounded LRU cache; a
-//! later copy gets that record back with its own locator, an `engine.duplicate_of` fact and
-//! the `engine.dedup` step, without running any step. A copy that arrives while the first
-//! is still being processed waits for it, at most [`Dedup::wait_for`]; after that (or when
-//! the first copy's record could not be kept) it is processed normally.
+//! Every file is hashed (BLAKE3) by the reader, in source order, before it is handed to a
+//! worker ([`Dedup::register`]): so the first copy of a content is always the one first in
+//! the source (lowest sequence number), whatever the number of threads. It is processed as
+//! usual and its finished record kept in a bounded LRU cache; a later copy gets that record
+//! back with its own locator, an `engine.duplicate_of` fact and the `engine.dedup` step,
+//! without running any step. A copy that arrives while the first is still being processed
+//! waits for it, at most [`Dedup::wait_for`]; after that (or when the first copy's record
+//! could not be kept) it is processed normally.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -88,6 +90,17 @@ impl Dedup {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.lock().done.len()
+    }
+
+    /// Called by the reader, in source order: `true` when this is the first copy of
+    /// `digest` (nothing cached, nothing in flight), which then counts as in flight until its
+    /// [`Owner`] finishes. A later copy calls [`Self::claim`] on its worker.
+    pub(crate) fn register(&self, digest: &Digest) -> bool {
+        let mut st = self.lock();
+        if st.done.contains_key(digest) {
+            return false;
+        }
+        st.in_flight.insert(*digest)
     }
 
     /// Looks `digest` up; waits while its first copy is in flight.

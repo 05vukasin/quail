@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
 use quail_core::{Artifacts, FileRecord, RecordSink, Source, SourceItem, Status};
 
-use crate::dedup::{Claim, Dedup, Owner, digest, duplicate_record};
+use crate::dedup::{Claim, Dedup, Digest, Owner, digest, duplicate_record};
 use crate::engine::{Engine, failed_record};
 use crate::panic::contain;
 
@@ -68,8 +68,10 @@ pub struct RunOptions {
     /// record. A panic in it is caught and counted in [`RunStats::hook_panics`]; the record
     /// is written as usual.
     pub on_artifacts: Option<ArtifactsHook>,
-    /// Process each distinct content once per run. Every file is hashed (BLAKE3) on its
-    /// worker first; a file whose bytes equal an earlier file's gets that file's record
+    /// Process each distinct content once per run. Every file is hashed (BLAKE3) by the
+    /// reader, in source order, before it goes to a worker, so the first copy is always the
+    /// first in the source, at any thread count; a file whose bytes equal an earlier file's
+    /// gets that file's record
     /// (same facts, steps, format, pages, status and warnings) under its own locator, plus
     /// an [`engine.duplicate_of`](crate::keys::DUPLICATE_OF) fact naming the first file and
     /// the [`engine.dedup`](crate::DEDUP_ID) step, whose time (hashing and lookup) is the
@@ -370,7 +372,7 @@ impl Engine {
         let cancel = opts.cancel.as_deref();
         let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
 
-        let (work_tx, work_rx) = bounded::<(u64, SourceItem)>(slots);
+        let (work_tx, work_rx) = bounded::<Work>(slots);
         let (done_tx, done_rx) = bounded::<Done>(slots);
         let (freed_tx, freed_rx) = unbounded::<u64>();
 
@@ -413,6 +415,7 @@ impl Engine {
             };
             let reader = Reader {
                 work: &work_tx,
+                dedup,
                 done: &done_tx,
                 slots,
                 budget,
@@ -441,13 +444,13 @@ impl Engine {
 
     fn work(
         &self,
-        rx: &Receiver<(u64, SourceItem)>,
+        rx: &Receiver<Work>,
         tx: &Sender<Done>,
         hook: Option<&HookFn>,
         dedup: Option<&Dedup>,
         shared: &Shared,
     ) {
-        for (seq, item) in rx {
+        for (seq, item, pre) in rx {
             let size = item.blob.len() as u64;
             let mut guard = Guard {
                 seq,
@@ -456,13 +459,19 @@ impl Engine {
                 tx,
             };
             let mut owner = None;
-            if let Some(dedup) = dedup {
+            if let (Some(dedup), Some(pre)) = (dedup, pre) {
                 let started = Instant::now();
-                let digest = digest(item.blob.as_bytes());
-                match dedup.claim(&digest) {
+                let claim = if pre.first {
+                    Claim::Owner
+                } else {
+                    dedup.claim(&pre.digest)
+                };
+                let digest = pre.digest;
+                match claim {
                     Claim::Hit(first) => {
-                        let micros =
-                            u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                        let micros = u64::try_from(started.elapsed().as_micros())
+                            .unwrap_or(u64::MAX)
+                            .saturating_add(pre.micros);
                         let record = duplicate_record(&first, item.locator, micros);
                         shared
                             .stats
@@ -527,6 +536,18 @@ impl Engine {
     }
 }
 
+/// What the reader decided about a file's content ([`RunOptions::dedup_by_content`]).
+struct Pre {
+    digest: Digest,
+    /// First copy in source order: process it and publish its record.
+    first: bool,
+    /// Time spent hashing, part of the `engine.dedup` timing of a duplicate.
+    micros: u64,
+}
+
+/// One file for a worker: its sequence number, the item and, with dedup, its digest.
+type Work = (u64, SourceItem, Option<Pre>);
+
 #[derive(Default)]
 struct SourceCounts {
     errors: u64,
@@ -536,7 +557,8 @@ struct SourceCounts {
 
 /// The pulling side of a run (on the caller's thread, since the source is `&mut`).
 struct Reader<'a> {
-    work: &'a Sender<(u64, SourceItem)>,
+    work: &'a Sender<Work>,
+    dedup: Option<&'a Dedup>,
     done: &'a Sender<Done>,
     slots: usize,
     budget: u64,
@@ -598,7 +620,19 @@ impl Reader<'_> {
             }
             gate.items += 1;
             gate.bytes += size;
-            if self.work.send((seq, item)).is_err() {
+            // Hashed here, in source order, so the first copy of a content is the first in
+            // the source whatever the thread count.
+            let pre = self.dedup.map(|d| {
+                let started = Instant::now();
+                let digest = digest(item.blob.as_bytes());
+                let first = d.register(&digest);
+                Pre {
+                    digest,
+                    first,
+                    micros: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                }
+            });
+            if self.work.send((seq, item, pre)).is_err() {
                 break;
             }
             seq += 1;

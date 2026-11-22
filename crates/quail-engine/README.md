@@ -103,8 +103,9 @@ writer_panicked, hook panics and the first one, duplicates and dedup evictions, 
 
 ### Content dedup (`dedup_by_content`, `quail scan --dedup`)
 
-Each worker hashes its file (BLAKE3, the `blake3` crate built like quail-hash's) before
-processing. The first file of a content is processed normally and its finished record kept
+The reader hashes each file (BLAKE3, the `blake3` crate built like quail-hash's) in source
+order before handing it to a worker, so the first file of a content is always the first in
+the source, at any thread count. It is processed normally and its finished record kept
 in a run-scoped LRU cache (`dedup_max_records`, `dedup_max_bytes`). A later file with the
 same bytes gets a copy of that record (facts, steps, format, pages, status, warnings) with its
 own locator, plus `engine.duplicate_of` and the step `engine.dedup@1`; its only timing is
