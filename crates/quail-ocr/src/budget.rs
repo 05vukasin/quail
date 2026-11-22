@@ -404,7 +404,7 @@ mod tests {
         let (held, _) = permits.acquire(permits.ticket(), None).unwrap();
         let t = permits.ticket();
         std::thread::scope(|s| {
-            let waiter = s.spawn(|| {
+            let queued = s.spawn(|| {
                 let first = Instant::now();
                 // The deadline keeps 100 ms ahead of the wait: it never times out.
                 permits.acquire_until(t, |waited| {
@@ -413,7 +413,7 @@ mod tests {
             });
             std::thread::sleep(Duration::from_millis(300));
             drop(held);
-            let (_, waited) = waiter.join().unwrap().unwrap();
+            let (_, waited) = queued.join().unwrap().unwrap();
             assert!(waited >= Duration::from_millis(250), "{waited:?}");
         });
         // A fixed deadline in the past still times out at once.
