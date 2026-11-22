@@ -33,6 +33,9 @@ pub(crate) const MAX_NESTINGS_PER_PAGE: u64 = 250_000;
 const DEADLINE_EVERY: u64 = 1024;
 /// Image placements remembered per page (the count keeps going).
 const MAX_IMAGES_KEPT: usize = 64;
+/// Characters kept from one glyph's `ToUnicode` text. Real mappings are one char or a
+/// ligature of a few; a hostile `CMap` can map one code to hundreds of thousands.
+pub(crate) const MAX_GLYPH_CHARS: usize = 32;
 
 /// Why a page interpretation was cut short.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,7 +137,7 @@ pub(crate) struct PageCapture<'e> {
     pub glyphs: Vec<Glyph>,
     /// Glyphs drawn without any Unicode mapping (counted, not kept).
     pub unmapped: usize,
-    /// Glyphs dropped by [`MAX_GLYPHS_PER_PAGE`].
+    /// Glyphs dropped by [`MAX_GLYPHS_PER_PAGE`] or the text budget.
     pub truncated: usize,
     /// Number of image draws (including stencil masks).
     pub images: usize,
@@ -144,10 +147,15 @@ pub(crate) struct PageCapture<'e> {
     pub paths: usize,
     page: Rect,
     watchdog: Watchdog<'e>,
+    /// Bytes of glyph text this page may still look up: every `ToUnicode` string is charged
+    /// in full (the lookup allocates it) before it is cut to [`MAX_GLYPH_CHARS`].
+    text_budget: usize,
 }
 
 impl<'e> PageCapture<'e> {
-    pub fn new(width: f64, height: f64, watchdog: Watchdog<'e>) -> Self {
+    /// `text_budget`: bytes of glyph text the page may take (what is left of the file's
+    /// `max_text_bytes`); glyphs past it are counted as truncated without being looked up.
+    pub fn new(width: f64, height: f64, watchdog: Watchdog<'e>, text_budget: usize) -> Self {
         Self {
             glyphs: Vec::new(),
             unmapped: 0,
@@ -157,6 +165,7 @@ impl<'e> PageCapture<'e> {
             paths: 0,
             page: Rect::new(0.0, 0.0, width.max(0.0), height.max(0.0)),
             watchdog,
+            text_budget,
         }
     }
 
@@ -231,18 +240,30 @@ impl<'a> Device<'a> for PageCapture<'_> {
         // Invisible text (render mode 3) is included on purpose: it is the text layer of
         // OCR'd scans.
         for g in run.glyphs() {
+            // Every glyph is a draw: one huge `Tj` meets the call cap and the deadline too.
+            self.watchdog.tick();
+            // Caps first: past them, the (possibly huge) `ToUnicode` text is not looked up.
+            if self.glyphs.len() >= MAX_GLYPHS_PER_PAGE || self.text_budget == 0 {
+                self.truncated = self.truncated.saturating_add(1);
+                continue;
+            }
             let text = match g.as_unicode() {
-                Some(BfString::Char(c)) => GlyphText::from_char(c),
-                Some(BfString::String(s)) => GlyphText::from(s),
+                Some(BfString::Char(c)) => {
+                    self.text_budget = self.text_budget.saturating_sub(c.len_utf8());
+                    GlyphText::from_char(c)
+                }
+                Some(BfString::String(s)) => {
+                    self.text_budget = self.text_budget.saturating_sub(s.len());
+                    match s.char_indices().nth(MAX_GLYPH_CHARS) {
+                        Some((cut, _)) => GlyphText::from(&s[..cut]),
+                        None => GlyphText::from(s),
+                    }
+                }
                 None => {
                     self.unmapped = self.unmapped.saturating_add(1);
                     continue;
                 }
             };
-            if self.glyphs.len() >= MAX_GLYPHS_PER_PAGE {
-                self.truncated = self.truncated.saturating_add(1);
-                continue;
-            }
             // Glyph space is 1000 units per em; `t` maps it onto the page (top-left origin).
             // The advance vector gives the text direction, so rotated text (via `cm` or `Tm`)
             // keeps its own baseline.

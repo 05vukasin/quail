@@ -20,7 +20,7 @@ pub(crate) struct ZoneInput<'a> {
     pub bbox: BBox,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Band {
     Top,
     Bottom,
@@ -73,7 +73,8 @@ pub(crate) fn assign(pages: &[(f32, Vec<ZoneInput<'_>>)]) -> Vec<Vec<Zone>> {
             .filter_map(|b| band(&b.bbox, *h, WIDE_BAND).map(|band| (band, normalize(b.text))))
             .filter(|(_, t)| !t.is_empty())
             .collect();
-        on_page.sort_by(|a, b| a.1.cmp(&b.1));
+        // Sorted by (band, text), so `dedup` sees every repeat: a page counts once per key.
+        on_page.sort();
         on_page.dedup();
         for k in on_page {
             *seen.entry(k).or_default() += 1;
@@ -163,6 +164,30 @@ mod tests {
             ],
         )];
         assert_eq!(assign(&pages)[0], [Zone::Header, Zone::Body]);
+    }
+
+    #[test]
+    fn a_page_counts_once_per_band_and_text() {
+        // The same text twice in the top band and once in the bottom band of one page, and a
+        // second page without it: no repetition across pages, so no header or footer.
+        let block = |y0, y1| ZoneInput {
+            text: "same words",
+            bbox: b(y0, y1),
+        };
+        let pages = vec![
+            (
+                792.0,
+                vec![block(80.0, 95.0), block(700.0, 712.0), block(82.0, 97.0)],
+            ),
+            (
+                792.0,
+                vec![ZoneInput {
+                    text: "body text",
+                    bbox: b(300.0, 320.0),
+                }],
+            ),
+        ];
+        assert_eq!(assign(&pages)[0], [Zone::Body, Zone::Body, Zone::Body]);
     }
 
     #[test]

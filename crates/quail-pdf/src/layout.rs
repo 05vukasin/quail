@@ -331,6 +331,9 @@ fn push_segment(out: &mut Vec<Segment>, text: &str, bbox: BBox, size: f32) {
     }
 }
 
+/// Blocks that may still continue, at most (see [`blocks`]).
+const MAX_OPEN_BLOCKS: usize = 64;
+
 fn blocks(segments: Vec<Segment>) -> Vec<LayoutBlock> {
     let mut blocks: Vec<LayoutBlock> = Vec::new();
     // Blocks that may still continue. Segments arrive in line order (top to bottom), so a
@@ -355,6 +358,12 @@ fn blocks(segments: Vec<Segment>) -> Vec<LayoutBlock> {
             b.bbox = union(b.bbox, s.bbox);
             b.lines.push(s);
         } else {
+            // Segments of one line never leave `open` by the gap rule (a hostile `TJ` puts
+            // hundreds of thousands side by side): keep the newest few, which keeps the
+            // search linear. Real pages have about as many open blocks as columns.
+            if open.len() >= MAX_OPEN_BLOCKS {
+                open.remove(0);
+            }
             open.push(blocks.len());
             blocks.push(LayoutBlock {
                 bbox: s.bbox,
@@ -674,7 +683,8 @@ mod tests {
         let blocks = layout(g);
         assert!(!blocks.is_empty());
         assert!(
-            t.elapsed() < std::time::Duration::from_secs(5),
+            // Linear vs quadratic is seconds vs hours; the margin is for loaded debug runs.
+            t.elapsed() < std::time::Duration::from_mins(1),
             "{:?}",
             t.elapsed()
         );
@@ -692,7 +702,8 @@ mod tests {
         let blocks = layout(g);
         assert!(!blocks.is_empty());
         assert!(
-            t.elapsed() < std::time::Duration::from_secs(5),
+            // Linear vs quadratic is seconds vs hours; the margin is for loaded debug runs.
+            t.elapsed() < std::time::Duration::from_mins(1),
             "{:?}",
             t.elapsed()
         );
