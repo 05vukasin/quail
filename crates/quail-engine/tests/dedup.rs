@@ -233,3 +233,29 @@ fn a_failed_first_copy_is_not_reused() {
     assert_eq!(stats.duplicates, 0);
     assert!(sink.records.iter().all(|r| duplicate_of(r).is_none()));
 }
+
+#[test]
+fn the_first_copy_in_the_source_owns_its_content() {
+    // Eight identical files of 4 MiB: hashing takes long enough that, if workers claimed the
+    // content as they finish hashing, a later copy would often win. Ownership must follow
+    // the source order at any thread count, in every run.
+    let runs = Arc::new(AtomicU64::new(0));
+    let engine = counting_engine(&runs, Duration::ZERO);
+    let body = "invented identical content ".repeat(4 << 20 >> 5);
+    for round in 0..20 {
+        let names: Vec<String> = (0..8).map(|i| format!("c{i}")).collect();
+        let items: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), body.as_str())).collect();
+        let mut src = Items::new(&items);
+        let mut sink = VecSink::default();
+        let stats = engine.run(&mut src, &mut sink, &dedup(4, false));
+        assert_eq!(stats.duplicates, 7, "round {round}");
+        assert_eq!(duplicate_of(by_locator(&sink, "c0")), None, "round {round}");
+        for n in &names[1..] {
+            assert_eq!(
+                duplicate_of(by_locator(&sink, n)).as_deref(),
+                Some("c0"),
+                "round {round}: {n}"
+            );
+        }
+    }
+}

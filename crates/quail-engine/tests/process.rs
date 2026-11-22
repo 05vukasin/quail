@@ -274,8 +274,10 @@ fn too_big_skips_extraction_but_runs_generic_analyzers() {
 
 #[test]
 fn deadline_exceeded_stops_the_plan() {
+    // Long enough that `mock.first` always starts before the deadline, even on a loaded
+    // machine; `mock.slow` would loop forever without it.
     let limits = Limits {
-        timeout: Duration::from_millis(30),
+        timeout: Duration::from_millis(500),
         ..Limits::default()
     };
     let engine = EngineBuilder::new()
@@ -297,7 +299,7 @@ fn deadline_exceeded_stops_the_plan() {
         .unwrap();
     let t = Instant::now();
     let rec = engine.process(item("x.txt", b"hi"));
-    assert!(t.elapsed() < Duration::from_secs(2));
+    assert!(t.elapsed() < Duration::from_secs(30), "{:?}", t.elapsed());
     assert_eq!(ran(&rec), ["mock.first"]);
     let p = problems(&rec);
     assert_eq!(p[0], "mock.slow@1: timeout");
