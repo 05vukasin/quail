@@ -435,6 +435,30 @@ fn broken_pipe_exits_quietly_and_promptly() {
     assert!(err.is_empty(), "stderr not quiet: {err}");
 }
 
+/// Blocks until `pid` catches SIGINT (Linux: bit 2 of `SigCgt` in `/proc/<pid>/status`), so a
+/// signal sent next reaches the handler instead of killing the process. Where there is no
+/// `/proc`, waits half a second instead.
+#[cfg(unix)]
+fn wait_for_sigint_handler(pid: u32) {
+    let path = format!("/proc/{pid}/status");
+    let t = Instant::now();
+    while t.elapsed() < Duration::from_secs(30) {
+        let Some(mask) = fs::read_to_string(&path).ok().and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("SigCgt:"))
+                .and_then(|m| u64::from_str_radix(m.trim(), 16).ok())
+        }) else {
+            std::thread::sleep(Duration::from_millis(500));
+            return;
+        };
+        if mask & (1 << (2 - 1)) != 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("quail did not install its Ctrl-C handler within 30 s");
+}
+
 #[cfg(unix)]
 #[test]
 fn ctrl_c_drains_prints_stats_and_exits_130() {
@@ -461,35 +485,49 @@ fn ctrl_c_drains_prints_stats_and_exits_130() {
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
+    // Stderr lines, as they come, so the test can wait for the handler's message.
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
+    let err_reader = BufReader::new(child.stderr.take().unwrap());
+    let err_thread = std::thread::spawn(move || {
+        let mut all = String::new();
+        for line in err_reader.lines().map_while(Result::ok) {
+            all.push_str(&line);
+            all.push('\n');
+            let _ = line_tx.send(line);
+        }
+        all
+    });
     stdin.write_all(b"f0.txt\nf1.txt\n").unwrap();
     stdin.flush().unwrap();
-    // Wait until the first file went through, so the run is under way; the sink buffers,
-    // so watch for the source being blocked on stdin instead: give it a moment.
-    std::thread::sleep(Duration::from_millis(500));
+    // Ready once the handler is in (it goes in before anything slow): no sleep guesses.
+    wait_for_sigint_handler(child.id());
     let pid = child.id().to_string();
     let killed = Command::new("kill").args(["-INT", &pid]).status().unwrap();
     assert!(killed.success());
-    std::thread::sleep(Duration::from_millis(200));
+    // The handler says so on stderr once the stop is set.
+    let t0 = Instant::now();
+    loop {
+        let left = Duration::from_secs(30).saturating_sub(t0.elapsed());
+        match line_rx.recv_timeout(left) {
+            Ok(l) if l.contains("interrupted") => break,
+            Ok(_) => {}
+            Err(e) => panic!("no interrupt message: {e}"),
+        }
+    }
     // The source is blocked reading stdin: one more line lets it notice the stop.
     let _ = stdin.write_all(b"f2.txt\n");
     let _ = stdin.flush();
-    let status = wait_timeout(&mut child, Duration::from_secs(20));
+    let status = wait_timeout(&mut child, Duration::from_secs(30));
     drop(stdin);
     let mut recs = String::new();
     out.read_to_string(&mut recs).unwrap();
-    let mut err = String::new();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut err)
-        .unwrap();
+    let err = err_thread.join().unwrap();
     assert_eq!(status.code(), Some(130), "{err}");
     assert!(err.contains("interrupted"), "{err}");
     assert!(err.contains("cancelled"), "{err}");
-    // Records of files already pulled are written in full. On a slow runner the interrupt can
-    // land while the engine is still being built (language models, indexes): then nothing was
-    // pulled yet, which is a clean cancel too.
+    // Records of files already pulled are written in full. The interrupt can land while the
+    // engine is still being built (language models, indexes): then nothing was pulled yet,
+    // which is a clean cancel too.
     let n = records(&recs).len();
     assert!(n <= 3, "{n} records");
 }
