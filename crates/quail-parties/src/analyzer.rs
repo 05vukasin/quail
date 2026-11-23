@@ -1,4 +1,4 @@
-//! `party.candidates@5`: turns page scans into facts.
+//! `party.candidates@6`: turns page scans into facts.
 
 use std::collections::HashMap;
 
@@ -46,7 +46,7 @@ pub struct PartyCandidates;
 
 impl PartyCandidates {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("party.candidates", 5);
+    pub const ID: AnalyzerId = AnalyzerId::new("party.candidates", 6);
 }
 
 impl Analyzer for PartyCandidates {
@@ -194,6 +194,7 @@ pub fn collect_with(
         let s = scan(&w, pos, &domains);
         absorb(&mut found, &w, &s, page.index, i <= opening);
     }
+    demote_advisers(&mut found.candidates);
     if found.dropped > 0 {
         out.problem(format!(
             "party: {} mentions over the per-page cap not scanned",
@@ -203,15 +204,57 @@ pub fn collect_with(
     found
 }
 
+/// A firm named as an adviser once is one wherever it is named: its other mentions (the
+/// auditor's signature under its report, a fee note) lose their party roles and take the
+/// [`ADVISER`] factor.
+fn demote_advisers(candidates: &mut [Candidate]) {
+    let advisers: Vec<String> = candidates
+        .iter()
+        .filter(|c| c.roles.iter().any(|(r, _)| *r == Role::Adviser))
+        .map(|c| c.key.clone())
+        .collect();
+    if advisers.is_empty() {
+        return;
+    }
+    for c in candidates.iter_mut() {
+        if !advisers.contains(&c.key) || c.roles.iter().any(|(r, _)| *r == Role::Adviser) {
+            continue;
+        }
+        c.conf *= ADVISER;
+        c.roles
+            .retain(|(r, _)| !matches!(r, Role::Party | Role::Signatory | Role::Issuer));
+        for (_, rc) in &mut c.roles {
+            *rc *= ADVISER;
+        }
+        c.roles.push((Role::Adviser, c.conf));
+    }
+}
+
 /// Index (in `doc.pages`) of the page that opens the agreement: the first of the first three
-/// pages with at least [`OPENING_WORDS`] words, so a cover or exhibit page before the parties
-/// clause does not hide it; 0 when none has.
+/// pages with at least [`OPENING_WORDS`] words that is not a table of contents, so a cover,
+/// exhibit or contents page before the parties clause does not hide it; 0 when none has.
 fn opening_page(doc: &Document) -> usize {
     doc.pages
         .iter()
         .take(3)
-        .position(|p| !p.needs_ocr && p.text.split_whitespace().nth(OPENING_WORDS - 1).is_some())
+        .position(|p| {
+            !p.needs_ocr
+                && p.text.split_whitespace().nth(OPENING_WORDS - 1).is_some()
+                && !is_contents_page(&p.text)
+        })
         .unwrap_or(0)
+}
+
+/// A table of contents: a line that is only `Table of Contents`, `Contents`, `Index` or
+/// `Sadržaj` among the page's first lines.
+fn is_contents_page(text: &str) -> bool {
+    text.lines().take(5).any(|l| {
+        let l = l.trim().trim_end_matches(':').to_lowercase();
+        matches!(
+            l.as_str(),
+            "table of contents" | "contents" | "index" | "sadržaj" | "садржај"
+        )
+    })
 }
 
 /// Words a page needs to open the agreement (see `opening_page`).
@@ -346,6 +389,9 @@ pub const FILER_CAP: f32 = 0.5;
 /// Factor on a parties-clause mention on a later page without a defined term (CUAD dev: about
 /// 40 % right at 0.70).
 pub const LATER_CLAUSE: f32 = 0.3;
+/// Factor on an auditor, banker or solicitor named as such (see the `adviser` role): it is
+/// named in the document, it is not one of its parties.
+pub const ADVISER: f32 = 0.3;
 /// Factor on a company after `with a copy to` (counsel in a notices clause).
 pub const COPY_TO: f32 = 0.4;
 
@@ -401,7 +447,7 @@ fn role_weight(m: &Mention, r: Role) -> f32 {
                 0.6
             }
         }
-        Role::Mentioned => 1.0,
+        Role::Mentioned | Role::Adviser => 1.0,
     }
 }
 
@@ -445,6 +491,9 @@ fn candidate(w: &PageWords, m: &Mention, page: u32, opening: bool) -> Option<Can
     if m.ctx.filer {
         conf = conf.min(FILER_CAP);
     }
+    if m.ctx.adviser {
+        conf *= ADVISER;
+    }
     if only(Role::Party) && !opening && m.term.is_none() {
         conf *= LATER_CLAUSE;
     }
@@ -486,7 +535,7 @@ pub fn rank(candidates: &[Candidate]) -> Vec<(String, Vec<usize>, f32)> {
             groups.len() - 1
         });
         groups[g].1.push(i);
-        if c.roles.iter().all(|(r, _)| *r == Role::Mentioned) {
+        if c.roles.iter().all(|(r, _)| r.is_weak()) {
             best_mentioned[g] = best_mentioned[g].max(c.conf);
         } else {
             groups[g].2 *= 1.0 - c.conf;
@@ -506,12 +555,9 @@ fn emit(found: &Found, out: &mut Emitter) {
         let dropped = &groups[MAX_KEYS..];
         let weak = dropped.iter().all(|(_, idx, score)| {
             *score < WEAK_DROP
-                && idx.iter().all(|&i| {
-                    found.candidates[i]
-                        .roles
-                        .iter()
-                        .all(|(r, _)| *r == Role::Mentioned)
-                })
+                && idx
+                    .iter()
+                    .all(|&i| found.candidates[i].roles.iter().all(|(r, _)| r.is_weak()))
         });
         let msg = format!(
             "party: {} candidate companies, the {} strongest emitted",

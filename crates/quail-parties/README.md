@@ -8,7 +8,7 @@ the `party.alias_of` pairs) and assigns documents to suppliers.
 Out of scope (sibling crates): identifiers, dates, money and e-mail domains (`quail-signals`);
 document numbers, references and titles (`quail-refs`).
 
-- Analyzer: `party.candidates@5` (`PartyCandidates`), profile `Fast`, requires `document`.
+- Analyzer: `party.candidates@6` (`PartyCandidates`), profile `Fast`, requires `document`.
 - Public API: `PartyCandidates`, `keys::*`, and the pure helpers in `names`
   (`normalize_name`, `normalized_key`, `core_key`, `squashed_key`, `meaningful_words`,
   `core_words`, `score_name_match`, `are_names_similar`, `acronym_key`,
@@ -58,7 +58,13 @@ read whole (soft `after(["normalized_text"])`), else they are computed here, wit
    (`Snap Sample      Ultra Airlines, Inc.` in a two-column signature block), `X and Company`
    when the document defines `"Company"`, a possessive or an initialled person before a weak form
    (`Licensee's Company`, `Brian J. Sample Company`), and runs of column letters before a weak
-   form (`V W X Y Z AA AB`).
+   form (`V W X Y Z AA AB`). Table headers and addresses (`party.candidates@6`): a form after
+   column-heading abbreviations only is none (`Min/Max Min` / `Len Group`, `Qty Co.`), a
+   two-letter state code after a city and before a ZIP code is no form (`Springfield, NV
+   89000`), a closing quote ends the name (`POLICY' Acme Media, Inc.`; `Florists' X` stays one
+   name), `auditor(s)` ends it (`Chartered Accountants and Statutory Auditor` / `X LLP`), and a
+   calendar word inside a hyphenated name is part of it (`Zeta-Mart, Inc.`, `Mart` being March
+   in Serbian).
 2. **Role labels** (`Dobavljač:`, `Izvršilac:`, `Naručilac:`, `Kupac:`, `Supplier:`, `Vendor:`,
    `Customer:`, `Bill to:`, `Ship to:`, `Remit to:`, `Consignee`, ...) give the next name its role;
    without a legal form, the name must fill the line, have at least two words and no person's
@@ -67,7 +73,10 @@ read whole (soft `after(["normalized_text"])`), else they are computed here, wit
    за здравствено осигурање`): a capitalised word, then letter words up to a comma, a
    parenthesis or the line end, 2–8 words; not when it ends in a preposition (the name goes on
    in the next line of a signature table) or crosses a document word. Side-by-side label columns
-   ("Remit To: Ship To:") assign nothing.
+   ("Remit To: Ship To:") assign nothing. A formless value holding a form-field word
+   (`Submit EDI Invoice`, `Other Address`) is the next field, not a name, and a label after a
+   person noun (`odgovorno lice naručioca:`, `contact person of the Supplier:`) introduces a
+   person or a title, not the company.
 3. **Brands spelled by a domain**: one to three capitalised words that spell a second-level label
    of an e-mail or web domain in the same document ("KESTRELON" + `www.kestrelon.com`).
    Free-mail and platform hosts are ignored. (The domains themselves are `quail-signals`' facts.)
@@ -76,14 +85,21 @@ read whole (soft `after(["normalized_text"])`), else they are computed here, wit
    `bivše` between a found name and the next → `party.alias_of`.
 5. **Context** per mention: parties clause (an opener such as `između`, `between`, `entered
    into` before it on the opening page — the first page, or the first of the first three with 60
-   words or more when a short cover or exhibit page comes first — or registration details such as `sa sedištem`, `PIB`,
+   words or more that is not a table of contents, when a short cover, exhibit or contents page
+   comes first — or registration details such as `sa sedištem`, `PIB`,
    `matični broj`, `registered office`, `incorporated`, `represented by` after it); defined terms
    (`(u daljem tekstu: Naručilac)`, `(hereinafter the "Supplier")`, `("Company")`); letterhead
    (header zone, or the first 6 lines of page 1 when the extractor gives no zones); footer;
    signature block (`For and on behalf of X`, also with X on the next line, `Za X`, `Za i u ime
    X`, a name alone on its line over a `By:` line, or after a signature cue on the last two
    pages); bank in payment details (lower confidence, no issuer role); the EDGAR filer on a
-   `Source: X, 10-K, ...` line (no signatory role); counsel after `with a copy to`.
+   `Source: X, 10-K, ...` line (no signatory or issuer role: it filed the exhibit, it did not
+   write it); counsel after `with a copy to`; an **adviser**: a name under a short label line
+   ending in `Auditors`, `Bankers`, `Solicitors`, `Advisers`, `Accountants`, `Actuary` or
+   `Custodian` (or after it with a colon), or followed by one on its line or after a qualifier on
+   the next (`X LLP, Chartered Accountants`, `X LLP` / `Statutory Auditor`). An adviser loses its
+   `party` and `signatory` roles (an auditor signs its own report) and takes the `adviser` role,
+   in every mention of its key.
 
 Every surface passes the reference name-quality gates (ported from the owner's
 `name_quality.py`): length (2–120 chars, ≤ 10 words), no line break, e-mail/URL, addressee label,
@@ -104,7 +120,7 @@ span), `conf` = mention confidence. Fields, in this order:
 | `quality` | `ok` or `suspect` (two bare Titlecase words: a person or a brand) |
 | `legal_form` | canonical form (`d.o.o.`, `LLC`, `GmbH`, ...); absent without one |
 | `jurisdiction`, `jurisdiction_conf` | ISO 3166 alpha-2, lowercase, several joined by `\|`, and its confidence; absent when unknown |
-| `roles`, `role_conf` | `supplier`, `customer`, `issuer`, `bill_to`, `ship_to`, `signatory`, `party`, `mentioned`, and a parallel list of confidences (mention conf × role weight) |
+| `roles`, `role_conf` | `supplier`, `customer`, `issuer`, `bill_to`, `ship_to`, `signatory`, `party`, `adviser`, `mentioned`, and a parallel list of confidences (mention conf × role weight) |
 | `defined_term` | the term a clause defines for it (`Naručilac`, `Supplier`); absent without one |
 
 Document level: `party.candidates` (top 10 keys by noisy-or of their mentions' confidence, a
@@ -135,14 +151,15 @@ issuer of, the document:
 | clamp | 0.05 … 0.97 |
 | then, when the only role is `mentioned`: × 0.7 on the opening page with a defined term, × 0.3 on it without one, × 0.25 on later pages | |
 | then, when the only role is `party` (a clause) on a later page and there is no defined term | × 0.3 |
-| then: the EDGAR filer (`Source:` line) at most 0.5; after `with a copy to` × 0.4 | |
+| then: the EDGAR filer (`Source:` line) at most 0.5; an adviser × 0.3; after `with a copy to` × 0.4 | |
 
 The `mentioned` factors are the measured precision of such mentions on the Kleister-NDA and CUAD
 dev splits (about 50 %, 15 % and 10 % against about 60–85 % for mentions with any other role), so a
 `min_conf` of 0.3 keeps the parties and drops most affiliates, advisers and third parties named in
 the body. In `party.candidates`, a key's score is the noisy-or of its mentions that have a role and
-of its single strongest mentioned-only mention: a company named twenty times in the body is no more
-a party than one named once.
+of its single strongest mention whose roles are only `mentioned` or `adviser`: a company named
+twenty times in the body is no more a party than one named once, and the filer repeated in forty
+page footers no more than in one.
 
 Role confidences (`role_conf`) are `conf × weight` (0.95 for a defined term or a Bill/Ship-to label, 0.9 supplier /
 customer / party, 0.85 signatory, 0.8 issuer from a letterhead, 0.6 issuer from a footer).
@@ -163,6 +180,12 @@ only; `party.candidates@2` → `@3`):
 `party` task; `party.candidates@4` → `@5`: Cyrillic forms, sentence-case names after Serbian
 labels): P 43.5 → 68.5, R 21.4 → 35.7, F1 28.7 → 46.9; 25 documents better, none worse.
 Kleister-NDA and CUAD unchanged.
+
+**Wrong parties fed to the summary card** (`party.candidates@5` → `@6`: filer, advisers, table
+headers and form labels, contents pages; dev splits): CUAD P 85.2 → 87.9, R 70.2 → 70.2, F1 77.0
+→ 78.1; Kleister-NDA P 69.6 → 69.7, R 73.3 → 73.5, F1 71.4 → 71.5; Serbian public P 68.5 → 69.4,
+R 35.7 → 35.7, F1 46.9 → 47.2. On 120 Kleister-Charity dev reports, the card's parties that are
+audit firms, banks or law firms fell from 21 to 5 (14 → 3 as the first party).
 
 About 470 of CUAD's misses are aliases and defined terms (`Licensor`, `the "Company"`), which
 `party.company` carries in `defined_term`; scored with that field too, CUAD is F1 76.6.

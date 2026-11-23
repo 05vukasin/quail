@@ -817,3 +817,163 @@ fn a_label_over_running_text_is_no_party() {
     let ms = mentions(&run(doc));
     assert!(ms.is_empty(), "{ms:#?}");
 }
+
+/// `party.candidates` as `(key, score, roles)`.
+fn ranked(facts: &[Fact]) -> Vec<(String, f64, Vec<String>)> {
+    let Some(f) = facts.iter().find(|f| f.key == keys::CANDIDATES) else {
+        return Vec::new();
+    };
+    let Value::List(items) = &f.value else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .map(|r| {
+            let key = r.field("key").and_then(Value::as_text).unwrap().to_owned();
+            let score = match r.field("score") {
+                Some(Value::Float(s)) => *s,
+                _ => 0.0,
+            };
+            let roles = match r.field("roles") {
+                Some(Value::List(l)) => l.iter().map(|x| text(x).to_owned()).collect(),
+                _ => Vec::new(),
+            };
+            (key, score, roles)
+        })
+        .collect()
+}
+
+fn score_of(r: &[(String, f64, Vec<String>)], key: &str) -> f64 {
+    r.iter().find(|x| x.0 == key).map_or(0.0, |x| x.1)
+}
+
+#[test]
+fn the_filer_on_source_lines_is_not_a_party() {
+    // The EDGAR registrant repeats on every page footer; the parties are in the preamble.
+    let body = "This Supply Agreement (the \"Agreement\") is entered into by and between \
+         Alpha Widgets Inc., a Delaware corporation (the \"Customer\"), and Beta Parts LLC, \
+         a Texas limited liability company (the \"Supplier\"). The Supplier shall deliver the \
+         products listed in the schedule to the Customer at the agreed prices and terms of \
+         delivery, and the Customer shall pay every invoice within thirty days of receipt.";
+    let footer = "Source: NORTHWIND HOLDINGS LTD., 10-K, 3/1/2020";
+    let pages: Vec<Page> = (0..6)
+        .map(|i| {
+            let text = if i == 0 {
+                body
+            } else {
+                "Further terms of supply apply."
+            };
+            page_of(i, &[(text, Zone::Body), (footer, Zone::Footer)])
+        })
+        .collect();
+    let facts = run(Document { pages });
+    let r = ranked(&facts);
+    assert!(r.iter().any(|x| x.0 == "northwind holdings"), "{r:?}");
+    let filer = score_of(&r, "northwind holdings");
+    assert!(filer < 0.3, "{r:?}");
+    assert!(score_of(&r, "alpha widgets") > filer && score_of(&r, "beta parts") > filer);
+    let ms = mentions(&facts);
+    assert!(!has_role(&ms, "northwind holdings", "issuer"), "{ms:#?}");
+}
+
+#[test]
+fn a_contents_page_does_not_hide_the_preamble() {
+    let cover = "FORM OF\nLICENSE AGREEMENT\nLicensee\nAddress\nEffective Date";
+    let contents = format!(
+        "TABLE OF CONTENTS\n{}",
+        (1..=40)
+            .map(|n| format!("{n}. SECTION HEADING NUMBER {n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let preamble = "This License Agreement is entered into as of the Effective Date between \
+         Gamma Bistro Holding, Inc., a Florida corporation, and the person named on the first \
+         page (\"Partner\"). The licensor grants the Partner a licence to use the marks at \
+         one location for the term and on the conditions set out below, and the Partner \
+         agrees to pay the fees stated in the schedule when they fall due each month.";
+    let facts = run(plain(&[cover, &contents, preamble]));
+    let ms = mentions(&facts);
+    // In the parties clause on page 3: a party, not `mentioned`.
+    assert!(has_role(&ms, "gamma bistro holding", "party"), "{ms:#?}");
+    assert!(by_key(&ms, "gamma bistro holding")[0].conf > 0.5, "{ms:#?}");
+}
+
+#[test]
+fn auditors_bankers_and_solicitors_are_advisers() {
+    let info = "Legal and Administrative Information\n\
+         Charity name Delta Village Trust Limited\n\
+         Auditors\nGamma Audit LLP\n1 Example Street\nSpringfield\n\
+         Principal solicitors\nKestrel Law LLP\n2 Example Road\n\
+         Bankers\nOmega Bank plc\n3 Example Lane\n\
+         Secretary & registered office\n4 Example Square";
+    let report = "Independent Auditor's Report to the Members of Delta Village Trust Limited\n\
+         We have audited the financial statements of Delta Village Trust Limited.\n\
+         Jane Example (Senior Statutory Auditor)\n\
+         for and on behalf of Gamma Audit LLP\n\
+         Chartered Accountants and Statutory Auditor";
+    let facts = run(plain(&[info, report]));
+    let ms = mentions(&facts);
+    for k in ["gamma audit", "kestrel law", "omega"] {
+        assert!(
+            by_key(&ms, k).iter().all(|m| m.conf < 0.3
+                && m.roles.iter().any(|r| r == "adviser")
+                && !m.roles.iter().any(|r| r == "signatory" || r == "party")),
+            "{k}: {ms:#?}"
+        );
+    }
+    // No name is glued to the qualifier line above it.
+    assert!(
+        !keys_of(&ms).iter().any(|k| k.contains("chartered")),
+        "{ms:#?}"
+    );
+    // The charity itself is no adviser, though "Independent Auditor's Report" follows it.
+    let doc = plain(&["Kappa Care Limited\nIndependent Auditors' Report\nWe have audited."]);
+    let ms = mentions(&run(doc));
+    assert!(!has_role(&ms, "kappa care", "adviser"), "{ms:#?}");
+}
+
+#[test]
+fn table_headers_and_field_labels_are_no_names() {
+    let doc = plain(&[
+        "Spot\nCopy Br/Pos Min/Max Min\nLen Group\n30\n30",
+        "Station KXYZ\n100 Main Street\nSpringfield, NV 89000",
+        "AE 2\nClient\nSubmit EDI Invoice\nContact\nPhone 555-0100",
+    ]);
+    let ms = mentions(&run(doc));
+    assert!(ms.is_empty(), "{ms:#?}");
+    // A heading glued to a name by a stray quote stays out of it; a plural possessive stays in.
+    let t = "NOTICE POLICY' Acme Media, Inc. and its stations do not discriminate.\n\
+         Supplied by Florists' Exchange Delivery Inc.";
+    let ms = mentions(&run(plain(&[t])));
+    assert_eq!(
+        by_key(&ms, "acme media")[0].surface,
+        "Acme Media, Inc.",
+        "{ms:#?}"
+    );
+    assert!(
+        !by_key(&ms, "florists exchange delivery").is_empty(),
+        "{ms:#?}"
+    );
+}
+
+#[test]
+fn a_hyphenated_name_keeps_a_calendar_word() {
+    // `Mart` is March in Serbian; inside `Zeta-Mart` it is part of the name.
+    let ms = mentions(&run(plain(&[
+        "Zeta-Mart, Inc.\n1 Example Avenue\nNew York, NY 10019",
+    ])));
+    assert_eq!(
+        by_key(&ms, "zetamart")[0].surface,
+        "Zeta-Mart, Inc.",
+        "{ms:#?}"
+    );
+}
+
+#[test]
+fn the_person_acting_for_a_party_is_no_party() {
+    // "Responsible person of the buyer: head of the city administration" names a title.
+    let doc = plain(&["ОДГОВОРНО ЛИЦЕ НАРУЧИОЦА\n:НАЧЕЛНИК ГРАДСКЕ УПРАВЕ\n\
+         Contact person of the Supplier: Sales Office Manager"]);
+    let ms = mentions(&run(doc));
+    assert!(ms.is_empty(), "{ms:#?}");
+}

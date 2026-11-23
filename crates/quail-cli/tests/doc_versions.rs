@@ -46,6 +46,7 @@ const HISTORY: &[(&str, &str)] = &[
     ("crates/quail-parties/README.md", "party.candidates@2"),
     ("crates/quail-parties/README.md", "party.candidates@3"),
     ("crates/quail-parties/README.md", "party.candidates@4"),
+    ("crates/quail-parties/README.md", "party.candidates@5"),
     ("docs/performance.md", "party.candidates@4"),
 ];
 
