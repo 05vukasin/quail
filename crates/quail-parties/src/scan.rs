@@ -742,11 +742,14 @@ impl<'a> Scanner<'a> {
     }
 
     /// An apostrophe at `k` closing a quote, not an elision or a plural possessive:
-    /// `POLICY' Acme, Inc.` (`O'Neil` is one word, `Florists' Exchange` one name).
+    /// `POLICY' Acme, Inc.` (`O'Neil` is one word, `Florists' Exchange` and `Kids N' Toys` one
+    /// name).
     fn closing_quote(&self, k: usize) -> bool {
+        let before = self.w.text(k.saturating_sub(1));
         self.w.is_punct(k, '\'')
             && !self.attached(k + 1)
-            && !self.w.text(k.saturating_sub(1)).ends_with(['s', 'S'])
+            && before.chars().count() >= 3
+            && !before.ends_with(['s', 'S'])
     }
 
     /// Crossing from the line of token `k + 1` up to `k` keeps one name: `Leggett &` /
