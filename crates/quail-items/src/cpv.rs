@@ -179,7 +179,15 @@ impl Space {
 
     /// Adds `weight × cosine` of the query to `acc` per document (`touched` lists the
     /// documents that got a non-zero score).
-    fn score(&self, terms: &[String], weight: f32, acc: &mut [f32], touched: &mut Vec<u32>) {
+    /// With `hits`, also counts per document the distinct query terms it shares (saturating).
+    fn score(
+        &self,
+        terms: &[String],
+        weight: f32,
+        acc: &mut [f32],
+        touched: &mut Vec<u32>,
+        mut hits: Option<&mut [u8]>,
+    ) {
         let mut tf: Vec<(u32, f32)> = Vec::new();
         for t in terms {
             if let Some(&id) = self.ids.get(&term_key(t)) {
@@ -222,6 +230,9 @@ impl Space {
                     }
                     *acc += w * y;
                 }
+                if let Some(h) = hits.as_deref_mut().and_then(|h| h.get_mut(doc as usize)) {
+                    *h = h.saturating_add(1);
+                }
             }
         }
     }
@@ -232,6 +243,42 @@ const STOP: &[&str] = &[
     "i", "u", "za", "od", "na", "sa", "s", "po", "do", "ili", "se", "koji", "koje", "koja", "kao",
     "ostali", "ostale", "ostalo", "drugi", "druge", "srodni", "srodne", "related", "etc",
 ];
+
+/// Score factor of a label that shares at most one content word with a description shaped
+/// like a proper name ([`name_shaped`]) of two or more content words. Measured on the
+/// `RealKIE` FCC dev invoices, whose lines are TV programme names: see the crate README.
+const NAME_PENALTY: f32 = 0.35;
+
+/// Adjectives and pronouns that say nothing about a category; a name's shared word must be
+/// another one (`Good Morning America` shares only `morning` with "Morning goods").
+const GENERIC_WORDS: &[&str] = &[
+    "good", "new", "all", "various", "best", "great", "big", "small", "little", "top", "prime",
+    "live", "modern", "global", "first", "last", "local", "general", "special", "high", "low",
+    "early", "late", "real", "true", "old", "young", "free", "open", "daily", "weekly", "today",
+    "this", "is", "it", "my", "your", "our", "his", "her", "their", "we", "you", "mali", "mala",
+    "malo", "veliki", "velika", "veliko", "beli", "bela", "belo", "crni", "crna", "novi", "nova",
+    "novo", "stari", "stara", "staro",
+];
+
+/// A description shaped like a proper name: every word of letters is capitalised or in
+/// capitals, short connectors (`of`, `or`, `the`, `za`, `i`) aside, `Good Morning America`,
+/// `Law & Order: SVU`, `ВЕЛИКА ПЛАНА`. A programme, a place or a brand, so one shared word
+/// with a category label says little. `Paper towels` and `rastvor za infuziju` are not.
+pub fn name_shaped(description: &str) -> bool {
+    let mut words = 0;
+    for w in description.split(|c: char| !c.is_alphanumeric() && c != '\'') {
+        let w = w.trim_matches('\'');
+        if w.is_empty() || !w.chars().all(char::is_alphabetic) {
+            continue;
+        }
+        if w.starts_with(char::is_uppercase) {
+            words += 1;
+        } else if !STOP.contains(&w) {
+            return false;
+        }
+    }
+    words > 0
+}
 
 const EN_SUFFIX: &[&str] = &["ings", "ing", "ies", "es", "ed", "s"];
 const SR_SUFFIX: &[&str] = &[
@@ -373,7 +420,8 @@ impl CpvIndex {
                 score -= ALIAS_STEP;
             }
         }
-        for c in self.top_with(text, k, service) {
+        let name = name_shaped(description).then_some(description);
+        for c in self.top_inner(text, k, service, name) {
             match out.iter_mut().find(|x| x.entry == c.entry) {
                 Some(x) => x.score = x.score.max(c.score),
                 None => out.push(c),
@@ -415,6 +463,15 @@ impl CpvIndex {
     /// pushed down; words that say how a service is billed rather than what it is
     /// (`onshore`, `senior`, `fees`, months) are left out of the query.
     pub fn top_with(&self, text: &str, k: usize, service: bool) -> Vec<Candidate> {
+        self.top_inner(text, k, service, None)
+    }
+
+    /// [`CpvIndex::top_with`]; with `name`, the description when it is shaped like a proper
+    /// name ([`name_shaped`]): a label that shares at most one distinct content word with a
+    /// name of two or more words, or any label when the name has only generic words
+    /// (`VARIOUS`), scores [`NAME_PENALTY`] times less. `Good Morning America` is a TV
+    /// programme, not "Morning goods".
+    fn top_inner(&self, text: &str, k: usize, service: bool, name: Option<&str>) -> Vec<Candidate> {
         let mut w = folded_words(text);
         if service {
             w.retain(|x| !BILLING_WORDS.contains(&x.as_str()));
@@ -425,9 +482,35 @@ impl CpvIndex {
         let mut acc = vec![0f32; self.doc_entry.len()];
         let mut touched = Vec::new();
         self.words
-            .score(&word_terms(&w), 0.5, &mut acc, &mut touched);
+            .score(&word_terms(&w), 0.5, &mut acc, &mut touched, None);
         self.grams
-            .score(&gram_terms(&w), 0.5, &mut acc, &mut touched);
+            .score(&gram_terms(&w), 0.5, &mut acc, &mut touched, None);
+        // The name's distinct content stems (generic adjectives out) and the labels' share.
+        let (penalize, hits) = match name {
+            Some(d) => {
+                let words = folded_words(d);
+                let n_words = word_terms(&words).len();
+                let mut content = word_terms(
+                    &words
+                        .into_iter()
+                        .filter(|x| !GENERIC_WORDS.contains(&x.as_str()))
+                        .collect::<Vec<_>>(),
+                );
+                content.sort_unstable();
+                content.dedup();
+                let mut hits = vec![0u8; self.doc_entry.len()];
+                let mut scratch = vec![0f32; self.doc_entry.len()];
+                self.words.score(
+                    &content,
+                    0.0,
+                    &mut scratch,
+                    &mut Vec::new(),
+                    Some(&mut hits),
+                );
+                (n_words >= 2 || content.is_empty(), hits)
+            }
+            None => (false, Vec::new()),
+        };
         let mut best: HashMap<u32, f32> = HashMap::with_capacity(touched.len());
         for doc in touched {
             let s = acc[doc as usize];
@@ -435,6 +518,11 @@ impl CpvIndex {
                 continue;
             }
             if let Some(&e) = self.doc_entry.get(doc as usize) {
+                let s = if penalize && hits.get(doc as usize).copied().unwrap_or(0) <= 1 {
+                    s * NAME_PENALTY
+                } else {
+                    s
+                };
                 let s = if service {
                     let first = self
                         .entries
@@ -661,5 +749,45 @@ mod tests {
         assert_eq!(ix.entries().len(), 9454);
         let top = codes(&ix, "Cleaning services");
         assert!(top.iter().any(|c| c.starts_with("909")), "{top:?}");
+    }
+
+    #[test]
+    fn names_are_shaped_like_names() {
+        assert!(name_shaped("Good Morning America 7a-9a"));
+        assert!(name_shaped("Law & Order: SVU"));
+        assert!(name_shaped("Flip or Flop"));
+        assert!(name_shaped("ВЕЛИКА ПЛАНА"));
+        assert!(!name_shaped("Paper towels"));
+        assert!(!name_shaped("rastvor za infuziju"));
+        assert!(!name_shaped("7a-9a"));
+    }
+
+    /// The best score of `code` among the top 3 of `description` as a price line.
+    fn score_of(ix: &CpvIndex, description: &str, code: &str) -> f32 {
+        ix.categorize(description, None, None, 3)
+            .iter()
+            .find(|c| &*ix.entries()[c.entry].code == code)
+            .map_or(0.0, |c| c.score)
+    }
+
+    #[test]
+    fn a_programme_name_is_no_confident_category() {
+        let ix = CpvIndex::embedded();
+        // "Morning goods" (bakery) shares only "morning" with the programme ("good" is generic).
+        let s = score_of(&ix, "Good Morning America 7a-9a", "15813000-0");
+        assert!(s < 0.3, "{s}");
+        // The same words in a goods line keep their match.
+        let s = score_of(&ix, "morning goods", "15813000-0");
+        assert!(s >= 0.5, "{s}");
+        // A name sharing two content words with its label, and a one-word name, keep it.
+        for d in ["Toner Cartridges", "Baseball"] {
+            let plain = ix.top(d, 1);
+            let named = ix.top_inner(d, 1, false, Some(d));
+            assert_eq!(plain, named, "{d}");
+            assert!(plain[0].score >= 0.3, "{d} {plain:?}");
+        }
+        // Only generic words: nothing confident.
+        let various = ix.categorize("VARIOUS", None, None, 1);
+        assert!(various.iter().all(|c| c.score < 0.3), "{various:?}");
     }
 }

@@ -6,7 +6,7 @@ later service can answer "who is cheapest for X" across suppliers. Namespace `it
 The crate reports each line as written plus normalized fields and top-3 category candidates
 (EU CPV 2008). It never decides that two suppliers' lines are the same service.
 
-- Analyzer: `item.lines@5` (`ItemLines`), requires `document`, runs after `revised_document`,
+- Analyzer: `item.lines@6` (`ItemLines`), requires `document`, runs after `revised_document`,
   reads `Ctx::document()`. Line extraction is `Profile::Fast`; category candidates are added
   from `Profile::Standard` on. The CPV index is built lazily on the first file that needs
   categories (about 0.16 s, about 9 MB RSS) and shared by every clone of the analyzer.
@@ -118,6 +118,20 @@ numbers of adjacent cells).
 
 ## Versions
 
+- `item.lines@6`: CPV categories of names. A description shaped like a proper name (every
+  word of letters capitalised or in capitals, short connectors aside: `Good Morning America`,
+  `This Is Life`, `ВЕЛИКА ПЛАНА`) is a TV programme, a place or a brand more often than goods;
+  a label that shares at most one distinct content word with such a name of two or more words
+  (generic adjectives such as `good`, `new`, `all`, `modern`, `veliki`, `beli` do not count),
+  or any label when the name has only generic words (`VARIOUS`), scores 0.35 times as much.
+  `Good Morning America` no longer gets "Morning goods" (bakery) at 0.75. Measured on the dev
+  splits, top candidates scoring ≥ 0.3 (the card's threshold): RealKIE FCC 3,431 → 469 of
+  10,265 lines (TV programme names: `Afternoon Drive` → "Driving-test services", `Modern
+  Family` → "Family-planning services", `Forensic Files` → "Forensic room construction
+  work"); Serbian public 211 → 176 of 499 (mostly city names: `БЕЛА ПАЛАНКА` → "White oils");
+  CUAD 145 fewer. Some right ones drop below 0.3 too (a Latin drug name in capitals → "Chlorides",
+  a flooring line in capitals → "Parquet"): they stay candidates, at a lower score. Items F1 is
+  unchanged (categories are not part of the match).
 - `item.lines@5`: descriptions by token shape (`src/desc.rs`). A layout or text description
   holding an air time is split at its dates, times, weekdays and spot codes, and the run of
   words that reads most like a description is kept (`3 WBTV M 04/21/14 11:24 PM WBTV News @ 11p`
