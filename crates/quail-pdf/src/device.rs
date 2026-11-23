@@ -125,6 +125,7 @@ impl<'e> Watchdog<'e> {
 pub(crate) struct Captured {
     pub glyphs: Vec<Glyph>,
     pub unmapped: usize,
+    pub ambiguous: usize,
     pub truncated: usize,
     pub images: usize,
     pub placements: Vec<PageImage>,
@@ -137,6 +138,9 @@ pub(crate) struct PageCapture<'e> {
     pub glyphs: Vec<Glyph>,
     /// Glyphs drawn without any Unicode mapping (counted, not kept).
     pub unmapped: usize,
+    /// Cased letters drawn by a glyph whose letter another glyph of the same run (so of
+    /// the same font) also maps to, see [`ambiguous_letters`].
+    pub ambiguous: usize,
     /// Glyphs dropped by [`MAX_GLYPHS_PER_PAGE`] or the text budget.
     pub truncated: usize,
     /// Number of image draws (including stencil masks).
@@ -159,6 +163,7 @@ impl<'e> PageCapture<'e> {
         Self {
             glyphs: Vec::new(),
             unmapped: 0,
+            ambiguous: 0,
             truncated: 0,
             images: 0,
             placements: Vec::new(),
@@ -175,6 +180,7 @@ impl<'e> PageCapture<'e> {
         Captured {
             glyphs: self.glyphs,
             unmapped: self.unmapped,
+            ambiguous: self.ambiguous,
             truncated: self.truncated,
             images: self.images,
             placements: self.placements,
@@ -199,6 +205,35 @@ impl<'e> PageCapture<'e> {
         let r = (covered / area).min(1.0) as f32;
         r
     }
+}
+
+/// Of one run's cased letters (`(letter, glyph)` with the glyph's outline identity), how
+/// many show a letter that two or more different glyphs map to. Within a run all glyphs come
+/// from one font, and a font draws each letter with one glyph: when two glyphs map to the
+/// same letter, the font's `ToUnicode` maps one of them wrong (Word 2010 writes `bfrange`s
+/// across gaps in the glyph order, so `о` comes out as `п` and `њ` as `о`), and the text
+/// layer says something else than the page shows. Uncased scripts are left out: Arabic and
+/// Indic fonts draw one letter with several contextual glyphs on purpose.
+fn ambiguous_letters(letters: &mut [(char, u128)]) -> usize {
+    letters.sort_unstable();
+    let mut n = 0usize;
+    let mut i = 0usize;
+    while let Some(&(c, first)) = letters.get(i) {
+        let mut j = i;
+        let mut shapes = false;
+        while let Some(&(d, k)) = letters.get(j) {
+            if d != c {
+                break;
+            }
+            shapes |= k != first;
+            j += 1;
+        }
+        if shapes {
+            n += j - i;
+        }
+        i = j;
+    }
+    n
 }
 
 fn glyph_advance(g: &HGlyph<'_>) -> f64 {
@@ -235,10 +270,13 @@ impl<'a> Device<'a> for PageCapture<'_> {
         self.watchdog.nest();
     }
 
-    fn draw_glyph_run(&mut self, run: &GlyphRun<'_, 'a>, props: DrawProps<'a>, _: &DrawMode) {
+    fn draw_glyph_run(&mut self, run: &GlyphRun<'_, 'a>, props: DrawProps<'a>, mode: &DrawMode) {
         self.watchdog.tick();
         // Invisible text (render mode 3) is included on purpose: it is the text layer of
-        // OCR'd scans.
+        // OCR'd scans. Its glyphs are never seen, so their shapes say nothing about whether
+        // the mapping matches the page: only visible runs are checked for ambiguous letters.
+        let visible = !matches!(mode, DrawMode::Invisible);
+        let mut letters: Vec<(char, u128)> = Vec::new();
         for g in run.glyphs() {
             // Every glyph is a draw: one huge `Tj` meets the call cap and the deadline too.
             self.watchdog.tick();
@@ -250,6 +288,12 @@ impl<'a> Device<'a> for PageCapture<'_> {
             let text = match g.as_unicode() {
                 Some(BfString::Char(c)) => {
                     self.text_budget = self.text_budget.saturating_sub(c.len_utf8());
+                    if visible
+                        && (c.is_lowercase() || c.is_uppercase())
+                        && let HGlyph::Outline(o) = &**g
+                    {
+                        letters.push((c, o.identifier().cache_key()));
+                    }
                     GlyphText::from_char(c)
                 }
                 Some(BfString::String(s)) => {
@@ -281,6 +325,9 @@ impl<'a> Device<'a> for PageCapture<'_> {
                 size: f((top - origin).hypot()),
             });
         }
+        self.ambiguous = self
+            .ambiguous
+            .saturating_add(ambiguous_letters(&mut letters));
     }
 
     fn draw_image(&mut self, image: Image<'a, '_>, props: ImageDrawProps<'a>) {
@@ -356,4 +403,20 @@ impl<'a> Device<'a> for DryRun<'_> {
     }
     fn pop_clip(&mut self) {}
     fn pop_transparency_group(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ambiguous_letters;
+
+    #[test]
+    fn ambiguous_letters_count_every_glyph_of_a_shared_letter() {
+        // `о` drawn by glyph 7 maps to `п`, as does the real `п` (glyph 9).
+        let mut run = vec![('м', 1), ('п', 7), ('т', 3), ('п', 9), ('р', 4), ('п', 7)];
+        assert_eq!(ambiguous_letters(&mut run), 3);
+        // One glyph per letter, however often it repeats: nothing ambiguous.
+        let mut clean = vec![('a', 1), ('b', 2), ('a', 1), ('c', 3), ('a', 1)];
+        assert_eq!(ambiguous_letters(&mut clean), 0);
+        assert_eq!(ambiguous_letters(&mut []), 0);
+    }
 }
