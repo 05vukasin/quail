@@ -151,6 +151,8 @@ pub(crate) struct PageCapture<'e> {
     pub paths: usize,
     page: Rect,
     watchdog: Watchdog<'e>,
+    /// Scratch for [`ambiguous_letters`], reused across runs.
+    run_letters: Vec<(char, u32)>,
     /// Bytes of glyph text this page may still look up: every `ToUnicode` string is charged
     /// in full (the lookup allocates it) before it is cut to [`MAX_GLYPH_CHARS`].
     text_budget: usize,
@@ -164,6 +166,7 @@ impl<'e> PageCapture<'e> {
             glyphs: Vec::new(),
             unmapped: 0,
             ambiguous: 0,
+            run_letters: Vec::new(),
             truncated: 0,
             images: 0,
             placements: Vec::new(),
@@ -207,14 +210,15 @@ impl<'e> PageCapture<'e> {
     }
 }
 
-/// Of one run's cased letters (`(letter, glyph)` with the glyph's outline identity), how
+/// Of one run's cased letters (`(letter, glyph id)`: a run has one font, so the id names
+/// the glyph), how
 /// many show a letter that two or more different glyphs map to. Within a run all glyphs come
 /// from one font, and a font draws each letter with one glyph: when two glyphs map to the
 /// same letter, the font's `ToUnicode` maps one of them wrong (Word 2010 writes `bfrange`s
 /// across gaps in the glyph order, so `о` comes out as `п` and `њ` as `о`), and the text
 /// layer says something else than the page shows. Uncased scripts are left out: Arabic and
 /// Indic fonts draw one letter with several contextual glyphs on purpose.
-fn ambiguous_letters(letters: &mut [(char, u128)]) -> usize {
+fn ambiguous_letters(letters: &mut [(char, u32)]) -> usize {
     letters.sort_unstable();
     let mut n = 0usize;
     let mut i = 0usize;
@@ -276,7 +280,8 @@ impl<'a> Device<'a> for PageCapture<'_> {
         // OCR'd scans. Its glyphs are never seen, so their shapes say nothing about whether
         // the mapping matches the page: only visible runs are checked for ambiguous letters.
         let visible = !matches!(mode, DrawMode::Invisible);
-        let mut letters: Vec<(char, u128)> = Vec::new();
+        let mut letters = std::mem::take(&mut self.run_letters);
+        letters.clear();
         for g in run.glyphs() {
             // Every glyph is a draw: one huge `Tj` meets the call cap and the deadline too.
             self.watchdog.tick();
@@ -292,7 +297,7 @@ impl<'a> Device<'a> for PageCapture<'_> {
                         && (c.is_lowercase() || c.is_uppercase())
                         && let HGlyph::Outline(o) = &**g
                     {
-                        letters.push((c, o.identifier().cache_key()));
+                        letters.push((c, o.glyph_id().to_u32()));
                     }
                     GlyphText::from_char(c)
                 }
@@ -328,6 +333,7 @@ impl<'a> Device<'a> for PageCapture<'_> {
         self.ambiguous = self
             .ambiguous
             .saturating_add(ambiguous_letters(&mut letters));
+        self.run_letters = letters;
     }
 
     fn draw_image(&mut self, image: Image<'a, '_>, props: ImageDrawProps<'a>) {
