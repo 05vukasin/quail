@@ -170,7 +170,8 @@ pub(crate) fn warn_without_ocr(profile: quail_core::Profile) {
 
 /// Limits, OCR settings and workers of a run.
 pub(crate) struct Plan {
-    /// Per-file limits, with the timeout raised to fit the OCR budget.
+    /// Per-file limits; under OCR, `max_timeout` lets a file with pages to OCR extend its
+    /// deadline to fit the OCR budget.
     pub limits: Limits,
     /// OCR settings of each engine (`None`: no OCR in this run).
     pub ocr: Option<OcrSettings>,
@@ -186,12 +187,19 @@ impl Plan {
                 Some(t) => format!("{} per page", human(t)),
                 None => "no per-page budget".to_owned(),
             };
+            let (base, cap) = (self.limits.timeout, self.limits.timeout_cap());
+            let timeout = if cap > base {
+                format!(
+                    "timeout {} per file, up to {} with pages to OCR",
+                    human(base),
+                    human(cap)
+                )
+            } else {
+                format!("timeout {} per file", human(base))
+            };
             eprintln!(
-                "quail: ocr: {} page(s) at a time, {} thread(s) each; up to {} pages per file, {budget}; timeout {} per file",
-                s.jobs,
-                s.threads,
-                s.max_pages,
-                human(self.limits.timeout)
+                "quail: ocr: {} page(s) at a time, {} thread(s) each; up to {} pages per file, {budget}; {timeout}",
+                s.jobs, s.threads, s.max_pages,
             );
         }
     }
@@ -211,8 +219,11 @@ fn human(d: Duration) -> String {
 }
 
 /// The run's [`Plan`]. Under `--profile deep` with OCR ready: OCR budgets for the workers
-/// ([`OcrSettings::resolve`]); unless `--timeout` was given, a per-file timeout that fits a
-/// file's whole OCR budget even behind the other workers; with `--isolate`, where every
+/// ([`OcrSettings::resolve`]); a per-file `max_timeout` that fits a file's whole OCR budget
+/// even behind the other workers, which only a file with pages to OCR draws on (the OCR step
+/// extends its deadline by what its pages need), so every other file keeps the timeout; with
+/// `--timeout` and no `--ocr-page-time` there is no per-page budget and no extension; with
+/// `--isolate`, where every
 /// worker process loads its own engine, one OCR job per worker and `-j` defaulting to the
 /// OCR jobs, so memory stays bounded either way.
 pub(crate) fn plan(
@@ -240,9 +251,7 @@ pub(crate) fn plan(
             s.jobs = 1;
             workers = 1;
         }
-        if !explicit_timeout {
-            plan.limits.timeout = s.file_timeout(plan.limits.timeout, workers);
-        }
+        plan.limits.max_timeout = s.file_timeout(plan.limits.timeout, workers);
         plan.ocr = Some(s);
     }
     #[cfg(not(feature = "ocr"))]
@@ -274,9 +283,10 @@ fn mode(args: &ScanArgs, plan: &Plan, read: ReadOptions) -> Result<Mode, String>
         let jobs = isolate::jobs(paths, cap);
         return Ok(Mode::Isolated(Box::new((jobs, IsolatedRunner::new(opts)))));
     }
-    let engine = registry::builder_with(spec.profile, spec.limits, spec.ocr.as_ref())
-        .build()
-        .map_err(|e| e.to_string())?;
+    let b = registry::builder_with(spec.profile, spec.limits, spec.ocr.as_ref());
+    #[cfg(feature = "test-hooks")]
+    let b = isolate::test_hooks::install_stall(b);
+    let engine = b.build().map_err(|e| e.to_string())?;
     Ok(Mode::InProcess(source(args, read)?, Box::new(engine)))
 }
 

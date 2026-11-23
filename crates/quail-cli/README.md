@@ -159,9 +159,11 @@ quail scan --profile deep contracts/ -o records.jsonl
   - `--ocr-threads` ONNX Runtime threads per engine (default `CPUs / jobs`, at most 4);
   - per file at most `--ocr-max-pages` (40) pages and `--ocr-page-time` (45 s) of reading per
     page; past either the record is `partial`. The OCR text counts against `max_text_bytes`.
-  - Without `--timeout`, the per-file timeout is raised to fit that budget behind the other
-    workers (`2m + 40 x 45s x ceil(-j / jobs)`, at most 2 h). With `--timeout`, it is kept and there is no
-    per-page budget unless `--ocr-page-time` is given.
+  - Every file starts with `--timeout` (2m). OCR extends the deadline of a file with pages
+    to read by what they need and by its waits for a free job, up to `Limits::max_timeout`
+    (`timeout + 40 x 45s x ceil(-j / jobs)`, at most 2 h), so the budget fits behind the
+    other workers; a file without pages to OCR keeps the timeout. With `--timeout` and no
+    `--ocr-page-time` there is no per-page budget and no extension.
   - With `--isolate`, one engine per worker process and `-j` defaults to the OCR jobs.
   - `scan` and `inspect` print the resulting line `quail: ocr: ...` on stderr (not with `-q`).
 - Under `--profile deep` without models (or without the feature), `scan` and `inspect` print one

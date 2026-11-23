@@ -595,6 +595,17 @@ fn tiny_doc(n: u32) -> Document {
 
 /// Runs `a` on [`tiny_doc`]`(n)`.
 fn run_tiny(a: &OcrPages, n: u32, limits: &Limits, deadline: Option<Instant>) -> Out {
+    run_tiny_until(a, n, limits, deadline.map(|d| (d, d))).0
+}
+
+/// [`run_tiny`] with a `(deadline, cap)` the step may extend to; also returns the file's
+/// deadline after the step.
+fn run_tiny_until(
+    a: &OcrPages,
+    n: u32,
+    limits: &Limits,
+    deadline: Option<(Instant, Instant)>,
+) -> (Out, Option<Instant>) {
     let blob = Blob::new(Vec::<u8>::new());
     let mut arts = Artifacts::new();
     arts.insert(tiny_doc(n));
@@ -609,17 +620,141 @@ fn run_tiny(a: &OcrPages, n: u32, limits: &Limits, deadline: Option<Instant>) ->
         profile: Profile::Deep,
     };
     let mut out = match deadline {
-        Some(d) => Emitter::with_deadline(OcrPages::ID, d),
+        Some((d, cap)) => Emitter::with_extensible_deadline(OcrPages::ID, d, cap),
         None => Emitter::new(OcrPages::ID),
     };
     a.run(&ctx, &mut out).unwrap_or_else(|e| panic!("run: {e}"));
+    let end = out.deadline();
     let problems = out.take_problems();
     let (facts, artifacts, _) = out.into_parts();
-    Out {
-        facts,
-        artifacts,
-        problems,
-    }
+    (
+        Out {
+            facts,
+            artifacts,
+            problems,
+        },
+        end,
+    )
+}
+
+/// 5 pages of 200 ms with 300 ms each allowed, against a 1 s file timeout: OCR extends the
+/// deadline to fit its 1.5 s and the 0.5 s reserve, and reads every page.
+#[test]
+fn ocr_extends_the_deadline_for_its_pages() {
+    let a = OcrPages::new(
+        Factory::slow(0.0, Duration::from_millis(200)),
+        1,
+        OcrConfig {
+            page_time: Some(Duration::from_millis(300)),
+            ..OcrConfig::default()
+        },
+    );
+    let limits = Limits {
+        timeout: Duration::from_secs(1),
+        max_timeout: Duration::from_secs(30),
+        ..Limits::default()
+    };
+    let start = Instant::now();
+    let base = start + limits.timeout;
+    let (out, end) = run_tiny_until(&a, 5, &limits, Some((base, start + limits.max_timeout)));
+    assert_eq!(int(&out, &keys::PAGES), Some(5), "{:?}", out.problems);
+    assert!(out.problems.is_empty(), "{:?}", out.problems);
+    let end = end.unwrap();
+    assert!(end >= start + Duration::from_secs(2), "{:?}", end - start);
+    assert!(end < start + Duration::from_secs(10), "{:?}", end - start);
+}
+
+/// The same with `max_timeout` 1.2 s: the extension stops at the cap, and OCR keeps the
+/// reserve before it.
+#[test]
+fn the_extension_stops_at_max_timeout() {
+    let a = OcrPages::new(
+        Factory::slow(0.0, Duration::from_millis(200)),
+        1,
+        OcrConfig {
+            page_time: Some(Duration::from_millis(300)),
+            ..OcrConfig::default()
+        },
+    );
+    let limits = Limits {
+        timeout: Duration::from_secs(1),
+        max_timeout: Duration::from_millis(1200),
+        ..Limits::default()
+    };
+    let start = Instant::now();
+    let cap = start + limits.max_timeout;
+    let (out, end) = run_tiny_until(&a, 5, &limits, Some((start + limits.timeout, cap)));
+    assert_eq!(end, Some(cap));
+    let read = int(&out, &keys::PAGES).unwrap_or(0);
+    assert!((1..5).contains(&read), "{read}");
+    assert!(
+        out.problems.iter().any(|p| p.contains("steps after it")),
+        "{:?}",
+        out.problems
+    );
+}
+
+/// A document without pages to OCR asks for no extension.
+#[test]
+fn no_pages_no_extension() {
+    let a = OcrPages::new(Factory::new(0.0), 1, OcrConfig::default());
+    let limits = Limits {
+        max_timeout: Duration::from_hours(2),
+        ..Limits::default()
+    };
+    let start = Instant::now();
+    let base = start + limits.timeout;
+    let (out, end) = run_tiny_until(&a, 0, &limits, Some((base, start + limits.max_timeout)));
+    assert_eq!(end, Some(base));
+    assert!(out.problems.is_empty(), "{:?}", out.problems);
+}
+
+/// A file whose deadline would pass while it waits for a permit gets the wait added, up to
+/// the cap, and still reads its pages.
+///
+/// No `page_time`, so nothing but the wait can move the deadline. The permit is held 5 s,
+/// past the 4 s file deadline: without the wait credited, OCR would give up at about 2 s
+/// (deadline minus the 2 s reserve). With it, the deadline moves by about the wait, and the
+/// 2 s reserve leaves the two 10 ms pages a wide margin even on a slow runner.
+#[test]
+fn waiting_for_a_permit_extends_the_deadline() {
+    let permits = Arc::new(OcrPermits::new(1));
+    let a = Arc::new(
+        OcrPages::new(
+            Factory::slow(0.0, Duration::from_millis(10)),
+            1,
+            OcrConfig {
+                page_time: None,
+                ..OcrConfig::default()
+            },
+        )
+        .with_permits(permits.clone()),
+    );
+    let limits = Limits {
+        timeout: Duration::from_secs(4),
+        max_timeout: Duration::from_mins(1),
+        ..Limits::default()
+    };
+    let held = permits.acquire(permits.ticket(), None).ok();
+    let start = Instant::now();
+    let base = start + limits.timeout;
+    let cap = start + limits.max_timeout;
+    let t = {
+        let (a, limits) = (a.clone(), limits.clone());
+        std::thread::spawn(move || run_tiny_until(&a, 2, &limits, Some((base, cap))))
+    };
+    std::thread::sleep(Duration::from_secs(5));
+    drop(held);
+    let (out, end) = t
+        .join()
+        .unwrap_or_else(|_| panic!("analyzer thread panicked"));
+    assert_eq!(int(&out, &keys::PAGES), Some(2), "{:?}", out.problems);
+    assert!(out.problems.is_empty(), "{:?}", out.problems);
+    // Moved by the wait (5 s, less however late the analyzer thread started), never past
+    // the cap.
+    let end = end.unwrap();
+    assert!(end >= base + Duration::from_secs(4), "{:?}", end - start);
+    assert!(end <= cap, "{:?}", end - start);
 }
 
 /// A file timeout of 2 s with pages of 200 ms: OCR keeps the last second (half the timeout,

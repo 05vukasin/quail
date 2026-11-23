@@ -150,7 +150,8 @@ be preempted. `quail scan --isolate` (crate `quail-worker`) handles those:
   engine with the same profile and limits, so models are loaded once per worker.
 - Workers read the files themselves; file bytes never pass through the supervisor.
 - Each worker runs under `RLIMIT_AS` (`--worker-mem`, default 1 GiB), with core dumps
-  disabled, and under a watchdog that kills it after `2 x --timeout + 5 s`.
+  disabled, and under a watchdog that kills it after `2 x --timeout + 5 s`, moved later by
+  twice any extension the file's OCR step was granted (the worker reports it while it runs).
 - A dead worker gives its file a `failed` record (`worker crashed: out of memory`, `stack
   overflow`, `timed out`, ...). The file is retried once in a fresh worker; a second crash
   records it as poisoned. Every input gets exactly one record.

@@ -196,9 +196,13 @@ Every file runs under `Limits`. Exceeding one gives a partial record, never a cr
 | `max_text_bytes` | 64 MiB | text kept per document |
 | `max_render_pixels` | 40 M | pixels of one decoded image or rendered page |
 | `timeout` | 2 min | wall time for the whole file |
+| `max_timeout` | 0 (no extension) | the most a step may extend the file's wall time to |
 
-The **deadline** is the file's start time plus `timeout`. Steps check it in their loops and
-stop with a problem when it passes; rendering and OCR use the same deadline, so a file has
+The **deadline** is the file's start time plus `timeout`. A step that finds more work than
+that covers may extend it, up to the start plus `max(timeout, max_timeout)`
+(`Emitter::extend_deadline`): OCR does, for the pages it has to read, so a file without such
+pages keeps the plain `timeout`. Steps check the deadline in their loops and stop with a
+problem when it passes; rendering and OCR use the same deadline, so a file has
 one time budget. The engine cannot preempt a thread that never checks; that is what
 `--isolate` is for ([architecture.md](architecture.md#worker-isolation)).
 

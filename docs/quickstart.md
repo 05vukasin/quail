@@ -190,7 +190,7 @@ steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 
 - **Budgets are automatic.** No `-j` or `--timeout` is needed; quail prints how it will run:
 
   ```console
-  quail: ocr: 2 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page; timeout 120m per file
+  quail: ocr: 2 page(s) at a time, 4 thread(s) each; up to 40 pages per file, 45s per page; timeout 2m per file, up to 120m with pages to OCR
   ```
 
   - **Memory**: each page being read takes about 0.6 to 1 GB (ONNX Runtime sessions and the
@@ -202,11 +202,13 @@ steps    engine.sniff@2 (12 µs), pdf.extract@2 (707 µs), hash.identity@1 (165 
     `CPUs / --ocr-jobs` (at most 4).
   - **Time**: a file's OCR may spend 45 s per page that needs it (`--ocr-page-time`), up to 40
     pages (`--ocr-max-pages`); waiting for a free OCR job does not count. Past either, the
-    pages already read are kept and the record is `partial`. The per-file `--timeout` is
-    raised so that this budget always fits, even behind the other workers. Passing `--timeout`
-    yourself keeps it as is and drops the per-page budget (unless `--ocr-page-time` is given).
-    Either way OCR stops early enough (the last `max(10 s, 15 %)` of the timeout is kept for
-    the steps after it) that the text analyzers still run on the pages it read.
+    pages already read are kept and the record is `partial`. A file with pages to OCR gets
+    its deadline extended by what they need (and by its waits for a free job), so this budget
+    always fits, even behind the other workers; every other file keeps the 2-minute timeout.
+    Passing `--timeout` yourself sets that base and drops the per-page budget and the
+    extension (unless `--ocr-page-time` is given). Either way OCR stops early enough
+    (`max(10 s, 15 %)` of the timeout is kept before the deadline for the steps after it) that
+    the text analyzers still run on the pages it read.
   - With `--isolate`, every worker process loads its own engine, so `-j` defaults to the
     OCR job count.
 - Without the feature or without the models, `--profile deep` prints one warning

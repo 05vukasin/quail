@@ -273,8 +273,9 @@ impl OcrSettings {
         }
     }
 
-    /// Wall time per file that fits the OCR budget of a file after `base` for the rest,
-    /// with the other `workers` queued for the OCR jobs ahead of it.
+    /// Longest wall time per file (`Limits::max_timeout`) that fits the OCR budget of a file
+    /// after `base` for the rest, with the other `workers` queued for the OCR jobs ahead of
+    /// it. Only a file with pages to OCR is extended towards it.
     #[cfg(feature = "ocr")]
     pub fn file_timeout(&self, base: Duration, workers: usize) -> Duration {
         let ahead = workers.max(1).div_ceil(self.jobs.max(1)).saturating_sub(1);

@@ -158,6 +158,9 @@ fn meminfo_field(s: &str, field: &str) -> Option<u64> {
     kib.checked_mul(1024)
 }
 
+/// Longest [`OcrPermits::acquire_until`] waits before it asks for the deadline again.
+pub const WAIT_SLICE: Duration = Duration::from_secs(1);
+
 /// At most `total` pages read at once, shared by every worker of the process. Waiters are
 /// served by ticket ([`ticket`](Self::ticket), taken once per file): the oldest file first.
 pub struct OcrPermits {
@@ -209,6 +212,19 @@ impl OcrPermits {
         ticket: u64,
         deadline: Option<Instant>,
     ) -> Result<(OcrPermit<'_>, Duration)> {
+        self.acquire_until(ticket, |_| deadline)
+    }
+
+    /// [`acquire`](Self::acquire) with a deadline that may move while it waits: `deadline`
+    /// is given the time waited so far and asked again at least every [`WAIT_SLICE`], so a
+    /// caller can extend its file's deadline by the wait as it goes
+    /// ([`Emitter::extend_deadline`](quail_core::Emitter::extend_deadline)). The ticket keeps
+    /// its place in the queue meanwhile.
+    pub fn acquire_until(
+        &self,
+        ticket: u64,
+        mut deadline: impl FnMut(Duration) -> Option<Instant>,
+    ) -> Result<(OcrPermit<'_>, Duration)> {
         let start = Instant::now();
         let mut st = self.lock();
         st.waiting.insert(ticket);
@@ -221,17 +237,19 @@ impl OcrPermits {
                 self.freed.notify_all();
                 return Ok((OcrPermit { permits: self }, start.elapsed()));
             }
+            // Asked before the clock is read, so a deadline of "now" has passed.
+            let d = deadline(start.elapsed());
             let now = Instant::now();
-            let wait = match deadline {
+            let wait = match d {
                 Some(d) if now >= d => {
                     st.waiting.remove(&ticket);
                     drop(st);
                     self.freed.notify_all();
                     return Err(Error::Timeout);
                 }
-                Some(d) => d - now,
+                Some(d) => (d - now).min(WAIT_SLICE),
                 // Woken on every release; the timeout only guards against a missed wake-up.
-                None => Duration::from_secs(1),
+                None => WAIT_SLICE,
             };
             st = self
                 .freed
@@ -378,6 +396,33 @@ mod tests {
         }
         assert_eq!(peak.load(Ordering::SeqCst), 2);
         assert_eq!(permits.in_use(), 0);
+    }
+
+    #[test]
+    fn a_moving_deadline_keeps_the_waiter_in_line() {
+        let permits = OcrPermits::new(1);
+        let (held, _) = permits.acquire(permits.ticket(), None).unwrap();
+        let t = permits.ticket();
+        std::thread::scope(|s| {
+            let queued = s.spawn(|| {
+                let first = Instant::now();
+                // The deadline keeps 100 ms ahead of the wait: it never times out.
+                permits.acquire_until(t, |waited| {
+                    Some(first + waited + Duration::from_millis(100))
+                })
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            drop(held);
+            let (_, waited) = queued.join().unwrap().unwrap();
+            assert!(waited >= Duration::from_millis(250), "{waited:?}");
+        });
+        // A fixed deadline in the past still times out at once.
+        let (_held, _) = permits.acquire(permits.ticket(), None).unwrap();
+        let past = Instant::now();
+        let r = permits.acquire_until(permits.ticket(), |_| Some(past));
+        assert!(matches!(r, Err(Error::Timeout)));
+        let r = permits.acquire_until(permits.ticket(), |_| Some(Instant::now()));
+        assert!(matches!(r, Err(Error::Timeout)));
     }
 
     #[test]

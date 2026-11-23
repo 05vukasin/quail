@@ -30,11 +30,24 @@ fn models() -> Option<String> {
 }
 
 fn quail(models: &str, args: &[&str]) -> Output {
+    quail_env(models, args, &[])
+}
+
+fn quail_env(models: &str, args: &[&str], env: &[(&str, &str)]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_quail"))
         .env("QUAIL_OCR_MODELS", models)
+        .envs(env.iter().copied())
         .args(args)
         .output()
         .unwrap()
+}
+
+/// Wall time the file's steps took, in seconds: with the `test.stall` step last, the file's
+/// effective timeout.
+fn wall(r: &FileRecord) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let us = r.timings.iter().map(|t| t.micros).sum::<u64>() as f64;
+    us / 1e6
 }
 
 fn records(o: &Output) -> Vec<FileRecord> {
@@ -216,7 +229,8 @@ fn ocr_leaves_time_for_the_analyzers_after_it() {
     }
 }
 
-/// `inspect` gets the same derived budgets as `scan` (one OCR job, raised timeout).
+/// `inspect` gets the same derived budgets as `scan` (one OCR job, OCR may extend the
+/// timeout).
 #[test]
 fn inspect_gets_the_auto_budget() {
     let Some(m) = models() else { return };
@@ -230,7 +244,7 @@ fn inspect_gets_the_auto_budget() {
         "{stderr}"
     );
     assert!(
-        stderr.contains("45s per page; timeout 32m per file"),
+        stderr.contains("45s per page; timeout 2m per file, up to 32m with pages to OCR"),
         "{stderr}"
     );
     let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
@@ -260,4 +274,63 @@ fn isolated_deep_scan_reads_pages() {
     let r = &records(&o)[0];
     assert_eq!(r.status, Status::Ok, "{:?}", r.status);
     assert_eq!(int(r, "ocr.pages"), Some(3));
+}
+
+/// Only a file with pages to OCR gets more than the file timeout: a text-only PDF under
+/// `--profile deep` times out at `--timeout` (the stall step runs to the deadline), a
+/// one-page scan gets its page's budget and the reserve on top, in process and isolated.
+#[test]
+fn only_files_with_pages_to_ocr_get_more_time() {
+    let Some(m) = models() else { return };
+    let t = tempfile::tempdir().unwrap();
+    let text = t.path().join("text.pdf");
+    fs::write(
+        &text,
+        pdf(&[PdfPage::Text(&["A text layer, no OCR"])], "Text"),
+    )
+    .unwrap();
+    let scan = t.path().join("scan.pdf");
+    fs::write(&scan, pdf(&[PdfPage::Scan], "Scan")).unwrap();
+    for isolate in [false, true] {
+        let mut args = vec![
+            "scan",
+            text.to_str().unwrap(),
+            scan.to_str().unwrap(),
+            "--profile",
+            "deep",
+            "--timeout",
+            "3s",
+            "--ocr-page-time",
+            "8s",
+        ];
+        if isolate {
+            args.extend(["--isolate", "--worker-mem", "4G"]);
+        }
+        let o = quail_env(&m, &args, &[("QUAIL_TEST_STALL", "1")]);
+        let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+        assert!(stderr.contains("timeout 3s per file, up to "), "{stderr}");
+        let recs = records(&o);
+        let by = |name: &str| {
+            recs.iter()
+                .find(|r| r.locator.ends_with(name))
+                .unwrap_or_else(|| panic!("no record for {name}"))
+        };
+        let (text, scan) = (by("text.pdf"), by("scan.pdf"));
+        for r in [text, scan] {
+            assert!(
+                problems(r).iter().any(|p| p == "test.stall@1: timeout"),
+                "{:?}",
+                r.status
+            );
+        }
+        // Text only: the 3 s timeout. Scan: 8 s for its page and the 1.5 s reserve, from
+        // when OCR started.
+        let (tw, sw) = (wall(text), wall(scan));
+        assert!(
+            (2.9..6.0).contains(&tw),
+            "isolate {isolate}: text-only file ran {tw} s"
+        );
+        assert!(sw >= 9.0, "isolate {isolate}: scan ran {sw} s");
+        assert_eq!(int(scan, "ocr.pages"), Some(1));
+    }
 }

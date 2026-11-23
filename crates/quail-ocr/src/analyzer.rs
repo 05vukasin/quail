@@ -33,7 +33,10 @@ pub struct OcrConfig {
     /// Reading time allowed per page that needs OCR (up to `max_pages`). A file's OCR stops
     /// with a problem once `pages × page_time` of reading is spent; time spent waiting for a
     /// permit ([`OcrPermits`]) is not counted. The file's own deadline
-    /// ([`Emitter::deadline`]) always applies too. `None`: only the file's deadline.
+    /// ([`Emitter::deadline`]) always applies too: OCR asks to extend it
+    /// ([`Emitter::extend_deadline`]) by what the budget and the [`reserve`] need beyond it,
+    /// and by every wait for a permit, which `Limits::max_timeout` caps. `None`: only the
+    /// file's deadline, extended by the permit waits.
     pub page_time: Option<Duration>,
     /// Embedded scans above this resolution are shrunk to it before OCR.
     pub max_scan_dpi: f32,
@@ -52,10 +55,12 @@ impl OcrConfig {
     /// Largest timeout [`file_timeout`](Self::file_timeout) gives (unless `base` is larger).
     pub const MAX_FILE_TIMEOUT: Duration = Duration::from_hours(2);
 
-    /// Wall time to give a whole file so that its OCR (at most `max_pages` pages at
-    /// `page_time` each) fits after `base` for everything else, with `queue` files ahead of
-    /// it for the OCR permits (in a scan, `ceil(workers / jobs) - 1`), capped at
-    /// [`MAX_FILE_TIMEOUT`](Self::MAX_FILE_TIMEOUT). Without a `page_time`: `base`.
+    /// The longest wall time a file with pages to OCR may need, for `Limits::max_timeout`:
+    /// its OCR (at most `max_pages` pages at `page_time` each) after `base` (the file timeout)
+    /// for everything else, with `queue` files ahead of it for the OCR permits (in a scan,
+    /// `ceil(workers / jobs) - 1`), capped at [`MAX_FILE_TIMEOUT`](Self::MAX_FILE_TIMEOUT).
+    /// Without a `page_time`: `base`. Only files with pages to OCR get more than `base`, and
+    /// only what their pages and waits need.
     pub fn file_timeout(&self, base: Duration, queue: u32) -> Duration {
         let Some(t) = self.page_time else {
             return base;
@@ -102,6 +107,11 @@ enum Backend {
 /// are in work in the process however many workers run files. A file's OCR may take
 /// [`OcrConfig::page_time`] per page plus the time it waited for permits, within the file's
 /// deadline; pages past that or past [`OcrConfig::max_pages`] are left out with a problem.
+///
+/// The file's deadline is extended for that ([`Emitter::extend_deadline`], up to
+/// `Limits::max_timeout`): on start to fit `pages × page_time` plus the [`reserve`] from now,
+/// and while waiting for a permit by the wait. A file without pages to OCR asks for nothing
+/// and keeps the plain `Limits::timeout`.
 ///
 /// Without a backend (crate built without `paddle`, or no models) it reports the problem
 /// `ocr backend not compiled` (or why the models could not be used), and only for files that
@@ -285,12 +295,13 @@ impl Analyzer for OcrPages {
                 todo.len()
             ));
         }
-        let mut clock = Clock::new(
-            &self.config,
-            todo.len().min(cap),
-            out.deadline(),
-            ctx.limits.timeout,
-        );
+        let n = todo.len().min(cap);
+        let reserve = reserve(ctx.limits.timeout);
+        if let Some(t) = self.config.page_time {
+            let reading = t.saturating_mul(u32::try_from(n).unwrap_or(u32::MAX));
+            extend_to(out, reading.saturating_add(reserve));
+        }
+        let mut clock = Clock::new(&self.config, n, out.deadline(), reserve);
         let ticket = self.permits.as_ref().map(|p| p.ticket());
         for page in todo.into_iter().take(cap) {
             if let Some(why) = clock.stop(pages.len()) {
@@ -300,7 +311,15 @@ impl Analyzer for OcrPages {
             // Held while the page is decoded, rendered and read.
             let _permit = match (&self.permits, ticket) {
                 (Some(p), Some(t)) => {
-                    if let Ok((permit, waited)) = p.acquire(t, clock.end) {
+                    // Waiting does not count against the file: extend its deadline as it goes.
+                    let mut credited = Duration::ZERO;
+                    let got = p.acquire_until(t, |waited| {
+                        out.extend_deadline(waited.saturating_sub(credited));
+                        credited = waited;
+                        clock.set_file(out.deadline());
+                        clock.end
+                    });
+                    if let Ok((permit, waited)) = got {
                         clock.waited(waited);
                         Some(permit)
                     } else {
@@ -349,15 +368,26 @@ impl Analyzer for OcrPages {
     }
 }
 
+/// Extends the file's deadline so that at least `left` remains from now (as far as the cap
+/// allows).
+fn extend_to(out: &mut Emitter, left: Duration) {
+    if let (Some(d), Some(want)) = (out.deadline(), Instant::now().checked_add(left))
+        && want > d
+    {
+        out.extend_deadline(want - d);
+    }
+}
+
 /// Share of the file's timeout kept free for the steps after OCR (see [`reserve`]).
 pub const RESERVE_SHARE: f64 = 0.15;
 
 /// Smallest time kept free for the steps after OCR (see [`reserve`]).
 pub const MIN_RESERVE: Duration = Duration::from_secs(10);
 
-/// Time kept free at the end of a file's `timeout` for the steps after OCR (the text
+/// Time kept free at the end of a file's deadline for the steps after OCR (the text
 /// analyzers that read the OCR'd pages): `max(MIN_RESERVE, RESERVE_SHARE × timeout)`, at
-/// most half the timeout.
+/// most half the timeout, where `timeout` is the file's `Limits::timeout` (not counting an
+/// extension). OCR extends the deadline to keep it after its own budget.
 pub fn reserve(timeout: Duration) -> Duration {
     timeout
         .mul_f64(RESERVE_SHARE)
@@ -367,8 +397,8 @@ pub fn reserve(timeout: Duration) -> Duration {
 
 /// The OCR time budget of one file: `pages × page_time` from the start, moved later by the
 /// time spent waiting for permits, and in any case ending [`reserve`] before the file's
-/// deadline, so that the analyzers after OCR still run on the pages read so far. A page is
-/// not started when the mean of the pages so far says it would end past that.
+/// (extended) deadline, so that the analyzers after OCR still run on the pages read so far.
+/// A page is not started when the mean of the pages so far says it would end past that.
 struct Clock {
     /// End of the per-page budget; `None` without a `page_time`.
     until: Option<Instant>,
@@ -383,11 +413,10 @@ struct Clock {
 }
 
 impl Clock {
-    fn new(cfg: &OcrConfig, pages: usize, file: Option<Instant>, timeout: Duration) -> Self {
+    fn new(cfg: &OcrConfig, pages: usize, file: Option<Instant>, reserve: Duration) -> Self {
         let allowed = cfg
             .page_time
             .map(|t| t.saturating_mul(u32::try_from(pages).unwrap_or(u32::MAX)));
-        let reserve = reserve(timeout);
         Self {
             until: allowed.and_then(|a| Instant::now().checked_add(a)),
             end: file.map(|f| f.checked_sub(reserve).unwrap_or(f)),
@@ -397,6 +426,11 @@ impl Clock {
             read: Duration::ZERO,
             read_pages: 0,
         }
+    }
+
+    /// The file's deadline moved (an extension).
+    fn set_file(&mut self, file: Option<Instant>) {
+        self.end = file.map(|f| f.checked_sub(self.reserve).unwrap_or(f));
     }
 
     fn waited(&mut self, d: Duration) {
@@ -428,9 +462,9 @@ impl Clock {
             return Some(self.reserve_problem(read));
         }
         if self.until.is_some_and(|u| now >= u) {
-            let secs = self.allowed.map_or(0, |a| a.as_secs());
             return Some(format!(
-                "ocr: time budget of {secs} s for {} pages spent after {read} pages (page_time)",
+                "ocr: time budget of {} for {} pages spent after {read} pages (page_time)",
+                human(self.allowed.unwrap_or_default()),
                 self.pages
             ));
         }
@@ -439,10 +473,21 @@ impl Clock {
 
     fn reserve_problem(&self, read: usize) -> String {
         format!(
-            "ocr: stopped after {read} of {} pages to keep {} s of the file timeout for the steps after it",
+            "ocr: stopped after {read} of {} pages to keep {} before the file deadline for the steps after it",
             self.pages,
-            self.reserve.as_secs()
+            human(self.reserve)
         )
+    }
+}
+
+/// `18 s`, `1.5 s`, `500 ms`: a reserve or budget below a second must not read as `0 s`.
+fn human(d: Duration) -> String {
+    if d.subsec_nanos() == 0 {
+        format!("{} s", d.as_secs())
+    } else if d >= Duration::from_secs(1) {
+        format!("{:.1} s", d.as_secs_f64())
+    } else {
+        format!("{} ms", d.as_millis())
     }
 }
 
@@ -638,4 +683,19 @@ fn effective_dpi(img: &Image, size_pt: Option<(f32, f32)>) -> Option<f32> {
 )]
 fn scaled_side(img: &Image, s: f32) -> u32 {
     ((img.width.max(img.height) as f32 * s).floor() as u32).max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_in_problems_never_read_as_zero() {
+        assert_eq!(human(Duration::from_secs(18)), "18 s");
+        assert_eq!(human(Duration::from_millis(1500)), "1.5 s");
+        assert_eq!(human(Duration::from_millis(500)), "500 ms");
+        assert_eq!(human(Duration::from_millis(3)), "3 ms");
+        // The reserve of a 1 s timeout is half of it.
+        assert_eq!(human(reserve(Duration::from_secs(1))), "500 ms");
+    }
 }

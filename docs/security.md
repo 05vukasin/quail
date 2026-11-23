@@ -44,6 +44,7 @@ flags):
 | `max_text_bytes` | 64 MiB | - | text is cut at a block boundary; problem |
 | `max_render_pixels` | 40 M pixels | - | images larger than this are refused before decoding |
 | `timeout` | 2 min | `--timeout` | the file's deadline (see below) |
+| `max_timeout` | none | derived from the OCR budget under `--profile deep` | the latest a step (OCR, for its pages) may extend the deadline to |
 
 The source refuses an oversized file before reading it, and the engine bounds the bytes in
 flight across all workers (`--max-in-flight-bytes`, default 1 GiB).
@@ -54,7 +55,8 @@ The engine cannot interrupt a thread, so deadlines are cooperative: every step r
 file's deadline and checks it in its loops (per page, per chunk, every 1024 content-stream
 operators inside a PDF page). A step past the deadline returns what it has and records a
 problem. Rendering and OCR share the same deadline as extraction, so one file has one time
-budget.
+budget. Only OCR extends it, by what the pages it found need, never past `max_timeout`; a
+file without pages to OCR has the plain `timeout`.
 
 ### Decode budgets inside the parsers
 
@@ -89,7 +91,9 @@ that never checks its deadline), a separate process can. With `quail scan --isol
 - every file is processed in a worker child process;
 - each worker has an address-space limit (`--worker-mem`, `RLIMIT_AS`, default 1 GiB) and
   no core dumps;
-- a watchdog kills a worker that does not answer within `2 x --timeout + 5 s`;
+- a watchdog kills a worker that does not answer within `2 x --timeout + 5 s`, plus twice
+  any deadline extension the worker reports for the file (never more than `max_timeout`
+  allows);
 - a crashed file gets a `failed` record (`worker crashed: out of memory: ...`), is retried
   once in a fresh worker, and is recorded as poisoned if it crashes again.
 
