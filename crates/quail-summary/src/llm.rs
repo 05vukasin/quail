@@ -1,4 +1,4 @@
-//! `summary.llm@3`: a local GGUF model (llama.cpp through `llama-cpp-2`) writes
+//! `summary.llm@4`: a local GGUF model (llama.cpp through `llama-cpp-2`) writes
 //! `{summary, subject, title_en}`; every output is fact-checked and falls back to the
 //! extractive summary when it fails. Feature `llm`, `Profile::Deep`, and opt-in: the analyzer
 //! applies only when [`LlmConfig::enabled`] is set.
@@ -276,14 +276,25 @@ impl LlmSummarizer {
 
     /// Summarizes `input` and reports the generation stats too.
     pub fn summarize_with_stats(&self, input: &SummaryInput<'_>) -> Result<(Summary, GenStats)> {
-        let user = prompt::user_message(input.card_text, input.text_head, input.lang);
+        let user = prompt::user_message_for(
+            input.card_text,
+            input.text_head,
+            input.lang,
+            input.card.kind.as_deref(),
+        );
         let p = prompt::chatml(prompt::SYSTEM, &user);
         let deadline = Instant::now() + self.cfg.timeout;
         let deadline = input.deadline.map_or(deadline, |d| d.min(deadline));
         let (raw, stats) = self.generate(&p, deadline)?;
         let out = prompt::parse(&raw).map_err(|e| Error::Resource(format!("model output: {e}")))?;
         let subject_src = input.subject.map_or("", |s| s.text.as_str());
-        let sources = [input.card_text, input.text_head, subject_src];
+        let mut sources = vec![input.card_text, input.text_head, subject_src];
+        if let Some(doc) = input.document {
+            sources.extend(factcheck::document_sources(
+                doc,
+                factcheck::DOCUMENT_SOURCE_BYTES,
+            ));
+        }
         let mut fc = factcheck::check(&format!("{} {}", out.summary, out.subject), &sources, true);
         let title = factcheck::check(&out.title_en, &sources, false);
         fc.claims += title.claims;
@@ -324,7 +335,7 @@ impl Summarizer for LlmSummarizer {
         });
         SummarizerId {
             name: self.file.id.to_owned(),
-            version: 2,
+            version: 3,
             fingerprint: format!(
                 "sha256={} prompt={} greedy ctx={} digest={} card={} out={}{mr}",
                 self.file.sha256,
@@ -357,10 +368,14 @@ impl Summarizer for LlmSummarizer {
             let per_call = (Instant::now() + self.cfg.timeout).min(deadline);
             self.generate_with(&p, step, per_call).map(|(raw, _)| raw)
         };
+        let doc_sources = input.document.map_or_else(Vec::new, |d| {
+            factcheck::document_sources(d, factcheck::DOCUMENT_SOURCE_BYTES)
+        });
         let r = mapreduce::map_reduce(
             input.card_text,
             long.outline,
             long.parts,
+            &doc_sources,
             input.lang,
             &mut generate,
         )?;
@@ -368,7 +383,7 @@ impl Summarizer for LlmSummarizer {
     }
 }
 
-/// `summary.llm@3`: the [`LlmSummarizer`] (or any [`Summarizer`]) as an analyzer. Deep and
+/// `summary.llm@4`: the [`LlmSummarizer`] (or any [`Summarizer`]) as an analyzer. Deep and
 /// opt-in ([`LlmConfig::enabled`]); never part of the default pipeline.
 ///
 /// Reads the digest of the document ([`crate::digest`], [`LlmConfig::digest_tokens`]); with
@@ -383,7 +398,7 @@ pub struct SummaryLlm {
 
 impl SummaryLlm {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.llm", 3);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.llm", 4);
 
     /// The step for `summarizer` with `cfg` (which must have `enabled` set to do anything)
     /// and an optional result cache.
@@ -474,6 +489,7 @@ impl Analyzer for SummaryLlm {
             text_head: &d.body,
             lang: card.lang.as_deref(),
             deadline: out.deadline(),
+            document: Some(doc),
         };
         let id = self.summarizer.id();
         let long = parts.len() >= 2;

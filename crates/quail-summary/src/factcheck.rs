@@ -1,23 +1,30 @@
 //! Fact consistency of a generated summary against what the generator was given.
 //!
 //! Every **date**, **number**, **identifier** and **name word** of the output must be found in
-//! the sources (the card text and the document text the model saw), after normalization:
+//! the sources (the card text, the document text the model saw and, in `summary.llm`, the
+//! whole document text, [`document_sources`]), after normalization:
 //!
 //! - dates: ISO `2023-09-12`, `12.09.2023`, `09/12/2023` (both readings), `12 September 2023`,
 //!   `September 12, 2023`, `September 2023`, Serbian month names in Latin or Cyrillic
-//!   (`12. septembra 2023.`); compared as calendar dates;
+//!   (`12. septembra 2023.`); in the sources also two-digit years (`03/27/15`, `27.03.15`;
+//!   `69`–`99` are 19xx, the rest 20xx); compared as calendar dates;
 //! - numbers: `4,200.00` = `4.200,00` = `4200`; years, days and months of source dates count
 //!   as numbers; `24-month`, `3rd` check the number only;
 //! - identifiers: tokens mixing letters and digits (`SA-2026/0417`, `DE136695976`), compared by
 //!   their upper-case alphanumeric key;
 //! - name words: capitalized words that are not common English words (and not the first word
-//!   of a sentence on their own), compared folded (case, diacritics, script).
+//!   of a sentence on their own), compared folded (case, diacritics, script). A word also
+//!   passes as the English translation of a source word in a short list of institution and
+//!   business words (`Fund` for `фонд`, `Health` for `здравствено`; Serbian, Croatian and
+//!   Bosnian), and, from 8 letters, one OCR error away from a source word (`Pharmalogix` for
+//!   `Pharmalolgix`). An invented name still has to be in the sources as written.
 //!
 //! The deterministic card and extractive summary pass by construction: they only copy values.
 //! A failed check makes the LLM summary fall back to the extractive one.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
+use quail_core::Document;
 use quail_text::fold::{FoldOptions, fold};
 
 /// The verdict of [`check`].
@@ -35,6 +42,28 @@ impl FactCheck {
     pub fn passed(&self) -> bool {
         self.unsupported.is_empty()
     }
+}
+
+/// Bytes of document text [`document_sources`] gives by default: about 1,000 pages, a few
+/// hundred milliseconds of indexing.
+pub const DOCUMENT_SOURCE_BYTES: usize = 4 << 20;
+
+/// The page texts of `doc` (the first pages, at most `max_bytes` of them), as sources for
+/// [`check`] besides what the model read: a claim the document makes passes even when the
+/// digest left it out.
+pub fn document_sources(doc: &Document, max_bytes: usize) -> Vec<&str> {
+    let mut left = max_bytes;
+    let mut out = Vec::new();
+    for p in &doc.pages {
+        if p.text.len() > left {
+            break;
+        }
+        left -= p.text.len();
+        if !p.text.trim().is_empty() {
+            out.push(p.text.as_str());
+        }
+    }
+    out
 }
 
 /// Checks every claim of `output` against `sources`. `names` turns the name-word check on
@@ -55,7 +84,7 @@ pub fn check(output: &str, sources: &[&str], names: bool) -> FactCheck {
                 if !names {
                     continue;
                 }
-                src.words.contains(w)
+                src.has_name_word(w)
             }
         };
         fc.claims += 1;
@@ -100,7 +129,8 @@ struct Index {
     numbers: HashSet<String>,
     ids: HashSet<String>,
     id_blob: String,
-    words: HashSet<String>,
+    /// Folded words, sorted (prefix lookups for [`TRANSLATIONS`] and [`Index::near`]).
+    words: BTreeSet<String>,
 }
 
 impl Index {
@@ -110,7 +140,7 @@ impl Index {
             numbers: HashSet::new(),
             ids: HashSet::new(),
             id_blob: String::new(),
-            words: HashSet::new(),
+            words: BTreeSet::new(),
         };
         for s in sources {
             for c in claims_all(s) {
@@ -169,6 +199,80 @@ impl Index {
 
     fn has_date(&self, y: i32, m: u32, d: u32) -> bool {
         self.dates.contains(&(y, m, d))
+    }
+
+    /// A folded name word `w` of the output is in the sources: as is, as the English
+    /// translation of a source word ([`TRANSLATIONS`]), or one OCR error away ([`Self::near`]).
+    fn has_name_word(&self, w: &str) -> bool {
+        self.words.contains(w) || self.translated(w) || self.near(w)
+    }
+
+    /// Some source word starts with a stem `w` translates ("fund" ← "fond", "fonda"; "health"
+    /// ← "zdravstveno", "zdravlja"). Plural `-s` / `-ies` read as the singular.
+    fn translated(&self, w: &str) -> bool {
+        let singular = w
+            .strip_suffix("ies")
+            .map(|b| format!("{b}y"))
+            .or_else(|| w.strip_suffix('s').map(str::to_owned));
+        let stems = |key: &str| {
+            TRANSLATIONS
+                .iter()
+                .find(|(en, _)| *en == key)
+                .map_or(&[][..], |(_, s)| *s)
+        };
+        let mut all = stems(w)
+            .iter()
+            .chain(singular.as_deref().map_or(&[][..], stems).iter());
+        all.any(|stem| self.has_prefix(stem))
+    }
+
+    fn has_prefix(&self, stem: &str) -> bool {
+        self.words
+            .range::<str, _>((std::ops::Bound::Included(stem), std::ops::Bound::Unbounded))
+            .next()
+            .is_some_and(|w| w.starts_with(stem))
+    }
+
+    /// A source word one edit (insertion, deletion, substitution or swap of neighbours) from
+    /// `w`, for words of at least [`NEAR_MIN_CHARS`] letters with the same first letter: the
+    /// model reads "Pharmalolgix" (an OCR error) and writes "Pharmalogix". Short words, where
+    /// one letter makes another name, need an exact match.
+    fn near(&self, w: &str) -> bool {
+        let a: Vec<char> = w.chars().collect();
+        if a.len() < NEAR_MIN_CHARS || !a.iter().all(|c| c.is_alphabetic()) {
+            return false;
+        }
+        let mut buf = [0u8; 4];
+        let first: &str = a[0].encode_utf8(&mut buf);
+        self.words
+            .range::<str, _>((std::ops::Bound::Included(first), std::ops::Bound::Unbounded))
+            .take_while(|s| s.starts_with(first))
+            .any(|s| {
+                let b: Vec<char> = s.chars().collect();
+                b.len().abs_diff(a.len()) <= 1 && one_edit(&a, &b)
+            })
+    }
+}
+
+/// Letters of a name word from which [`Index::near`] accepts one OCR error.
+const NEAR_MIN_CHARS: usize = 8;
+
+/// `a` and `b` differ by at most one insertion, deletion, substitution or swap of two
+/// neighbouring letters.
+fn one_edit(a: &[char], b: &[char]) -> bool {
+    let p = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    if p == a.len() && p == b.len() {
+        return true;
+    }
+    let (ra, rb) = (&a[p..], &b[p..]);
+    let tail = |x: &[char], y: &[char]| x == y;
+    match ra.len().cmp(&rb.len()) {
+        std::cmp::Ordering::Equal => {
+            tail(&ra[1..], &rb[1..])
+                || (ra.len() >= 2 && ra[0] == rb[1] && ra[1] == rb[0] && tail(&ra[2..], &rb[2..]))
+        }
+        std::cmp::Ordering::Less => tail(ra, &rb[1..]),
+        std::cmp::Ordering::Greater => tail(&ra[1..], rb),
     }
 }
 
@@ -466,6 +570,116 @@ const COMMON: &[&str] = &[
     "municipality",
 ];
 
+/// English words of institution and business names with the stems of their Serbian,
+/// Croatian and Bosnian equivalents (folded: Latin, no diacritics, `đ` → `dj`). A summary of a
+/// non-English document translates names ("Републички фонд за здравствено осигурање" →
+/// "Republic Health Insurance Fund"); a name word passes when the source has a word starting
+/// with one of its stems. Only words of the list do: an invented name ("Medilink") still has to
+/// be in the sources as written.
+const TRANSLATIONS: &[(&str, &[&str])] = &[
+    ("administration", &["uprav", "administracij"]),
+    ("agency", &["agencij"]),
+    ("agriculture", &["poljopriv"]),
+    ("agricultural", &["poljopriv"]),
+    ("airport", &["aerodrom", "zracn"]),
+    ("army", &["vojsk"]),
+    ("assembly", &["skupstin"]),
+    ("authority", &["organ", "uprav", "agencij", "vlast"]),
+    ("bank", &["bank"]),
+    ("belgrade", &["beograd"]),
+    ("blood", &["krv"]),
+    ("bosnia", &["bosn"]),
+    ("broadcasting", &["radiodifuz"]),
+    ("business", &["privred", "poslov"]),
+    ("care", &["zastit", "nega", "njeg"]),
+    ("center", &["centar", "centr"]),
+    ("centre", &["centar", "centr"]),
+    ("chamber", &["komor"]),
+    ("clinic", &["klinik"]),
+    ("commerce", &["trgov", "privred"]),
+    ("commercial", &["komercij", "trgov"]),
+    ("council", &["savet", "vijec", "vece"]),
+    ("court", &["sud"]),
+    ("croatia", &["hrvat"]),
+    ("culture", &["kultur"]),
+    ("customs", &["carin"]),
+    ("defence", &["odbran", "obran"]),
+    ("defense", &["odbran", "obran"]),
+    ("device", &["sredst", "uredjaj", "aparat", "pomagal"]),
+    ("directorate", &["direkcij", "uprav"]),
+    ("disability", &["invalid"]),
+    ("drug", &["lek", "lijek"]),
+    ("economic", &["privred", "ekonom", "gospodar"]),
+    ("economy", &["privred", "ekonom", "gospodar"]),
+    ("education", &["obrazov", "prosvet"]),
+    ("electric", &["elektr"]),
+    ("electricity", &["elektr", "struj"]),
+    ("emergency", &["hitn", "vanred"]),
+    ("employment", &["zaposl"]),
+    ("energy", &["energ"]),
+    ("enterprise", &["preduzec", "poduzec"]),
+    ("environment", &["zivotn", "okolis"]),
+    ("environmental", &["zivotn", "okolis"]),
+    ("equipment", &["oprem"]),
+    ("faculty", &["fakultet"]),
+    ("finance", &["finansij", "financij"]),
+    ("financial", &["finansij", "financij"]),
+    ("fund", &["fond"]),
+    ("gas", &["gas", "plin"]),
+    ("health", &["zdravstv", "zdravlj"]),
+    ("healthcare", &["zdravstv"]),
+    ("herzegovina", &["hercegovin"]),
+    ("hospital", &["bolnic"]),
+    ("industry", &["industrij", "privred"]),
+    ("institute", &["institut", "zavod"]),
+    ("institution", &["ustanov", "institucij"]),
+    ("insurance", &["osigur"]),
+    ("interior", &["unutrasnj"]),
+    ("justice", &["pravd"]),
+    ("lottery", &["lutrij"]),
+    ("medical", &["medicin", "lekar", "ljekar"]),
+    ("medicine", &["lek", "lijek", "medicin"]),
+    ("military", &["vojn"]),
+    ("montenegro", &["crn"]),
+    ("municipal", &["opstin", "komunaln"]),
+    ("national", &["nacional", "narodn", "drzavn"]),
+    ("parliament", &["skupstin", "sabor"]),
+    ("pension", &["penzij", "mirovin"]),
+    ("pharmaceutical", &["farmac", "lek"]),
+    ("pharmacy", &["apotek", "ljekarn"]),
+    ("police", &["polic"]),
+    ("post", &["posta", "postansk"]),
+    ("power", &["elektr", "energ"]),
+    ("primary", &["primarn"]),
+    ("province", &["pokrajin"]),
+    ("provincial", &["pokrajin"]),
+    ("railway", &["zeleznic", "zeljeznic"]),
+    ("regional", &["regionaln", "pokrajin"]),
+    ("registry", &["registr"]),
+    ("school", &["skol"]),
+    ("science", &["nauk", "naucn", "znanost"]),
+    ("security", &["bezbed", "sigurn"]),
+    ("social", &["socijal"]),
+    ("statistical", &["statist"]),
+    ("statistics", &["statist"]),
+    ("supply", &["snabd", "nabav", "isporuk"]),
+    ("tax", &["porez"]),
+    ("telecommunications", &["telekom"]),
+    ("television", &["televiz"]),
+    ("town", &["grad"]),
+    ("trade", &["trgov"]),
+    ("transfusion", &["transfuz"]),
+    ("transport", &["saobrac", "transport", "prevoz", "promet"]),
+    ("treasury", &["trezor"]),
+    ("university", &["univerzitet", "sveucilist"]),
+    ("utility", &["komunaln"]),
+    (
+        "water",
+        &["voda", "vode", "vodu", "vodom", "vodn", "vodoprivred"],
+    ),
+    ("waterworks", &["vodovod"]),
+];
+
 /// Claims of a text being checked (names included, sentence starts skipped).
 fn claims(text: &str) -> Vec<Claim> {
     extract(text, true)
@@ -528,7 +742,8 @@ fn extract(text: &str, with_names: bool) -> Vec<Claim> {
         if used[i] || t.is_empty() {
             continue;
         }
-        if let Some(c) = numeric_date(t) {
+        // Two-digit years (`03/27/15`) only on the source side: a summary writes the year.
+        if let Some(c) = numeric_date(t, !with_names) {
             out.push(c);
             continue;
         }
@@ -615,9 +830,13 @@ fn valid(y: i32, m: u32, d: u32) -> bool {
     (1900..=2100).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d)
 }
 
-/// `2023-09-12`, `12.09.2023`, `12/09/2023`, `12-09-2023`.
+/// Two-digit years from this value up are 19xx, below it 20xx (the POSIX `%y` pivot).
+const CENTURY_PIVOT: u32 = 69;
+
+/// `2023-09-12`, `12.09.2023`, `12/09/2023`, `12-09-2023`; with `short_year` also
+/// `09/12/23` and `12.09.23` (see [`CENTURY_PIVOT`]). Day and month take 1–2 digits.
 #[allow(clippy::many_single_char_names)] // y, m, d
-fn numeric_date(t: &str) -> Option<Claim> {
+fn numeric_date(t: &str, short_year: bool) -> Option<Claim> {
     let parts: Vec<&str> = t.split(['-', '.', '/']).collect();
     if parts.len() != 3
         || !parts
@@ -634,10 +853,18 @@ fn numeric_date(t: &str) -> Option<Claim> {
         let y = i32::try_from(n[0]).ok()?;
         return valid(y, n[1], n[2]).then_some(Claim::Date(y, n[1], n[2]));
     }
-    if parts[2].len() != 4 {
+    if parts[0].len() > 2 || parts[1].len() > 2 {
         return None;
     }
-    let y = i32::try_from(n[2]).ok()?;
+    let y = match parts[2].len() {
+        4 => i32::try_from(n[2]).ok()?,
+        // One separator twice, `/` or `.` (`12-34-56` is more often a part number).
+        2 if short_year && (t.matches('/').count() == 2 || t.matches('.').count() == 2) => {
+            let c = if n[2] >= CENTURY_PIVOT { 1900 } else { 2000 };
+            i32::try_from(c + n[2]).ok()?
+        }
+        _ => return None,
+    };
     let dm = valid(y, n[1], n[0]).then_some((y, n[1], n[0]));
     let md = valid(y, n[0], n[1]).then_some((y, n[0], n[1]));
     match (dm, md) {
@@ -787,5 +1014,93 @@ mod tests {
     fn cyrillic_names_fold() {
         let src = ["Закупац: Дунав Некретнине а.д."];
         assert!(check("The lessee is Dunav Nekretnine a.d.", &src, true).passed());
+    }
+
+    #[test]
+    fn two_digit_years_in_the_sources() {
+        let src = ["Invoice Date 04/24/15\nInvoice Period 03/27/15 - 04/19/15\nFlight 04/06/15"];
+        let ok = "Broadcasts from March 27, 2015 to April 19, 2015, invoiced on 24 April 2015.";
+        let fc = check(ok, &src, true);
+        assert!(fc.passed(), "{fc:?}");
+        // `04/06/15` reads both ways.
+        assert!(check("Aired on 6 April 2015.", &src, true).passed());
+        assert!(check("Aired on 4 June 2015.", &src, true).passed());
+        let fc = check("Broadcasts from March 28, 2015.", &src, true);
+        assert_eq!(fc.unsupported, vec!["date:2015-03-28"]);
+        // Day first with periods; the pivot puts 69-99 in the 1900s.
+        let src = ["Zaključeno 27.03.15. i 31/12/99"];
+        assert!(
+            check(
+                "Signed on 27 March 2015 after 31 December 1999.",
+                &src,
+                true
+            )
+            .passed()
+        );
+        assert!(!check("Signed on 27 March 1915.", &src, true).passed());
+        // A `-` run with a two-digit tail stays a part number.
+        assert!(!check("Dated 12 May 2010.", &["Part 05-12-10"], true).passed());
+    }
+
+    #[test]
+    fn translated_names_pass_and_invented_ones_do_not() {
+        let src = [
+            "НАРУЧИЛАЦ: Републички фонд за здравствено осигурање, Београд\n\
+             ДОБАВЉАЧ: Pharmalolgix d.o.o., Београд",
+        ];
+        let ok = "An amendment between the Republic Health Insurance Fund in Belgrade and \
+                  Pharmalogix d.o.o.";
+        let fc = check(ok, &src, true);
+        assert!(fc.passed(), "{fc:?}");
+        assert!(check("The Health Insurance Funds.", &src, true).passed());
+        // An invented supplier, an untranslated word and a name two letters off fail.
+        let fc = check(
+            "Agreement of the Republic Health Fund with Medilink d.o.o.",
+            &src,
+            true,
+        );
+        assert_eq!(fc.unsupported, vec!["name:medilink"]);
+        let fc = check("Signed by the Republic Pension Fund.", &src, true);
+        assert_eq!(fc.unsupported, vec!["name:pension"]);
+        let fc = check("Supplied by Pharmalogixika d.o.o.", &src, true);
+        assert_eq!(fc.unsupported, vec!["name:pharmalogixika"]);
+        // One letter off is accepted only from 8 letters.
+        let fc = check("Signed by Acne Corp.", &["Acme Corp"], true);
+        assert_eq!(fc.unsupported, vec!["name:acne"]);
+    }
+
+    #[test]
+    fn one_edit_apart() {
+        let c = |s: &str| s.chars().collect::<Vec<_>>();
+        assert!(one_edit(&c("pharmalogix"), &c("pharmalolgix")));
+        assert!(one_edit(&c("northwind"), &c("nortwhind")));
+        assert!(one_edit(&c("northwind"), &c("northwand")));
+        assert!(one_edit(&c("northwind"), &c("northwind")));
+        assert!(!one_edit(&c("northwind"), &c("northwinds2")));
+        assert!(!one_edit(&c("northwind"), &c("southwind")));
+    }
+
+    #[test]
+    fn document_text_is_a_source() {
+        use quail_core::{Page, PageKind};
+        let page = |i: u32, t: &str| Page {
+            text: t.to_owned(),
+            ..Page::new(i, PageKind::Physical)
+        };
+        let doc = Document {
+            pages: vec![
+                page(0, "Cover page"),
+                page(1, "Signed on 3 March 2021 by Ivanka."),
+            ],
+        };
+        let all = document_sources(&doc, DOCUMENT_SOURCE_BYTES);
+        assert_eq!(all.len(), 2);
+        let out = "Signed by Ivanka on 3 March 2021.";
+        assert!(!check(out, &["doc: contract"], true).passed());
+        let mut src = vec!["doc: contract"];
+        src.extend(all);
+        assert!(check(out, &src, true).passed());
+        // The byte cap keeps the first pages only.
+        assert_eq!(document_sources(&doc, 12).len(), 1);
     }
 }

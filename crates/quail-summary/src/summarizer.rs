@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use quail_core::Result;
+use quail_core::{Document, Result};
 
 use crate::card::FileCard;
 use crate::digest::MapPart;
@@ -44,6 +44,9 @@ pub struct SummaryInput<'a> {
     pub lang: Option<&'a str>,
     /// When the work must be done (the file's time budget).
     pub deadline: Option<Instant>,
+    /// The whole document, when there is one: the fact check also accepts a claim its text
+    /// makes outside the digest ([`crate::factcheck::document_sources`]).
+    pub document: Option<&'a Document>,
 }
 
 /// How a summary was made.
@@ -229,6 +232,7 @@ mod tests {
             text_head: "",
             lang: Some("en"),
             deadline: None,
+            document: None,
         };
         let ok = checked_or_extractive(&Fixed(Some(("A report.", true))), &input);
         assert!(cacheable(&ok, false));
@@ -255,6 +259,7 @@ mod tests {
             text_head: "",
             lang: Some("en"),
             deadline: None,
+            document: None,
         };
         let ok = checked_or_extractive(&Fixed(Some(("An invoice.", true))), &input);
         assert_eq!((ok.method, ok.text.as_str()), (Method::Llm, "An invoice."));

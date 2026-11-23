@@ -15,13 +15,13 @@ original script; a non-English subject sentence is quoted and marked with its la
 
 | id | profile | requires / after | emits |
 |---|---|---|---|
-| `summary.card@3` (`SummaryCard`) | Fast | `document` / `revised_document ocr_text raster normalized_text summary_terms` | `summary.card`, `summary.card_text`, `summary.card_tokens` |
+| `summary.card@4` (`SummaryCard`) | Fast | `document` / `revised_document ocr_text raster normalized_text summary_terms` | `summary.card`, `summary.card_text`, `summary.card_tokens` |
 | `summary.extractive@2` (`SummaryExtractive`) | Fast | `document` / `revised_document ocr_text raster normalized_text` | `summary.extractive`, `summary.subject` |
 | `summary.outline@1` (`SummaryOutline`) | Fast | same | `summary.outline` |
 | `summary.keywords@1` (`SummaryKeywords`) | Fast | same; provides `summary_terms` | `summary.keywords` |
 | `summary.topics@1` (`SummaryTopics`) | Standard | `document` / same + `summary_terms` | `summary.topics` |
-| `summary.digest@2` (`SummaryDigest`) | Standard | `document` / same + `summary_terms` | `summary.digest`, `summary.digest_tokens` |
-| `summary.llm@3` (`SummaryLlm`, feature `llm`) | Deep, opt-in | `document` / `revised_document ocr_text raster normalized_text` | `summary.keywords` | list of records `term key score count first_page entities?`, best first (below) |
+| `summary.digest@3` (`SummaryDigest`) | Standard | `document` / same + `summary_terms` | `summary.digest`, `summary.digest_tokens` |
+| `summary.llm@4` (`SummaryLlm`, feature `llm`) | Deep, opt-in | `document` / `revised_document ocr_text raster normalized_text` | `summary.keywords` | list of records `term key score count first_page entities?`, best first (below) |
 | `summary.topics` | record `method threshold sections segments truncated?`: `sections` list of `title page end_page keywords shift`, `segments` list of `title first sections page end_page keywords shift` (pages zero-based, `first` = index of the segment's first section) |
 | `summary.llm` |
 
@@ -34,7 +34,7 @@ The card, topic and digest steps also run after `summary.keywords` (`AFTER_TERMS
 (and build the same index themselves when it is absent).
 
 `quail-cli` registers `summary.outline@1`, `summary.keywords@1` and `summary.topics@1` by
-default (`summary.topics` is Standard: left out under `--profile fast`). `summary.digest@2`
+default (`summary.topics` is Standard: left out under `--profile fast`). `summary.digest@3`
 is Standard and not in the CLI pipeline: it costs a few ms per file and adds ~6.5 KB to every
 record; a service that feeds a model registers it (`SummaryDigest::with_config` sets the
 budget and a minimum document size).
@@ -66,7 +66,7 @@ budget and a minimum document size).
 | `cites`, `cites_total` | list of `relation kind? raw ordinal? date?` (parent relations first, ≤ 6) | `ref.cites` |
 | `parties`, `parties_total` | list of `name role? score` (score ≥ 0.3, ≤ 4) | `party.candidates`, else `party.company`, else the DOCX CLM fields |
 | `dates` | list of `role date`: `signed effective expires issued due`, or `date` | `signal.date_*`, else best `signal.date` |
-| `amounts` | list of `role amount`: `total net gross` (≤ 2 each), or `max` | `signal.amount_*`, else largest `signal.amount` in the main currency |
+| `amounts` | list of `role amount`: `total net gross` (≤ 2 each), or `largest_mentioned` (the largest amount the text mentions, role unknown) | `signal.amount_*`, else largest `signal.amount` in the main currency |
 | `currencies` | list, most frequent first | `signal.amount` |
 | `ids` | list of `kind values count` (`pib mb vat iban oib lei ein duns account bic`, ≤ 2 values) | `signal.*` |
 | `personal_ids` | Int, count only | `signal.jmbg_count` |
@@ -218,7 +218,7 @@ what each part is about, so a 200–2,000-page file can be navigated and summari
   most 64 (the largest distances win). The record keeps the threshold.
 - `topics::range_keywords` gives the distinctive keywords of any page ranges: the digest uses it.
 
-## Digest (`summary.digest@2`)
+## Digest (`summary.digest@3`)
 
 The model input for a document of any length, at most `DigestConfig::max_tokens` (default
 2,000) estimated tokens, deterministic:
@@ -250,6 +250,18 @@ EXCERPTS (sentences copied from each section):
   by size into `Title (+N more)`), plus `Opening pages` before the first heading. Each section
   gets a floor of 40 tokens and a share of the rest proportional to its size; unused budget
   passes to the next section.
+- **Structured text** (digest only, not map parts): budget no sentence used at the end goes to
+  the sections whose candidate sentences hold less than 30 % of their text (tables, forms,
+  invoices), in proportion to their budgets: their paragraphs in order, verbatim, skipping what
+  `START` already shows. A 6-page invoice's digest went from 420 to ~1,590 tokens: header block
+  and line items instead of the first lines of page 1.
+- **Back matter** (documents of 20+ pages): pages whose first line or running head names an
+  index, glossary, references, bibliography, endnotes (`Notes | 412`, not a plain `Notes`
+  heading) or the colophon, pages of which 40 % of the lines end in page numbers (an index) or
+  20 % open with `[n]` (a reference list), and the sections under such a heading are skipped by
+  the digest and the map parts, unless they are most of the document. On a 613-page book
+  this drops the per-chapter reference lists, the glossary and the index; map-reduce no longer
+  spends a part on them.
 - Per section: at most 48 paragraphs and 12 KiB (its first paragraphs and an even sample of the
   rest), sentences of 8–64 words that end with `.`, `!` or `?` and do not start in lower case
   (a paragraph cut by a page break), no dot leaders, `|` furniture or signature lines. Score:
@@ -285,8 +297,18 @@ EXCERPTS (sentences copied from each section):
   against everything the map steps read (`mapreduce`, model-free and tested with a scripted
   generator). `Summarizer::summarize_long` is the hook; its default is one call.
 - **Fact check** (`factcheck::check`) of every output: each date, number, identifier and name
-  word must be found in the card text or the text the model saw; otherwise the extractive
-  summary is emitted with `method = extractive_fallback` and a warning. Timeouts (60 s), bad JSON
+  word must be found in the card text, the text the model saw or the document's text (the first
+  4 MiB, `factcheck::document_sources`; 135 ms for a 613-page book of 1.4 MB, release build, next
+  to 20-150 s of model calls);
+  otherwise the extractive summary is emitted with `method = extractive_fallback` and a
+  warning. Sources may write two-digit years (`03/27/15`; `69`–`99` are 19xx). A name word also
+  passes as the English translation of an institution word of the source (`Fund` for `фонд`,
+  `Health` for `здравствено`; a short Serbian/Croatian/Bosnian list) or, from 8 letters, one OCR
+  error away from a source word (`Pharmalogix` for `Pharmalolgix`); an invented name still
+  fails.
+- Prompt: a role-less card amount is `largest_mentioned` and must not be presented as the
+  contract value; an `amendment` is asked what it changes and by how much (old and new value or
+  a percentage), and not to read the amounts without and with VAT as old and new. Timeouts (60 s), bad JSON
   and load errors fall back the same way; a summary never fails the file.
 - Cache: `BLAKE3(card text ‖ digest body (‖ map-reduce marker) ‖ summarizer id)`, the id carrying
   the model SHA-256, the prompt version, the budgets and the map-reduce settings (`MemoryCache`,

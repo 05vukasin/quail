@@ -20,7 +20,7 @@ use quail_summary::digest::{self, DigestConfig, MapReduceConfig};
 use quail_summary::mapreduce::{self, Step};
 use quail_summary::models::{self, Tier};
 use quail_summary::outline::{self, OutlineConfig};
-use quail_summary::{FileCard, LlmConfig, LlmSummarizer, SummaryInput, prompt};
+use quail_summary::{FileCard, LlmConfig, LlmSummarizer, SummaryInput, factcheck, prompt};
 
 fn peak_rss_mb() -> f64 {
     let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
@@ -140,6 +140,7 @@ fn main() -> ExitCode {
             text_head: &d.body,
             lang: lang.as_deref(),
             deadline: None,
+            document: Some(&doc),
         };
         let t = Instant::now();
         match llm.summarize_with_stats(&input) {
@@ -173,6 +174,7 @@ fn main() -> ExitCode {
             &card_text,
             &outline_text,
             &ps,
+            &factcheck::document_sources(&doc, factcheck::DOCUMENT_SOURCE_BYTES),
             lang.as_deref(),
             &mut generate,
         ) {

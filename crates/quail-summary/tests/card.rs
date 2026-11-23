@@ -35,6 +35,14 @@ fn eur(units: i64) -> Value {
     })
 }
 
+fn usd(cents: i64) -> Value {
+    Value::Money(Money {
+        units: cents,
+        scale: 2,
+        currency: Some(*b"USD"),
+    })
+}
+
 fn candidate(surface: &str, score: f64, roles: &[&str]) -> Value {
     Value::record([
         ("key", text(&surface.to_lowercase())),
@@ -352,6 +360,21 @@ bakeries, and Blue River Mills LLC wishes to supply it on the terms of this Agre
 NOW, THEREFORE, in consideration of the mutual covenants herein, the parties agree as follows:\n\
 1. Definitions. \"Products\" means the flour listed in Exhibit A.\n\
 2. Notices. All notices shall be in writing and delivered to the addresses above.\n";
+
+#[test]
+fn a_role_less_amount_is_only_the_largest_mentioned() {
+    // An insurance aggregate is no contract cap: the card says what it knows, no more.
+    let mut facts = contract_facts(date(2023, 2, 28));
+    facts.push(fact("signal.amount", usd(500_000_000), 0.7));
+    facts.push(fact("signal.amount", usd(25_000_000), 0.7));
+    let out = run(&SummaryCard::new(), &facts, doc(&[SUPPLY_TEXT]));
+    let card = get(&out, &keys::CARD_TEXT).as_text().unwrap();
+    assert!(
+        card.contains("amounts: largest_mentioned=USD 5,000,000"),
+        "{card}"
+    );
+    assert!(!card.contains("max="), "{card}");
+}
 
 #[test]
 fn the_purpose_recital_is_the_subject() {
