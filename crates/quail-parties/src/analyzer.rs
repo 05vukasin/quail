@@ -1,4 +1,4 @@
-//! `party.candidates@4`: turns page scans into facts.
+//! `party.candidates@5`: turns page scans into facts.
 
 use std::collections::HashMap;
 
@@ -46,7 +46,7 @@ pub struct PartyCandidates;
 
 impl PartyCandidates {
     /// Analyzer id.
-    pub const ID: AnalyzerId = AnalyzerId::new("party.candidates", 4);
+    pub const ID: AnalyzerId = AnalyzerId::new("party.candidates", 5);
 }
 
 impl Analyzer for PartyCandidates {

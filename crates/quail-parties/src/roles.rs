@@ -117,6 +117,32 @@ pub fn role_of_word(key: &str) -> Option<Role> {
     None
 }
 
+/// Serbian role words of [`SUPPLIER_WORDS`] and [`CUSTOMER_WORDS`].
+const SERBIAN_WORDS: &[&str] = &[
+    "dobavljac",
+    "isporucilac",
+    "izvodjac",
+    "izdavalac",
+    "kupac",
+    "korisnik",
+    "investitor",
+    "narucilac",
+    "narucioc",
+];
+
+/// Whether a folded role word is Serbian (`naručilac`, `Добављач`, `kupca`): its label's
+/// value may be a name in sentence case (`Republički fond za zdravstveno osiguranje`).
+///
+/// ```
+/// use quail_parties::roles::is_serbian_role_word;
+/// assert!(is_serbian_role_word("narucilac"));
+/// assert!(is_serbian_role_word("dobavljaca"));
+/// assert!(!is_serbian_role_word("supplier"));
+/// ```
+pub fn is_serbian_role_word(key: &str) -> bool {
+    SERBIAN_WORDS.contains(&key) || stem_hit(SUPPLIER_STEMS, key) || stem_hit(CUSTOMER_STEMS, key)
+}
+
 /// A declined form: the stem plus at most three letters (`narucioca`, `kupcima`).
 fn stem_hit(stems: &[&str], key: &str) -> bool {
     stems.iter().any(|s| {
