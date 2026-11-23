@@ -18,6 +18,9 @@ pub enum Role {
     Signatory,
     /// A party of a parties clause whose side the clause does not say.
     Party,
+    /// An auditor, banker, solicitor or other adviser named as such ("Auditors" / "X LLP",
+    /// "X LLP, Chartered Accountants"): it serves the document's author, it is not a party.
+    Adviser,
     /// Mentioned anywhere else.
     Mentioned,
 }
@@ -33,8 +36,15 @@ impl Role {
             Self::ShipTo => "ship_to",
             Self::Signatory => "signatory",
             Self::Party => "party",
+            Self::Adviser => "adviser",
             Self::Mentioned => "mentioned",
         }
+    }
+
+    /// Whether the role says the company is named, not that it takes part: `mentioned` and
+    /// `adviser`. A key with weak roles only scores by its strongest mention.
+    pub fn is_weak(self) -> bool {
+        matches!(self, Self::Mentioned | Self::Adviser)
     }
 
     /// Whether the role puts the company on the buying side of the document.

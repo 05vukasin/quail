@@ -54,6 +54,9 @@ pub struct Context {
     pub filer: bool,
     /// After `with a copy to` in a notices clause (usually counsel).
     pub copy_to: bool,
+    /// Named as an adviser: under an `Auditors` / `Bankers` / `Solicitors` label, or followed
+    /// by `Chartered Accountants`, `Statutory Auditor`.
+    pub adviser: bool,
 }
 
 /// One company mention on a page.
@@ -496,6 +499,17 @@ impl<'a> Scanner<'a> {
                 return None;
             }
         }
+        // A US state code after a city, not a form: "Springfield, NV 89000".
+        if self.state_code(i, end) {
+            return None;
+        }
+        // Column headings: "Len Group", "Qty Co.".
+        if (a..i)
+            .filter(|&k| self.w.is_word(k))
+            .all(|k| has(HEADER_ABBREVIATIONS, self.key(k)))
+        {
+            return None;
+        }
         // A weak form in a heading or a phrase is a common noun: "Return of Company",
         // "HOLDING CO.", "Parent Company".
         if form.weak {
@@ -508,6 +522,24 @@ impl<'a> Scanner<'a> {
         }
         let (b, seat) = self.close_form(end);
         self.accept(a, b, Some(form), seat)
+    }
+
+    /// Tokens `i..end` are a two-letter state code in capitals after a comma, followed on its
+    /// line by a ZIP code: `Springfield, NV 89000`, `Denver, CO 80202`.
+    fn state_code(&self, i: usize, end: usize) -> bool {
+        let t = self.w.text(i);
+        let zip = |k: usize| {
+            let z = self.w.text(k);
+            z.len() == 5 && z.bytes().all(|b| b.is_ascii_digit())
+        };
+        end == i + 1
+            && t.len() == 2
+            && t.bytes().all(|b| b.is_ascii_uppercase())
+            && has(US_STATES, self.key(i))
+            && i > 0
+            && self.w.is_punct(i - 1, ',')
+            && self.same_line(i, end)
+            && zip(end)
     }
 
     fn prefix_mention(&self, form: &'static Form, i: usize, end: usize) -> Option<Mention> {
@@ -625,13 +657,9 @@ impl<'a> Scanner<'a> {
                 break;
             }
             if self.w.is_word(k) {
-                // Inside a hyphenated compound a stop word is part of the name ("Build-A-Bear",
-                // "AT&T").
-                let hyphened = (self.w.is_punct(k + 1, '-') || self.w.is_punct(k + 1, '&'))
-                    && self.attached(k + 1)
-                    && self.attached(k + 2);
-                if self.is_stop(k) && !hyphened && !self.connector(k)
+                if self.is_stop(k) && !self.hyphened(k) && !self.connector(k)
                     || has(EXTRA_STOP, self.bare(k))
+                    || has(&["auditor", "auditors"], self.key(k))
                 {
                     // "At Home Corporation", "ON Semiconductor": a capitalised preposition
                     // mid-sentence opens the name.
@@ -693,12 +721,32 @@ impl<'a> Scanner<'a> {
                     break;
                 }
                 comma = true;
-            } else if !self.inner_punct(k) {
+            } else if !self.inner_punct(k) || self.closing_quote(k) {
                 break;
             }
             j = k;
         }
         self.trim(j, i).map(|(a, _)| a)
+    }
+
+    /// Word `k` is inside a hyphenated compound, where a stop word is part of the name
+    /// ("Build-A-Bear", "AT&T", "Zeta-Mart": `Mart` is March in Serbian).
+    fn hyphened(&self, k: usize) -> bool {
+        let joint = |t: usize| self.w.is_punct(t, '-') || self.w.is_punct(t, '&');
+        joint(k + 1) && self.attached(k + 1) && self.attached(k + 2)
+            || k >= 2
+                && joint(k - 1)
+                && self.attached(k)
+                && self.attached(k - 1)
+                && self.w.is_word(k - 2)
+    }
+
+    /// An apostrophe at `k` closing a quote, not an elision or a plural possessive:
+    /// `POLICY' Acme, Inc.` (`O'Neil` is one word, `Florists' Exchange` one name).
+    fn closing_quote(&self, k: usize) -> bool {
+        self.w.is_punct(k, '\'')
+            && !self.attached(k + 1)
+            && !self.w.text(k.saturating_sub(1)).ends_with(['s', 'S'])
     }
 
     /// Crossing from the line of token `k + 1` up to `k` keeps one name: `Leggett &` /
@@ -964,6 +1012,12 @@ impl<'a> Scanner<'a> {
                 continue;
             }
             let v = if colon { end + 1 } else { end };
+            // "Odgovorno lice naručioca:", "Contact person of the Supplier:": the value is a
+            // person or a title, not the company.
+            if self.person_before(i) {
+                i = end;
+                continue;
+            }
             // Side-by-side columns ("Remit To: Ship To:" over two names) say nothing.
             if self.w.breaks_before(v) && self.labels_on_line(i) > 1 {
                 i = end;
@@ -973,6 +1027,25 @@ impl<'a> Scanner<'a> {
             self.label_value(out, role, v, serbian);
             i = v.max(i + 1);
         }
+    }
+
+    /// A person noun right before the label at `i`, on its line, `of` / `the` between:
+    /// `odgovorno lice naručioca`, `contact person of the Supplier`.
+    fn person_before(&self, i: usize) -> bool {
+        let mut p = self.wpos[i];
+        while p > 0 {
+            p -= 1;
+            let t = self.words[p];
+            if !self.same_line(t, i) {
+                return false;
+            }
+            let k = self.key(t);
+            if has(&["of", "the"], k) {
+                continue;
+            }
+            return has(PERSON_NOUNS, k);
+        }
+        false
     }
 
     fn labels_on_line(&self, i: usize) -> usize {
@@ -1020,7 +1093,12 @@ impl<'a> Scanner<'a> {
         let mut words = 0;
         while j < self.w.len() && (j == v || !self.w.breaks_before(j)) {
             if self.w.is_word(j) {
-                if self.is_stop(j) && j == v || !(self.namey(j) || self.connector(j)) {
+                // A field label is no name ("Client" over "Submit EDI Invoice"): it ends the
+                // run, and the whole-line test below drops what is left.
+                if self.is_stop(j) && j == v
+                    || !(self.namey(j) || self.connector(j))
+                    || has(FIELD_WORDS, self.key(j))
+                {
                     break;
                 }
                 words += 1;
@@ -1277,6 +1355,7 @@ impl<'a> Scanner<'a> {
                 && self.w.lines > 2 * FOOTER_LINES;
         m.ctx.bank = self.is_bank(m, pa);
         m.ctx.filer = self.is_filer_line(m.a);
+        m.ctx.adviser = !m.ctx.label && self.is_adviser(m);
         let customer = m.roles.iter().any(|r| r.is_customer_side());
         if m.ctx.bank {
             m.ctx.header = false;
@@ -1287,10 +1366,24 @@ impl<'a> Scanner<'a> {
         if m.ctx.filer {
             m.ctx.signature = false;
         }
+        // An auditor signs its own report, and a firm listed under "Solicitors" sits next to
+        // the registered office: neither is a party.
+        if m.ctx.adviser {
+            m.ctx.signature = false;
+            m.ctx.clause = false;
+            m.roles
+                .retain(|r| !matches!(r, Role::Party | Role::Signatory));
+            m.add_role(Role::Adviser);
+        }
         if m.ctx.signature {
             m.add_role(Role::Signatory);
         }
-        if (m.ctx.header || m.ctx.footer) && !customer && !m.ctx.label {
+        if (m.ctx.header || m.ctx.footer)
+            && !customer
+            && !m.ctx.label
+            && !m.ctx.adviser
+            && !m.ctx.filer
+        {
             m.add_role(Role::Issuer);
         }
         if m.ctx.clause && m.roles.is_empty() {
@@ -1363,6 +1456,70 @@ impl<'a> Scanner<'a> {
         }
         // "Source:" alone on the line above.
         s >= 2 && self.w.breaks_before(s - 2) && opens(s - 2) && self.w.toks[s - 2].line + 1 == line
+    }
+
+    /// An adviser named as such: the mention opens its line under a short label line ending
+    /// in an adviser word (`Auditors`, `Principal solicitors`, `Bankers`), or after such a
+    /// label on its own line (`Auditors: X LLP`); or the words after it, on its line or the
+    /// next, call it one (`X LLP, Chartered Accountants`, `X LLP, statutory auditor`).
+    fn is_adviser(&self, m: &Mention) -> bool {
+        let line = self.w.toks[m.a].line;
+        // Label before it on its line, `Auditors: X LLP`.
+        let mut s = m.a;
+        while s > 0 && self.w.toks[s - 1].line == line {
+            s -= 1;
+        }
+        let label_words = |from: usize, to: usize| -> Option<usize> {
+            let words: Vec<usize> = (from..to).filter(|&k| self.w.is_word(k)).collect();
+            (!words.is_empty() && words.len() <= 3).then(|| words[words.len() - 1])
+        };
+        if s < m.a
+            && let Some(last) = label_words(s, m.a)
+            && has(ADVISER_WORDS, self.key(last))
+            && (last + 1..m.a).any(|k| self.w.is_punct(k, ':'))
+        {
+            return true;
+        }
+        // A label line right above a mention that opens its line.
+        if s == m.a && m.a > 0 && self.w.toks[m.a - 1].line + 1 == line {
+            let mut ls = m.a - 1;
+            while ls > 0 && self.w.toks[ls - 1].line == line - 1 {
+                ls -= 1;
+            }
+            if let Some(last) = label_words(ls, m.a)
+                && has(ADVISER_WORDS, self.key(last))
+                && (last + 1..m.a).all(|k| !self.w.is_word(k))
+            {
+                return true;
+            }
+        }
+        // `X LLP, Chartered Accountants` / `X LLP` + `Statutory Auditor` on the next line.
+        let mut k = m.b;
+        let mut words = 0;
+        while k < self.w.len() && words < 6 && self.w.toks[k].line <= line + 1 {
+            if self.w.is_word(k) {
+                if has(ADVISER_WORDS, self.key(k)) {
+                    // On the next line only after a qualifier: a bare `Auditors` there is
+                    // the next section's label. And it ends the phrase: `Independent
+                    // Auditors' Report` under a name is a heading.
+                    let ends = self.w.breaks_before(k + 1)
+                        || [',', ';', '.', ')']
+                            .iter()
+                            .any(|&c| self.w.is_punct(k + 1, c));
+                    if ends {
+                        return words > 0 || self.w.toks[k].line == line;
+                    }
+                    // `Chartered Accountants and Statutory Auditor`: read on.
+                } else if !has(ADVISER_QUALIFIERS, self.key(k)) {
+                    return false;
+                }
+                words += 1;
+            } else if !(self.w.is_punct(k, ',') || self.w.is_punct(k, '-')) {
+                return false;
+            }
+            k += 1;
+        }
+        false
     }
 
     /// A bank: a bank word in the name, or a bank label before it on its line.
@@ -1748,6 +1905,88 @@ static AD_PREFIX: Form = Form {
     weak: false,
     jurisdictions: &["rs", "ba", "me", "mk"],
 };
+
+/// Words that name an adviser of the document's author in a label (`Auditors`, `Principal
+/// solicitors`) or after a name (`Chartered Accountants`, `Statutory Auditor`).
+const ADVISER_WORDS: &[&str] = &[
+    "auditor",
+    "auditors",
+    "accountants",
+    "bankers",
+    "solicitors",
+    "advisers",
+    "advisors",
+    "actuary",
+    "actuaries",
+    "custodian",
+    "custodians",
+    "revizor",
+];
+
+/// Nouns for a person acting for a party (`odgovorno lice naručioca`, `contact person of the
+/// Supplier`): the label after them introduces a person or a title.
+const PERSON_NOUNS: &[&str] = &[
+    "lice",
+    "lica",
+    "licu",
+    "osoba",
+    "osobe",
+    "person",
+    "representative",
+    "officer",
+];
+
+/// Words of form field labels (`Submit EDI Invoice`, `Other Address`): a formless value after
+/// a role label holding one is the next field, not a name.
+const FIELD_WORDS: &[&str] = &[
+    "invoice",
+    "address",
+    "phone",
+    "fax",
+    "email",
+    "contact",
+    "date",
+    "number",
+    "total",
+    "page",
+    "estimate",
+    "account",
+    "attention",
+    "attn",
+    "submit",
+    "edi",
+    "remit",
+];
+
+/// US state codes: after a city they are no legal form (`NV`, `CO`).
+const US_STATES: &[&str] = &[
+    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il", "in", "ia", "ks",
+    "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny",
+    "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv",
+    "wi", "wy", "dc",
+];
+
+/// Abbreviations of table column headings (`Max`, `Min`, `Len`, `Qty`): a legal form after
+/// them only is a heading row, not a name.
+const HEADER_ABBREVIATIONS: &[&str] = &[
+    "max", "min", "len", "qty", "pos", "avg", "amt", "pct", "ttl", "tot", "num", "nbr", "desc",
+    "dur", "hrs", "wk", "wks", "ea", "br", "uom", "kol", "jm", "rb",
+];
+
+/// Words between a name and the adviser word that calls it one (`Chartered Accountants and
+/// Statutory Auditor`).
+const ADVISER_QUALIFIERS: &[&str] = &[
+    "chartered",
+    "certified",
+    "statutory",
+    "registered",
+    "public",
+    "independent",
+    "external",
+    "senior",
+    "and",
+    "the",
+];
 
 /// More words that end a walk (English function words and Serbian generic company words).
 const EXTRA_STOP: &[&str] = &[

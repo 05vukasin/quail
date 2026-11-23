@@ -28,7 +28,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `text.lang@2` | analyzer | any | fast | Document language with top candidates (lingua + sr/hr/bs layer). |
 | `signal.scan@5` | analyzer | any | fast | Identifiers with check digits, dates with roles, amounts, contact domains. |
 | `ref.references@3` | analyzer | any | fast | Own document numbers, cited documents, title, instrument kind, page/version markers. |
-| `party.candidates@5` | analyzer | any | fast | Company mentions with roles and defined terms, ranked candidates, name statements. |
+| `party.candidates@6` | analyzer | any | fast | Company mentions with roles and defined terms, ranked candidates, name statements. |
 | `clause.terms@1` | analyzer | any | fast | Contract clauses: governing law, term and renewal, survival and notice periods, termination rights. |
 | `sketch.minhash@2` | analyzer | any | fast | MinHash of word 3-shingles with 32 LSH band keys. |
 | `sketch.simhash_text@2` | analyzer | any | fast | 64-bit SimHash of weighted word 3-shingles. |
