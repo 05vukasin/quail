@@ -625,7 +625,7 @@ fn keys_and_version() {
         expected.push("ref.references@3");
     }
     if cfg!(feature = "parties") {
-        expected.push("party.candidates@4");
+        expected.push("party.candidates@5");
     }
     if cfg!(feature = "clauses") {
         expected.push("clause.terms@1");

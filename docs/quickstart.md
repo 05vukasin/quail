@@ -84,7 +84,7 @@ status   ok
 steps    engine.sniff@2 (10 µs), pdf.extract@2 (9.3 ms), hash.identity@1 (111 µs), ...
 
 [party] 5 fact(s)
-  party.candidates  2 record(s)  src party.candidates@4
+  party.candidates  2 record(s)  src party.candidates@5
                       - {key="northwind logistics" surface="Northwind Logistics Ltd" score=0.99 roles=["customer", "signatory"]}
                       - {key="blue river software" surface="Blue River Software GmbH" score=0.99 roles=["supplier", "signatory"]}
 

@@ -8,7 +8,7 @@ the `party.alias_of` pairs) and assigns documents to suppliers.
 Out of scope (sibling crates): identifiers, dates, money and e-mail domains (`quail-signals`);
 document numbers, references and titles (`quail-refs`).
 
-- Analyzer: `party.candidates@4` (`PartyCandidates`), profile `Fast`, requires `document`.
+- Analyzer: `party.candidates@5` (`PartyCandidates`), profile `Fast`, requires `document`.
 - Public API: `PartyCandidates`, `keys::*`, and the pure helpers in `names`
   (`normalize_name`, `normalized_key`, `core_key`, `squashed_key`, `meaningful_words`,
   `core_words`, `score_name_match`, `are_names_similar`, `acronym_key`,
@@ -27,7 +27,8 @@ read whole (soft `after(["normalized_text"])`), else they are computed here, wit
    `JKP`, `PR`/`preduzetnik`, `Javno preduzeće`, `Akcionarsko društvo`, `LLC`, `Inc.`, `Corp.`,
    `Ltd`, `Limited`, `plc`, `LLP`, `GmbH`, `AG`, `KG`, `S.A.`, `SAS`, `SARL`, `S.r.l.`, `S.p.A.`,
    `B.V.`, `N.V.`, `AB`, `A/S`, `ApS`, `Oy`, `Kft.`, `Zrt.`, `s.r.o.`, `Sp. z o.o.`, `Pty`,
-   `OOO`, ... (dotted, spaced, any script). Weak spellings that are also words (`AS`, `AD`, `SA`,
+   `OOO`, ... (dotted, spaced; in Cyrillic only the forms of a Cyrillic-writing country, so the
+   preposition `СА` in a title such as `НАБАВКА ОПРЕМЕ СА УГРАДЊОМ` is no S.A.). Weak spellings that are also words (`AS`, `AD`, `SA`,
    `Co.`, `Company`, `Group`) must be written like a form and score lower. The name is the run
    of capitalised words on the same line before (suffix forms) or after (prefix forms) the form,
    at most 8 words, one interior comma allowed ("Brenwick, Dalton and Company"); it stops at
@@ -61,7 +62,12 @@ read whole (soft `after(["normalized_text"])`), else they are computed here, wit
 2. **Role labels** (`Dobavljač:`, `Izvršilac:`, `Naručilac:`, `Kupac:`, `Supplier:`, `Vendor:`,
    `Customer:`, `Bill to:`, `Ship to:`, `Remit to:`, `Consignee`, ...) give the next name its role;
    without a legal form, the name must fill the line, have at least two words and no person's
-   shape in any letter case. Side-by-side label columns ("Remit To: Ship To:") assign nothing.
+   shape in any letter case. After a Serbian label (`НАРУЧИЛАЦ:`, `Dobavljač:`, declined forms
+   too) the name may be in sentence case, as public institutions are written (`Републички фонд
+   за здравствено осигурање`): a capitalised word, then letter words up to a comma, a
+   parenthesis or the line end, 2–8 words; not when it ends in a preposition (the name goes on
+   in the next line of a signature table) or crosses a document word. Side-by-side label columns
+   ("Remit To: Ship To:") assign nothing.
 3. **Brands spelled by a domain**: one to three capitalised words that spell a second-level label
    of an e-mail or web domain in the same document ("KESTRELON" + `www.kestrelon.com`).
    Free-mail and platform hosts are ignored. (The domains themselves are `quail-signals`' facts.)
@@ -152,6 +158,11 @@ only; `party.candidates@2` → `@3`):
 |---|---:|---|---|---|---|
 | Kleister-NDA | 475 | 63.0 → 67.7 | 67.4 → 71.4 | 65.1 → 69.5 | 0.128 → 0.143 |
 | CUAD | 2040 | 75.4 → 79.1 | 40.7 → 44.8 | 52.8 → 57.2 | 0.100 → 0.034 |
+
+**Serbian public procurement** (91 dev documents of `testdata/serbian-public`, silver gold,
+`party` task; `party.candidates@4` → `@5`: Cyrillic forms, sentence-case names after Serbian
+labels): P 43.5 → 68.5, R 21.4 → 35.7, F1 28.7 → 46.9; 25 documents better, none worse.
+Kleister-NDA and CUAD unchanged.
 
 About 470 of CUAD's misses are aliases and defined terms (`Licensor`, `the "Company"`), which
 `party.company` carries in `defined_term`; scored with that field too, CUAD is F1 76.6.
