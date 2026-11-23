@@ -23,8 +23,9 @@ per file: the facts it found, each with a **confidence**, the **step** that prod
 **evidence** (page, zone, text span, box on the page) where it was found. A person or an AI
 agent can check every fact against the page.
 
-- **Offline and CPU-only.** No external API, no GPU. The default build is pure Rust and needs
-  no models.
+- **Offline and CPU-only.** No external API, no GPU. The default build is pure Rust, needs
+  no models and never opens a network connection. LLM summaries through an API are an opt-in
+  build feature that sends document text to the provider you choose.
 - **Built for millions of files.** 54 to 156 PDF files per second on 4 threads of a laptop CPU,
   under 300 MB of memory, content dedup, and process isolation so a hostile file costs one
   record, not the run.

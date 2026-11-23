@@ -221,11 +221,11 @@ Measured speed, memory and quality: [performance.md](performance.md#ocr).
 
 Every record has a deterministic card (`summary.card_text`) and an English summary
 (`summary.extractive`) made without a model. A more fluent summary written by a small local
-LLM is available as the step `summary.llm@4` in `quail-summary`. It is off unless you ask for
+LLM is available as the step `summary.llm@5` in `quail-summary`. It is off unless you ask for
 it, three times over:
 
-1. it is behind the cargo feature `llm`, which builds llama.cpp (needs CMake and a C++
-   compiler);
+1. it is behind a cargo feature: `llm` for a local model, which builds llama.cpp (needs CMake
+   and a C++ compiler), or `api` for a model behind an HTTP API (below);
 2. it runs only in profile `deep`;
 3. it does nothing unless its config has `enabled: true`.
 
@@ -238,9 +238,19 @@ cargo run -p quail-summary --features fetch --example fetch_models -- small
 
 Every generated summary is fact-checked: each date, number, identifier and name in it must
 appear in the card or in the text the model saw; otherwise the extractive summary is kept
-(`method = extractive_fallback`). Unlike OCR, this step is not in the `quail` binary yet; a
-program registers `quail_summary::SummaryLlm` on its own engine. Measured speed:
-[performance.md](performance.md#llm-summary).
+(`method = extractive_fallback`). A program registers `quail_summary::SummaryLlm` on its own
+engine. Measured speed: [performance.md](performance.md#llm-summary).
+
+### LLM summaries via an API
+
+With the feature `api`, `quail_summary::api::ApiSummarizer` runs the same step with a model
+behind an HTTP API: OpenAI and every server that speaks its Chat Completions protocol (vLLM,
+Ollama, LM Studio, llama.cpp's `llama-server`, OpenRouter, Groq), Anthropic, or AWS Bedrock. It
+reads the same prompt, and its output goes through the same fact check and the same fallback.
+**This sends document text (the card and the digest) to that provider.** Settings come from
+the environment, or from a `.env` file you name, with the variable names of
+[`.env.example`](../.env.example); keys never appear in logs, errors or records. Details:
+[quail-summary](../crates/quail-summary/README.md#llm-summary-via-an-api-feature-api).
 
 ## Next
 

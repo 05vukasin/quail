@@ -126,6 +126,7 @@ mod tests {
             method: Method::Llm,
             checked: true,
             warnings: Vec::new(),
+            usage: crate::summarizer::Usage::default(),
         })
     }
 

@@ -9,11 +9,16 @@ rust-version.workspace = true
 
 [features]
 default = []
-# `summary.llm@4`: a local GGUF model through llama.cpp (`llama-cpp-2`). Builds llama.cpp with
+# `summary.llm@5` with a local GGUF model through llama.cpp (`llama-cpp-2`). Builds llama.cpp with
 # CMake and a C++ compiler; `dynamic-backends` builds one CPU backend per microarchitecture and
 # picks one at load time (no `target-cpu=native`); `common` adds the JSON-schema-to-grammar
 # compiler (llama.cpp's `common` library is built either way). Never in the default build.
 llm = ["dep:llama-cpp-2", "dep:sha2"]
+# `ApiSummarizer`: `summary.llm@5` through an HTTP API (OpenAI Chat Completions and compatible
+# servers such as vLLM, Ollama, OpenRouter, Groq and llama-server; Anthropic Messages; AWS
+# Bedrock Converse). Pure Rust (`ureq` with rustls), blocking, no async runtime. Sends document
+# text to the configured provider, so it is never in the default build.
+api = ["dep:ureq"]
 # `fetch_models`: downloads the GGUF files of the manifest, checking SHA-256.
 fetch = ["dep:ureq", "dep:sha2"]
 
