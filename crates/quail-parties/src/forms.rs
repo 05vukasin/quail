@@ -187,6 +187,17 @@ pub fn is_prefix_form(bare: &str) -> bool {
     by_bare(bare).is_some_and(|f| f.position == Position::Prefix)
 }
 
+/// Countries that write company names in Cyrillic (lowercase ISO codes).
+const CYRILLIC_COUNTRIES: &[&str] = &["rs", "ba", "me", "mk", "ru", "by", "ua", "bg", "kz"];
+
+/// Whether `form` may be written in Cyrillic: one of a country that writes Cyrillic
+/// (`д.о.о.`, `ООО`). `СА`, `АГ` or `ИНЦ` are Serbian words or transliterations, not forms.
+pub fn cyrillic_ok(form: &Form) -> bool {
+    form.jurisdictions
+        .iter()
+        .any(|j| CYRILLIC_COUNTRIES.contains(j))
+}
+
 /// Whether `surface` (the form as written, dots kept) satisfies `gate`.
 pub fn gate_ok(gate: Gate, surface: &str, dotted: bool) -> bool {
     let mut letters = surface.chars().filter(|c| c.is_alphabetic()).peekable();

@@ -45,6 +45,8 @@ const HISTORY: &[(&str, &str)] = &[
     ("docs/performance.md", "item.lines@4"),
     ("crates/quail-parties/README.md", "party.candidates@2"),
     ("crates/quail-parties/README.md", "party.candidates@3"),
+    ("crates/quail-parties/README.md", "party.candidates@4"),
+    ("docs/performance.md", "party.candidates@4"),
 ];
 
 fn root() -> PathBuf {

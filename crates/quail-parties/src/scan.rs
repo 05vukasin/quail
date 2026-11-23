@@ -9,7 +9,7 @@ use quail_core::Zone;
 
 use crate::forms::{self, Form, Position};
 use crate::quality::{self, Quality};
-use crate::roles::{LABELS, Role, role_of_word};
+use crate::roles::{self, LABELS, Role, role_of_word};
 use crate::vocab::{self, has};
 use crate::words::PageWords;
 
@@ -364,6 +364,15 @@ impl<'a> Scanner<'a> {
         let surface = self.w.slice(i, end);
         let dotted = dotted || self.w.is_punct(end, '.') && self.attached(end);
         if !forms::gate_ok(form.gate, surface, dotted) {
+            return None;
+        }
+        // A form written in Cyrillic is one of a Cyrillic-writing country: "СА" is the
+        // Serbian preposition "sa", never a société anonyme.
+        if surface
+            .chars()
+            .any(|c| ('\u{0400}'..='\u{04ff}').contains(&c))
+            && !forms::cyrillic_ok(form)
+        {
             return None;
         }
         if form.bare == "co" && !self.co_closes(end) {
@@ -960,7 +969,8 @@ impl<'a> Scanner<'a> {
                 i = end;
                 continue;
             }
-            self.label_value(out, role, v);
+            let serbian = roles::is_serbian_role_word(self.key(i));
+            self.label_value(out, role, v, serbian);
             i = v.max(i + 1);
         }
     }
@@ -985,7 +995,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// The name after a label: an existing formed mention, or a formless name on that line.
-    fn label_value(&self, out: &mut PageScan, role: Role, v: usize) {
+    fn label_value(&self, out: &mut PageScan, role: Role, v: usize, serbian: bool) {
         let mut v = v;
         while self.w.is_punct(v, '"') || self.w.is_punct(v, '-') {
             v += 1;
@@ -993,6 +1003,17 @@ impl<'a> Scanner<'a> {
         if let Some(m) = out.mentions.iter_mut().find(|m| m.a >= v && m.a <= v + 2) {
             m.add_role(role);
             m.ctx.label = true;
+            return;
+        }
+        // "НАРУЧИЛАЦ:" over "Републички фонд за здравствено осигурање, ул. …": a Serbian
+        // institution's name is written in sentence case.
+        if serbian
+            && let Some((a, b)) = self.sentence_case_value(v)
+            && let Some(mut m) = self.accept(a, b, None, None)
+        {
+            m.add_role(role);
+            m.ctx.label = true;
+            push_mention(out, m);
             return;
         }
         let mut j = v;
@@ -1041,6 +1062,49 @@ impl<'a> Scanner<'a> {
             m.ctx.label = true;
             push_mention(out, m);
         }
+    }
+
+    /// A sentence-case name at `v` after a Serbian role label: a capitalised word, then words
+    /// of letters (lowercase ones included) up to a comma, a parenthesis or the end of the
+    /// line, two to [`MAX_RUN_WORDS`] words, at least one of them lowercase (the Title Case
+    /// and capital names are the plain label path's).
+    fn sentence_case_value(&self, v: usize) -> Option<(usize, usize)> {
+        if !self.w.is_word(v) || !self.w.text(v).starts_with(char::is_uppercase) || self.is_stop(v)
+        {
+            return None;
+        }
+        let mut j = v;
+        let mut words = 0;
+        let mut lower = false;
+        while j < self.w.len() && (j == v || !self.w.breaks_before(j)) {
+            if self.w.is_word(j) {
+                let t = self.w.text(j);
+                // Prepositions join an institution's name ("fond za zdravstveno"); document
+                // words and labels end it.
+                let stop = has(vocab::WALK_STOP_WORDS, self.key(j)) && t.chars().count() > 3;
+                if !t.chars().all(char::is_alphabetic) || j > v && stop {
+                    return None;
+                }
+                lower |= t.starts_with(char::is_lowercase);
+                words += 1;
+                if words > MAX_RUN_WORDS {
+                    return None;
+                }
+            } else if self.w.text(j).starts_with([',', '(', ';']) {
+                break;
+            } else if !self.inner_punct(j) {
+                return None;
+            }
+            j += 1;
+        }
+        // A name cut by a line break ends in its preposition ("Републички фонд за"): the
+        // rest is on the next line, in a column of a signature table more often than not.
+        let last = (v..j).rev().find(|&k| self.w.is_word(k))?;
+        let t = self.w.text(last);
+        if t.starts_with(char::is_lowercase) && t.chars().count() <= 3 {
+            return None;
+        }
+        (words >= 2 && lower).then_some((v, j))
     }
 
     // ----- name statements --------------------------------------------------------------

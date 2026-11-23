@@ -10,13 +10,15 @@ use std::fmt::Write as _;
 use serde_json::Value as Json;
 
 /// Bump when the prompt or the schema changes: it is part of the cache key.
-pub const PROMPT_VERSION: u32 = 2;
+pub const PROMPT_VERSION: u32 = 3;
 
 /// System message.
 pub const SYSTEM: &str = "You write search-index metadata for business documents. Output JSON \
 only, in English. Use only FACTS and TEXT. Copy company names, numbers and identifiers exactly \
 as written in FACTS or TEXT, in their original spelling and script; never translate names. Do \
-not state any number or date that is not in FACTS or TEXT.";
+not state any number or date that is not in FACTS or TEXT. An amount labelled largest_mentioned \
+is only the largest amount the text mentions: never present it as the contract value, a total \
+or a maximum.";
 
 /// JSON schema of the output; `maxLength` is a safety net, the prompt steers the length.
 pub const SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","subject","title_en"],"properties":{"summary":{"type":"string","maxLength":400},"subject":{"type":"string","maxLength":120},"title_en":{"type":"string","maxLength":120}}}"#;
@@ -30,9 +32,30 @@ document title in English.";
 /// [digest](crate::digest) body (the whole text of a short document; outline, start and
 /// excerpts of a long one).
 pub fn user_message(card_text: &str, text: &str, lang: Option<&str>) -> String {
+    user_message_for(card_text, text, lang, None)
+}
+
+/// What an amendment's summary must say on top of [`WRITE`].
+const WRITE_AMENDMENT: &str = " This document amends another: say what it changes and by how \
+much (a percentage, or the old and the new value, as TEXT states them). An amount without VAT \
+and the same amount with VAT are one value, never an old and a new one.";
+
+/// [`user_message`] for a document of `kind` (the card's): an `amendment` is also asked what
+/// it changes ([`WRITE_AMENDMENT`]).
+pub fn user_message_for(
+    card_text: &str,
+    text: &str,
+    lang: Option<&str>,
+    kind: Option<&str>,
+) -> String {
+    let extra = if kind == Some("amendment") {
+        WRITE_AMENDMENT
+    } else {
+        ""
+    };
     format!(
         "FACTS:\n{card_text}\n\nTEXT (the document, or for a long one its outline, its start \
-         and sentences copied from each section; language={}):\n{text}\n\n{WRITE}",
+         and sentences copied from each section; language={}):\n{text}\n\n{WRITE}{extra}",
         lang.unwrap_or("unknown")
     )
 }
@@ -154,6 +177,18 @@ fn last_sentence(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn amendments_are_asked_what_they_change() {
+        let plain = user_message("doc: amendment", "TEXT", Some("sr"));
+        assert!(!plain.contains("amends another"));
+        let a = user_message_for("doc: amendment", "TEXT", Some("sr"), Some("amendment"));
+        assert!(a.starts_with(&plain), "{a}");
+        assert!(a.contains("by how much") && a.contains("with VAT"), "{a}");
+        let c = user_message_for("doc: contract", "TEXT", Some("en"), Some("contract"));
+        assert!(!c.contains("amends another"));
+        assert!(SYSTEM.contains("largest_mentioned"));
+    }
 
     #[test]
     fn schema_is_json() {

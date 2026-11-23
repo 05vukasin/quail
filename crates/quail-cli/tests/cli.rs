@@ -625,7 +625,7 @@ fn keys_and_version() {
         expected.push("ref.references@3");
     }
     if cfg!(feature = "parties") {
-        expected.push("party.candidates@4");
+        expected.push("party.candidates@5");
     }
     if cfg!(feature = "clauses") {
         expected.push("clause.terms@1");
@@ -653,7 +653,7 @@ fn keys_and_version() {
             "summary.extractive@2",
             "summary.outline@1",
             "summary.keywords@1",
-            "summary.card@3",
+            "summary.card@4",
             "summary.topics@1",
         ]);
     }

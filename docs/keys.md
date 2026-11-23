@@ -28,7 +28,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `text.lang@2` | analyzer | any | fast | Document language with top candidates (lingua + sr/hr/bs layer). |
 | `signal.scan@5` | analyzer | any | fast | Identifiers with check digits, dates with roles, amounts, contact domains. |
 | `ref.references@3` | analyzer | any | fast | Own document numbers, cited documents, title, instrument kind, page/version markers. |
-| `party.candidates@4` | analyzer | any | fast | Company mentions with roles and defined terms, ranked candidates, name statements. |
+| `party.candidates@5` | analyzer | any | fast | Company mentions with roles and defined terms, ranked candidates, name statements. |
 | `clause.terms@1` | analyzer | any | fast | Contract clauses: governing law, term and renewal, survival and notice periods, termination rights. |
 | `sketch.minhash@2` | analyzer | any | fast | MinHash of word 3-shingles with 32 LSH band keys. |
 | `sketch.simhash_text@2` | analyzer | any | fast | 64-bit SimHash of weighted word 3-shingles. |
@@ -39,7 +39,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `sketch.minhash_compat@3` | analyzer | any | standard | Compatibility mode: byte-compatible port of an existing deployment's MinHash and template sketches. |
 | `sketch.page_phash@4` | analyzer | any | standard | 64-bit DCT pHash of each scanned page (embedded scan or 36 dpi render; needs `raster`). |
 | `item.lines@6` | analyzer | any | fast | Price items from tables and rate lines: description, quantity, unit, prices, CPV top-3. |
-| `summary.card@3` | analyzer | any | fast | File card from all facts (finalizer): kind, parties, dates, amounts, refs, keywords, ids, items, flags. |
+| `summary.card@4` | analyzer | any | fast | File card from all facts (finalizer): kind, parties, dates, amounts, refs, keywords, ids, items, flags. |
 | `summary.extractive@2` | analyzer | any | fast | 1-3 sentence English summary without a model: card template + subject clause. |
 | `summary.outline@1` | analyzer | any | fast | Document outline: headings (numbered, keyword, capitals, type size) with page ranges, bounded. |
 | `summary.keywords@1` | analyzer | any | fast | Keywords and key phrases (YAKE-style, English and Serbian Latin/Cyrillic as one), linked to parties. |

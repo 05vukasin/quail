@@ -1,6 +1,6 @@
 //! Per-file cards and English summaries for LLM agents. Namespace `summary.*`.
 //!
-//! - [`SummaryCard`] (`summary.card@3`, Fast): a deterministic **file card** built only from
+//! - [`SummaryCard`] (`summary.card@4`, Fast): a deterministic **file card** built only from
 //!   the facts of the other steps (type, title, language, pages, own number, cited documents,
 //!   parties with roles, dates by role, amounts, identifiers, price items, sketches, producer,
 //!   flags), stored as a record and rendered as compact `key: value` text under a hard token
@@ -17,11 +17,11 @@
 //! - [`SummaryTopics`] (`summary.topics@1`, Standard): the topic map of a long document:
 //!   keywords per outline section, topic shifts between sections and topic segments
 //!   ([`topics`]).
-//! - [`SummaryDigest`] (`summary.digest@2`, Standard): the bounded **summary input** of a document
+//! - [`SummaryDigest`] (`summary.digest@3`, Standard): the bounded **summary input** of a document
 //!   of any length, 2 or 2,000 pages: card, outline, start and the salient sentences of every
 //!   section, copied verbatim, within a token budget ([`digest`]). Any model can read it;
 //!   [`digest::map_parts`] splits a very long document for a map-reduce summary.
-//! - `SummaryLlm` (`summary.llm@3`, Deep, feature `llm`, opt-in): a local GGUF model reads the
+//! - `SummaryLlm` (`summary.llm@4`, Deep, feature `llm`, opt-in): a local GGUF model reads the
 //!   digest (or, for very long documents and when configured, summarizes parts first and then
 //!   combines them) and writes `{summary, subject, title_en}` under a JSON grammar; every
 //!   output is [fact-checked](factcheck) against the card and the text it saw, and falls back

@@ -764,3 +764,56 @@ fn same_facts_with_the_shared_artifact() {
     );
     assert!(PartyCandidates.after().contains(&"normalized_text"));
 }
+
+#[test]
+fn serbian_procurement_labels_over_sentence_case_names() {
+    // A framework-agreement annex: the buyer, a public institution written in sentence case,
+    // is on the line under its label; the title line has the preposition "СА", not an S.A.
+    let doc = plain(&["НАРУЧИЛАЦ:\n\
+         Републички фонд за здравствено осигурање, ул. Цветна 12, Београд\n\
+         заступник: Петар Петровић\n\
+         Матични број: 01234567\n\
+         (у даљем тексту: Наручилац)\n\
+         ДОБАВЉАЧ:\n\
+         Лековита Биљка д.о.о., ул. Липова бр. 7, Ниш\n\
+         (у даљем тексту: Добављач)\n\
+         АНЕКС ОКВИРНОГ СПОРАЗУМА БР. 1-2/25\n\
+         ЗА ЈАВНУ НАБАВКУ ОПРЕМЕ СА УГРАДЊОМ\n\
+         Наручилац и Добављач су сагласни са изменом."]);
+    let ms = mentions(&run(doc));
+    let keys = keys_of(&ms);
+    assert!(
+        has_role(&ms, "republicki fond za zdravstveno osiguranje", "customer"),
+        "{ms:#?}"
+    );
+    assert!(has_role(&ms, "lekovita biljka", "supplier"), "{keys:?}");
+    assert!(
+        !keys
+            .iter()
+            .any(|k| k.contains("nabavku") || k.contains("opreme")),
+        "{keys:?}"
+    );
+    // Latin script: the same label shape, and a Latin S.A. is still a form.
+    let doc = plain(&["Naručilac:\nGradska uprava za imovinu, Trg Slobode 1\n\
+         Dobavljač: Acme Mlin S.A."]);
+    let ms = mentions(&run(doc));
+    assert!(
+        has_role(&ms, "gradska uprava za imovinu", "customer"),
+        "{ms:#?}"
+    );
+    let acme = by_key(&ms, "acme mlin");
+    assert!(
+        acme.iter().any(|m| m.form.as_deref() == Some("S.A.")),
+        "{ms:#?}"
+    );
+}
+
+#[test]
+fn a_label_over_running_text_is_no_party() {
+    // Sentence case after an English label, or a sentence after a Serbian one: no name.
+    let doc = plain(&["Supplier:\nSame as above, see page 2\n\
+         Dobavljač:\nDostavlja robu u roku od 30 dana od dana prijema narudžbenice.\n\
+         НАРУЧИЛАЦ\nДОБАВЉАЧ\nРепублички фонд за\nздравствено осигурање"]);
+    let ms = mentions(&run(doc));
+    assert!(ms.is_empty(), "{ms:#?}");
+}
