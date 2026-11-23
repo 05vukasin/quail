@@ -1,5 +1,5 @@
-//! The analyzers: `summary.card@3`, `summary.extractive@2`, `summary.outline@1`,
-//! `summary.keywords@1`, `summary.topics@1` and `summary.digest@2`.
+//! The analyzers: `summary.card@4`, `summary.extractive@2`, `summary.outline@1`,
+//! `summary.keywords@1`, `summary.topics@1` and `summary.digest@3`.
 
 use std::borrow::Cow;
 
@@ -52,7 +52,7 @@ pub fn term_index<'a>(ctx: &'a Ctx<'_>, out: &Emitter) -> Option<Cow<'a, TermInd
     )))
 }
 
-/// `summary.card@3`: the file card from every fact produced before it (the keywords of
+/// `summary.card@4`: the file card from every fact produced before it (the keywords of
 /// `summary.keywords` included).
 ///
 /// Emits [`keys::CARD`] (record), [`keys::CARD_TEXT`] (text, at most `max_tokens` estimated
@@ -64,7 +64,7 @@ pub struct SummaryCard {
 
 impl SummaryCard {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.card", 3);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.card", 4);
 
     /// With the default budget, [`DEFAULT_MAX_TOKENS`].
     pub const fn new() -> Self {
@@ -281,7 +281,7 @@ impl Analyzer for SummaryOutline {
     }
 }
 
-/// `summary.digest@2` (Standard): the bounded summary input for a document of any length
+/// `summary.digest@3` (Standard): the bounded summary input for a document of any length
 /// ([`crate::digest`]): card, outline, start and per-section excerpts copied verbatim.
 ///
 /// Emits [`keys::DIGEST`] (text, at most [`DigestConfig::max_tokens`] estimated tokens) and
@@ -295,7 +295,7 @@ pub struct SummaryDigest {
 
 impl SummaryDigest {
     /// Id of this analyzer.
-    pub const ID: AnalyzerId = AnalyzerId::new("summary.digest", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("summary.digest", 3);
 
     /// With the default configs, for every document with text.
     pub fn new() -> Self {

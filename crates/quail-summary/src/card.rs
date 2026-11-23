@@ -41,6 +41,9 @@ pub const MIN_CATEGORY_SCORE: f64 = 0.3;
 /// A largest amount without a role is shown only from this value up (small numbers next to a
 /// currency are usually rates, fees per unit or noise).
 pub const MIN_MAX_AMOUNT: f64 = 100.0;
+/// Role of the largest amount the text mentions when no amount has a role: not a total or a
+/// contract value (it may be an insurance limit or a penalty), so the card says only that.
+pub const LARGEST_MENTIONED: &str = "largest_mentioned";
 /// Default hard budget of the rendered card, in estimated tokens (see [`crate::tokens`]).
 pub const DEFAULT_MAX_TOKENS: usize = 300;
 
@@ -156,7 +159,7 @@ pub struct FileCard {
     pub parties_total: usize,
     /// Dates by role (`signed`, `effective`, `expires`, `issued`, `due`, or `date`).
     pub dates: Vec<(&'static str, Date)>,
-    /// Amounts by role (`total`, `net`, `gross`, or `max`).
+    /// Amounts by role (`total`, `net`, `gross`, or [`LARGEST_MENTIONED`]).
     pub amounts: Vec<(&'static str, Money)>,
     /// Currencies of all amounts, most frequent first.
     pub currencies: Vec<String>,
@@ -466,7 +469,7 @@ impl FileCard {
                 .filter(|m| main.is_none() || m.currency == main)
                 .max_by(|a, b| format::money_value(*a).total_cmp(&format::money_value(*b)));
             if let Some(m) = max.filter(|m| format::money_value(*m) >= MIN_MAX_AMOUNT) {
-                self.amounts.push(("max", m));
+                self.amounts.push((LARGEST_MENTIONED, m));
             }
         }
         self.amounts.truncate(MAX_AMOUNTS);

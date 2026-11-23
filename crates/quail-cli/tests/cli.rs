@@ -653,7 +653,7 @@ fn keys_and_version() {
             "summary.extractive@2",
             "summary.outline@1",
             "summary.keywords@1",
-            "summary.card@3",
+            "summary.card@4",
             "summary.topics@1",
         ]);
     }

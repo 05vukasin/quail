@@ -64,6 +64,7 @@ fn main() -> ExitCode {
         text_head: head,
         lang: Some("en"),
         deadline: None,
+        document: None,
     };
     match llm.summarize_with_stats(&input) {
         Ok((s, st)) => {

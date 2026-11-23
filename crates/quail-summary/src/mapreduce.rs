@@ -47,13 +47,16 @@ pub struct MapReduce {
 
 /// Summarizes `parts` with `generate(step, user_message)` (see the module docs).
 ///
-/// `card_text` is the card, `outline` the rendered outline, `lang` the document language.
+/// `card_text` is the card, `outline` the rendered outline, `doc_sources` the document's text
+/// for the reduce step's fact check (empty: the card, outline and parts only), `lang` the
+/// document language.
 /// Fails only when the reduce call fails or its output is no valid JSON; a summary that fails
 /// the fact check comes back with `checked = false` and a warning.
 pub fn map_reduce(
     card_text: &str,
     outline: &str,
     parts: &[MapPart],
+    doc_sources: &[&str],
     lang: Option<&str>,
     generate: &mut dyn FnMut(Step, &str) -> Result<String>,
 ) -> Result<MapReduce> {
@@ -98,6 +101,7 @@ pub fn map_reduce(
     sources.extend(parts.iter().map(|p| p.body.as_str()));
     sources.extend(parts.iter().map(|p| p.title.as_str()));
     sources.extend(summaries.iter().map(|(_, s)| s.as_str()));
+    sources.extend_from_slice(doc_sources);
     let mut fc = factcheck::check(&format!("{} {}", out.summary, out.subject), &sources, true);
     let title = factcheck::check(&out.title_en, &sources, false);
     fc.claims += title.claims;
@@ -187,6 +191,7 @@ mod tests {
             "doc: book",
             "- Storage (pp. 1-10)",
             &parts,
+            &[],
             Some("en"),
             &mut generate,
         )
@@ -207,7 +212,7 @@ mod tests {
                 Step::Reduce => r#"{"summary": "A book of 900 pages on storage.", "subject": "x", "title_en": "x"}"#.into(),
             })
         };
-        let r = map_reduce("doc: book", "", &parts, None, &mut bad).unwrap();
+        let r = map_reduce("doc: book", "", &parts, &[], None, &mut bad).unwrap();
         assert!(!r.summary.checked);
         assert!(
             r.summary.warnings.iter().any(|w| w.contains("number:900")),

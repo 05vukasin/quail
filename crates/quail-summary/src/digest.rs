@@ -312,7 +312,8 @@ pub fn build_with_terms(
     if !lead.is_empty() {
         let _ = write!(body, "START:\n{lead}\n\n");
     }
-    let groups = groups(doc, outline, max_groups(cfg, max));
+    let mut back = back_matter(doc);
+    let groups = groups(doc, outline, max_groups(cfg, max), &mut back);
     let header = "EXCERPTS (sentences copied from each section):\n";
     let fixed = facts_tokens + tokens::estimate(&body) + tokens::estimate(header);
     let kws: Vec<Vec<String>> = match terms {
@@ -334,7 +335,11 @@ pub fn build_with_terms(
         })
         .sum();
     let avail = max.saturating_sub(fixed + titles + 8);
-    let (mut sections, truncated) = select(doc, &groups, None, avail, &lead, cfg, deadline);
+    let scope = Scope {
+        back: &back,
+        fill: true,
+    };
+    let (mut sections, truncated) = select(doc, &groups, None, avail, &lead, cfg, scope, deadline);
     for (s, k) in sections.iter_mut().zip(kws) {
         s.keywords = k;
     }
@@ -439,6 +444,121 @@ fn lead_text(doc: &Document, budget: usize) -> String {
     tokens::head(&s, budget).to_owned()
 }
 
+/// Documents shorter than this have no back matter worth skipping (a contract's page that
+/// starts with "References" is a clause).
+const MIN_BACK_MATTER_PAGES: usize = 20;
+
+/// Titles of back matter, folded: what follows the body of a book or report and says nothing
+/// new about it (English, Serbian, Croatian), up to the colophon.
+const BACK_TITLES: &[&str] = &[
+    "index",
+    "subject index",
+    "glossary",
+    "references",
+    "bibliography",
+    "endnotes",
+    "works cited",
+    "indeks",
+    "literatura",
+    "bibliografija",
+    "pojmovnik",
+    "about the author",
+    "about the authors",
+    "colophon",
+];
+
+/// Back matter only in a running head (`Notes | 412`), where they are a book's endnotes; a
+/// heading "Notes" alone is often the notes to financial statements.
+const BACK_RUNNING: &[&str] = &["notes", "napomene"];
+
+/// `line` is a back-matter title; `running` when it is a page's first or last line, where a
+/// running head adds a page number and a bar (`Index | 211`, `212 | Index`).
+fn back_title(line: &str, running: bool) -> bool {
+    let t = line.trim();
+    let core = t.trim_matches(|c: char| c.is_ascii_digit() || c.is_whitespace() || c == '|');
+    if core.is_empty() || core.len() > 24 {
+        return false;
+    }
+    let f = folded(core);
+    let f = f.trim();
+    let decorated = running && core.len() < t.len() && t.contains('|');
+    BACK_TITLES.contains(&f) || (decorated && BACK_RUNNING.contains(&f))
+}
+
+/// An index line: words, then page numbers (`queue handling, 245, 327`,
+/// `history of, 101-140`), or a cross-reference (`(see also message brokers)`).
+fn index_line(l: &str) -> bool {
+    if l.starts_with("(see ") && l.ends_with(')') {
+        return true;
+    }
+    let Some((head, last)) = l.rsplit_once(", ") else {
+        return false;
+    };
+    let page = |s: &str| !s.is_empty() && s.len() <= 4 && s.bytes().all(|b| b.is_ascii_digit());
+    let last = last.trim_end();
+    let pages = match last.split_once(['-', '\u{2013}']) {
+        Some((a, b)) => page(a) && page(b),
+        None => page(last),
+    };
+    pages && head.chars().any(char::is_alphabetic)
+}
+
+/// A reference-list line: `[12] Author: "Title," …`.
+fn reference_line(l: &str) -> bool {
+    l.strip_prefix('[')
+        .and_then(|r| r.split_once(']'))
+        .is_some_and(|(n, rest)| {
+            (1..=4).contains(&n.len())
+                && n.bytes().all(|b| b.is_ascii_digit())
+                && rest.starts_with(' ')
+        })
+}
+
+/// A page of back matter: its running head or first line names it, or it is an index (40 % of
+/// its lines end in page numbers) or a reference list (20 % of its lines open with `[n]`).
+fn back_matter_page(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if let (Some(first), Some(last)) = (lines.first(), lines.last())
+        && (back_title(first, true) || back_title(last, true))
+    {
+        return true;
+    }
+    let n = lines.len();
+    if n < 8 {
+        return false;
+    }
+    let index = lines.iter().filter(|l| index_line(l)).count();
+    let refs = lines.iter().filter(|l| reference_line(l)).count();
+    index * 10 >= n * 4 || (refs >= 3 && refs * 10 >= n * 2)
+}
+
+/// Which pages of `doc` (by position) are back matter ([`back_matter_page`]); empty when the
+/// document is short or when most of it would be (a bibliography is its own subject).
+fn back_matter(doc: &Document) -> Vec<bool> {
+    if doc.pages.len() < MIN_BACK_MATTER_PAGES {
+        return Vec::new();
+    }
+    let back: Vec<bool> = doc
+        .pages
+        .iter()
+        .map(|p| back_matter_page(&p.text))
+        .collect();
+    let with_text = doc
+        .pages
+        .iter()
+        .filter(|p| !p.text.trim().is_empty())
+        .count();
+    let n_back = back.iter().filter(|&&b| b).count();
+    if n_back == 0 || n_back * 2 > with_text {
+        return Vec::new();
+    }
+    back
+}
+
 /// Position in `doc.pages` of the page with index `index`.
 fn position(doc: &Document, index: u32) -> usize {
     match doc.pages.get(index as usize) {
@@ -455,7 +575,7 @@ fn position(doc: &Document, index: u32) -> usize {
 /// `max` of them (one level deeper when that gives fewer than a third of `max`), an opening
 /// section before the first heading when it starts after page 1,
 /// consecutive sections merged by size when there are still too many.
-fn groups(doc: &Document, outline: &Outline, max: usize) -> Vec<Group> {
+fn groups(doc: &Document, outline: &Outline, max: usize, back: &mut [bool]) -> Vec<Group> {
     let entries = &outline.entries;
     let max_level = entries.iter().map(|e| e.level).max().unwrap_or(1);
     let count = |l: u8| entries.iter().filter(|e| e.level <= l).count();
@@ -504,13 +624,19 @@ fn groups(doc: &Document, outline: &Outline, max: usize) -> Vec<Group> {
     if let Some(g) = gs.first_mut() {
         g.start = (0, 0);
     }
-    // Sizes: bytes from each start to the next.
     let n = doc.pages.len();
+    mark_back_sections(&gs, back);
+    // Sizes: bytes from each start to the next, back matter left out.
+    let mut has_back = vec![false; gs.len()];
     for i in 0..gs.len() {
         let (p0, o0) = gs[i].start;
         let (p1, o1) = gs.get(i + 1).map_or((n, 0), |g| g.start);
         let mut bytes = 0;
         for pos in p0..n.min(p1 + 1) {
+            if back.get(pos).copied().unwrap_or(false) {
+                has_back[i] = true;
+                continue;
+            }
             let len = doc.pages[pos].text.len();
             let a = if pos == p0 { o0.min(len) } else { 0 };
             let b = if pos == p1 { o1.min(len) } else { len };
@@ -518,11 +644,28 @@ fn groups(doc: &Document, outline: &Outline, max: usize) -> Vec<Group> {
         }
         gs[i].bytes = bytes;
     }
+    // Sections of back matter only are dropped (the pages stay skipped).
+    if has_back.iter().any(|&b| b) && gs.iter().zip(&has_back).any(|(g, &b)| !b || g.bytes > 0) {
+        gs = gs
+            .into_iter()
+            .zip(has_back)
+            .filter(|(g, b)| !*b || g.bytes > 0)
+            .map(|(g, _)| g)
+            .collect();
+    }
     if gs.len() > max {
         gs = merge(gs, max);
     }
-    // Contiguous page ranges: each section ends where the next one starts.
-    let last = doc.pages.last().map_or(0, |p| p.index);
+    // Contiguous page ranges: each section ends where the next one starts (the last one at
+    // the last page that is not back matter).
+    let last = doc
+        .pages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(pos, _)| !back.get(*pos).copied().unwrap_or(false))
+        .or_else(|| doc.pages.last().map(|p| (0, p)))
+        .map_or(0, |(_, p)| p.index);
     for i in 0..gs.len() {
         let end = match gs.get(i + 1) {
             Some(n) if n.opens && n.page > gs[i].page => n.page - 1,
@@ -532,6 +675,21 @@ fn groups(doc: &Document, outline: &Outline, max: usize) -> Vec<Group> {
         gs[i].end_page = end.max(gs[i].page);
     }
     gs
+}
+
+/// A back-matter heading ("Index", "References") makes the pages of its section back matter
+/// (when back matter is recognized at all, `back` not empty).
+fn mark_back_sections(gs: &[Group], back: &mut [bool]) {
+    let n = back.len();
+    for (i, g) in gs.iter().enumerate() {
+        if g.start != (0, 0) && back_title(&g.title, false) {
+            let a = g.start.0 + usize::from(!g.opens);
+            let b = gs.get(i + 1).map_or(n, |g| g.start.0);
+            for k in back.iter_mut().take(b.min(n)).skip(a) {
+                *k = true;
+            }
+        }
+    }
 }
 
 /// Merges consecutive sections into `max` groups of similar size.
@@ -575,11 +733,15 @@ fn units<'a>(
     next: Option<&Group>,
     max: usize,
     max_bytes: usize,
+    back: &[bool],
 ) -> Vec<Unit<'a>> {
     let (p0, o0) = g.start;
     let (p1, o1) = next.map_or((doc.pages.len(), 0), |n| n.start);
     let mut all: Vec<Unit<'a>> = Vec::new();
     for pos in p0..doc.pages.len().min(p1 + 1) {
+        if back.get(pos).copied().unwrap_or(false) {
+            continue;
+        }
         let p = &doc.pages[pos];
         let lo = if pos == p0 { o0 } else { 0 };
         let hi = if pos == p1 { o1 } else { usize::MAX };
@@ -902,9 +1064,20 @@ const REDUNDANCY_WINDOW: usize = 64;
 /// A sentence this similar to a picked one (Jaccard of content words) is a repeat.
 const REPEAT: f64 = 0.6;
 
+/// Where [`select`] reads and what it may add.
+#[derive(Clone, Copy)]
+struct Scope<'a> {
+    /// Back-matter pages by position ([`back_matter`]), skipped.
+    back: &'a [bool],
+    /// Budget no sentence used goes to the paragraphs of sections that are mostly not prose
+    /// ([`fill_structured`]).
+    fill: bool,
+}
+
 /// Picks the sentences of every group within `avail` tokens; `after` is the group that
 /// follows the last one (the end of its range), if any.
 #[allow(clippy::too_many_lines)] // one pass: candidates, frequencies, budgets, picks
+#[allow(clippy::too_many_arguments)]
 fn select(
     doc: &Document,
     groups: &[Group],
@@ -912,6 +1085,7 @@ fn select(
     avail: usize,
     lead: &str,
     cfg: &DigestConfig,
+    scope: Scope<'_>,
     deadline: Option<Instant>,
 ) -> (Vec<DigestSection>, bool) {
     let mut truncated = false;
@@ -919,10 +1093,12 @@ fn select(
     let phrases = PhraseIndex::new();
     // Candidates of every group.
     let mut cands: Vec<Vec<Cand>> = Vec::with_capacity(groups.len());
+    let mut all_units: Vec<Vec<Unit<'_>>> = Vec::with_capacity(groups.len());
     for (i, g) in groups.iter().enumerate() {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             truncated = true;
             cands.push(Vec::new());
+            all_units.push(Vec::new());
             continue;
         }
         let next = groups.get(i + 1).or(after);
@@ -932,6 +1108,7 @@ fn select(
             next,
             cfg.units_per_group.max(1),
             cfg.bytes_per_group,
+            scope.back,
         );
         cands.push(candidates(
             &us,
@@ -940,6 +1117,7 @@ fn select(
             &mut vocab,
             &phrases,
         ));
+        all_units.push(us);
     }
     // Section frequency of every term.
     let mut df = vec![0u32; vocab.len()];
@@ -974,6 +1152,7 @@ fn select(
     let mut picked: Vec<Vec<u32>> = Vec::new();
     let mut tf = vec![0u32; vocab.len()];
     let mut sections: Vec<DigestSection> = Vec::with_capacity(groups.len());
+    let mut chosen_units: Vec<Vec<usize>> = Vec::with_capacity(groups.len());
     let mut leftover = 0usize;
     for (gi, (gr, cs)) in groups.iter().zip(&cands).enumerate() {
         // Scores: keyword coverage x position prior x cue / penalties.
@@ -1056,6 +1235,7 @@ fn select(
         // Unused budget goes to the next section.
         leftover = budget.saturating_sub(used);
         chosen.sort_by_key(|&i| cs[i].order);
+        chosen_units.push(chosen.iter().map(|&i| cs[i].unit).collect());
         sections.push(DigestSection {
             title: gr.title.clone(),
             page: gr.page,
@@ -1073,7 +1253,142 @@ fn select(
             keywords: Vec::new(),
         });
     }
+    if scope.fill && leftover > 0 {
+        let ctx = FillInput {
+            doc,
+            groups,
+            after,
+            back: scope.back,
+            units: &all_units,
+            cands: &cands,
+            chosen: &chosen_units,
+            budgets: &budgets,
+            lead,
+        };
+        fill_structured(&mut sections, &ctx, leftover);
+    }
     (sections, truncated)
+}
+
+/// Sections whose candidate sentences hold less than this share of their sampled text are
+/// mostly not prose: tables, forms, invoices.
+const PROSE_SHARE: f64 = 0.3;
+/// Fewest tokens worth a paragraph excerpt of [`fill_structured`].
+const MIN_FILL_TOKENS: usize = 12;
+
+/// What [`fill_structured`] reads, per section of [`select`].
+struct FillInput<'a, 'd> {
+    doc: &'d Document,
+    groups: &'a [Group],
+    after: Option<&'a Group>,
+    back: &'a [bool],
+    /// The sampled paragraphs the sentences came from.
+    units: &'a [Vec<Unit<'d>>],
+    cands: &'a [Vec<Cand>],
+    /// Paragraph of each picked sentence, in excerpt order.
+    chosen: &'a [Vec<usize>],
+    budgets: &'a [usize],
+    lead: &'a str,
+}
+
+/// Spends `spare` tokens (budget no sentence used) on the sections that are mostly not prose,
+/// in proportion to their budgets: their paragraphs in order, copied verbatim (the last one
+/// cut at a word), skipping what the start of the text or a picked sentence already shows. An
+/// invoice has few sentences; without this its digest would be the start of its first page.
+fn fill_structured(sections: &mut [DigestSection], inp: &FillInput<'_, '_>, spare: usize) {
+    let opts = flat();
+    #[allow(clippy::cast_precision_loss)] // byte counts of a sampled section
+    let structured: Vec<bool> = inp
+        .units
+        .iter()
+        .zip(inp.cands)
+        .map(|(us, cs)| {
+            let text: usize = us.iter().map(|u| u.text.len()).sum();
+            let prose: usize = cs.iter().map(|c| c.text.len()).sum();
+            text > 0 && (prose as f64) < PROSE_SHARE * text as f64
+        })
+        .collect();
+    let weight: usize = inp
+        .budgets
+        .iter()
+        .zip(&structured)
+        .filter_map(|(b, s)| s.then_some(*b))
+        .sum();
+    if weight == 0 {
+        return;
+    }
+    let mut carry = 0usize;
+    for (i, s) in sections.iter_mut().enumerate() {
+        if !structured.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let (Some(g), Some(sampled)) = (inp.groups.get(i), inp.units.get(i)) else {
+            continue;
+        };
+        let given = spare * inp.budgets.get(i).copied().unwrap_or(0) / weight + carry;
+        let mut left = given;
+        // Sorted by where the paragraph starts: its page, then its address in the page text.
+        let at = |u: &Unit<'_>| (u.page, u.text.as_ptr() as usize);
+        let mut all: Vec<((u32, usize), Excerpt)> = inp
+            .chosen
+            .get(i)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .map(|&u| sampled.get(u).map_or((0, 0), at))
+            .zip(s.excerpts.drain(..))
+            .collect();
+        let picked: Vec<String> = all.iter().map(|(_, e)| e.text.clone()).collect();
+        // Every paragraph in order, not the sample: a table reads top to bottom.
+        let next = inp.groups.get(i + 1).or(inp.after);
+        let us = units(inp.doc, g, next, usize::MAX, usize::MAX, inp.back);
+        for unit in &us {
+            if left < MIN_FILL_TOKENS {
+                break;
+            }
+            let norm = normalize(unit.text, &opts);
+            let t = after_lead(norm.trim(), inp.lead);
+            if t.is_empty() || inp.lead.contains(t) || picked.iter().any(|p| t.contains(p.as_str()))
+            {
+                continue;
+            }
+            let text = tokens::head(t, left);
+            if text.is_empty() {
+                break;
+            }
+            left = left.saturating_sub(tokens::estimate(text));
+            all.push((
+                at(unit),
+                Excerpt {
+                    text: text.to_owned(),
+                    page: unit.page,
+                },
+            ));
+        }
+        all.sort_by_key(|(u, _)| *u);
+        s.excerpts = all.into_iter().map(|(_, e)| e).collect();
+        s.budget += given - left;
+        carry = left;
+    }
+}
+
+/// `t` without the part the start of the text (`lead`, a prefix of the document) already
+/// shows: a paragraph that begins inside the lead continues after its end.
+fn after_lead<'a>(t: &'a str, lead: &str) -> &'a str {
+    let mut k = t.len().min(32);
+    while k > 0 && !t.is_char_boundary(k) {
+        k -= 1;
+    }
+    if k == 0 {
+        return t;
+    }
+    let Some(pos) = lead.find(&t[..k]) else {
+        return t;
+    };
+    let overlap = lead.len() - pos;
+    match (t.get(..overlap), t.get(overlap..)) {
+        (Some(head), Some(rest)) if head == &lead[pos..] => rest.trim_start(),
+        _ => t,
+    }
 }
 
 /// Settings of the hierarchical (map-reduce) summary of very long documents.
@@ -1132,7 +1447,12 @@ pub fn map_parts(
     if u32::try_from(doc.pages.len()).unwrap_or(u32::MAX) < mr.min_pages {
         return Vec::new();
     }
-    let gs = groups(doc, outline, parts * 4);
+    let mut back = back_matter(doc);
+    let gs = groups(doc, outline, parts * 4, &mut back);
+    let scope = Scope {
+        back: &back,
+        fill: false,
+    };
     if gs.is_empty() {
         return Vec::new();
     }
@@ -1161,7 +1481,8 @@ pub fn map_parts(
             .map(|g| tokens::estimate(&section_title(&g.title, g.page, g.end_page)) + 1)
             .sum();
         let avail = mr.part_tokens.saturating_sub(titles + 4);
-        let (sections, truncated) = select(doc, slice, gs.get(b + 1), avail, "", cfg, deadline);
+        let (sections, truncated) =
+            select(doc, slice, gs.get(b + 1), avail, "", cfg, scope, deadline);
         let mut body = String::new();
         for s in &sections {
             body.push_str(&section_title(&s.title, s.page, s.end_page));
@@ -1298,7 +1619,7 @@ mod tests {
     fn merges_sections_when_there_are_too_many() {
         let d = book(40, 2);
         let o = outline(&d, &OutlineConfig::default(), None);
-        let gs = groups(&d, &o, 16);
+        let gs = groups(&d, &o, 16, &mut back_matter(&d));
         assert!((12..=16).contains(&gs.len()), "{}", gs.len());
         assert!(gs[0].title.ends_with("more)"), "{}", gs[0].title);
         let total: usize = d.pages.iter().map(|p| p.text.len()).sum();
@@ -1336,6 +1657,133 @@ mod tests {
             !build(&d, "doc: book pages=480", &o, &cfg, None)
                 .text
                 .contains("keywords: ")
+        );
+    }
+
+    /// `book(chapters, pages)` followed by `index` pages of an index ("term, 12, 40-44")
+    /// with a running foot, then a colophon.
+    fn book_with_index(chapters: usize, pages: usize, index: usize) -> Document {
+        let mut d = book(chapters, pages);
+        for k in 0..index {
+            let mut t = String::new();
+            for j in 0..30 {
+                let _ = writeln!(t, "term{k}x{j} handling, {}, {}-{}", j + 3, j + 40, j + 44);
+            }
+            let _ = writeln!(t, "Index | {}", 600 + k);
+            let i = u32::try_from(d.pages.len()).unwrap();
+            d.pages.push(Page {
+                text: t,
+                text_source: TextSource::Native,
+                ..Page::new(i, PageKind::Physical)
+            });
+        }
+        let i = u32::try_from(d.pages.len()).unwrap();
+        d.pages.push(Page {
+            text: "About the Author\nThe author writes about records and queues for a living."
+                .to_owned(),
+            text_source: TextSource::Native,
+            ..Page::new(i, PageKind::Physical)
+        });
+        d
+    }
+
+    #[test]
+    fn back_matter_pages_are_recognized() {
+        assert!(back_matter_page("Glossary\nA term.\nAnother term."));
+        assert!(back_matter_page("some text\nmore text\n212 | Glossary"));
+        assert!(back_matter_page("endnote text\nmore\nNotes | 412"));
+        // "Notes" alone heads the notes to financial statements: not back matter.
+        assert!(!back_matter_page(
+            "Notes\n1. Accounting policies\nThe accounts are prepared."
+        ));
+        let refs = "[1] A. Author: \"A Paper,\" 2015.\nvenue\n[2] B. Author: \"Another,\" 2016.\n\
+                    venue\n[3] C. Author: \"Third,\" 2017.\nvenue\n[4] D. Author, 2018.\nvenue";
+        assert!(back_matter_page(refs));
+        // Accounts with thousands separators are no index.
+        let mut accounts = String::new();
+        for i in 0..12 {
+            let _ = writeln!(accounts, "Cash at bank {i},234 5,{i}78");
+        }
+        assert!(!back_matter_page(&accounts));
+        assert!(index_line("queue handling, 245, 327"));
+        assert!(index_line("history of, 101-140"));
+        assert!(index_line("(see also message brokers)"));
+        assert!(!index_line("Belgrade, 11000"));
+        // Short documents are left alone.
+        assert!(back_matter(&book_with_index(2, 3, 2)).is_empty());
+    }
+
+    #[test]
+    fn back_matter_is_skipped_in_digest_and_parts() {
+        let d = book_with_index(12, 6, 8);
+        let n = d.pages.len();
+        let back = back_matter(&d);
+        assert_eq!(back.iter().filter(|&&b| b).count(), 9, "{back:?}");
+        let o = outline(&d, &OutlineConfig::default(), None);
+        let cfg = DigestConfig::default();
+        let g = build(&d, "doc: book", &o, &cfg, None);
+        let body_end = u32::try_from(n - 10).unwrap();
+        for s in &g.sections {
+            assert!(s.end_page <= body_end, "{} {}", s.title, s.end_page);
+            for e in &s.excerpts {
+                assert!(e.page <= body_end && !e.text.contains("term"), "{e:?}");
+            }
+        }
+        assert!(g.verbatim(&d).is_empty());
+        let mr = MapReduceConfig {
+            min_pages: 20,
+            ..MapReduceConfig::default()
+        };
+        let parts = map_parts(&d, &o, &cfg, &mr, None);
+        assert!(!parts.is_empty());
+        assert!(parts.iter().all(|p| !p.body.contains("term")));
+        assert_eq!(parts.last().map(|p| p.end_page), Some(body_end));
+    }
+
+    #[test]
+    fn structured_text_fills_the_unused_budget() {
+        // An invoice: a header block and table rows, no sentence a model could be given.
+        let mut pages = Vec::new();
+        for p in 0..6u32 {
+            let mut t = format!(
+                "INVOICE\nPage {} of 6\nAdvertiser Northwind Foods\nInvoice Period 03/27/15 - \
+                 04/19/15\nStation KXYZ\n",
+                p + 1
+            );
+            for r in 0..40 {
+                let _ = writeln!(
+                    t,
+                    "{} KXYZ Evening News M-F 5p-6p 05/{:02}/14 :30 $1,{r}00.00",
+                    p * 40 + r,
+                    r % 28 + 1
+                );
+            }
+            pages.push(Page {
+                text: t,
+                text_source: TextSource::Native,
+                ..Page::new(p, PageKind::Physical)
+            });
+        }
+        let d = Document { pages };
+        let o = outline(&d, &OutlineConfig::default(), None);
+        let cfg = DigestConfig {
+            max_tokens: 1600,
+            ..DigestConfig::default()
+        };
+        let g = build(&d, "doc: invoice", &o, &cfg, None);
+        assert_eq!(g.method, DigestMethod::Excerpts);
+        assert!(g.tokens > 1200 && g.tokens <= 1600, "{}", g.tokens);
+        assert!(g.body.contains("Evening News"), "{}", g.body);
+        assert!(g.verbatim(&d).is_empty());
+        // Prose leaves its budget to sentences: the book's digest has no paragraph fill.
+        let b = book(12, 10);
+        let bo = outline(&b, &OutlineConfig::default(), None);
+        let bg = build(&b, "doc: book", &bo, &cfg, None);
+        assert!(
+            bg.sections
+                .iter()
+                .flat_map(|s| &s.excerpts)
+                .all(|e| e.text.ends_with('.'))
         );
     }
 
