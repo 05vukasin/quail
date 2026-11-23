@@ -210,10 +210,9 @@ impl<'e> PageCapture<'e> {
     }
 }
 
-/// Of one run's cased letters (`(letter, glyph id)`: a run has one font, so the id names
-/// the glyph), how
-/// many show a letter that two or more different glyphs map to. Within a run all glyphs come
-/// from one font, and a font draws each letter with one glyph: when two glyphs map to the
+/// Of one run's cased letters (`(letter, glyph id)`), how many show a letter that two or
+/// more different glyphs map to. Within a run all glyphs come from one font (so the id names
+/// the glyph), and a font draws each letter with one glyph: when two glyphs map to the
 /// same letter, the font's `ToUnicode` maps one of them wrong (Word 2010 writes `bfrange`s
 /// across gaps in the glyph order, so `о` comes out as `п` and `њ` as `о`), and the text
 /// layer says something else than the page shows. Uncased scripts are left out: Arabic and
