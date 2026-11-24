@@ -12,14 +12,14 @@ inside the decoders. See [`vendor/README.md`](../../vendor/README.md).
 
 ## Extractor
 
-`PdfExtractor` has the id `pdf.extract@2` and handles `Format::Pdf`. It produces:
+`PdfExtractor` has the id `pdf.extract@3` and handles `Format::Pdf`. It produces:
 
 - `Document`: one `Page` (`PageKind::Physical`) per page up to `limits.max_pages`. Each page has:
   - `size` in points, after rotation.
   - `text` in reading order: blocks are ordered by a recursive XY-cut, so two columns read one column at a time.
   - `blocks`: paragraph groups of lines, each with a `Span` into the text and a `BBox` (points, top-left origin), and `lines`: the measured visual lines of the paragraph (`LineBox`: span within the block, box from the glyphs), in reading order.
   - `zone`: `Header` or `Footer` by geometry (top or bottom 6 % band) or by repetition (the same text, digits ignored, in the top or bottom 15 % band on enough pages). Everything else is `Body`.
-  - `text_source` (`Native` or `None`) and `needs_ocr`. A page needs OCR when it has no text but has images or heavy vector drawing, when it is mostly an image with little text, or when `quail-text`'s `garbage_report` says `Garbage`. That covers unmapped and private-use glyphs, mojibake, implausible words, an unnatural vowel share, and Cyrillic read as Latin look-alikes (`OKBMPHM CnOPA3YM`).
+  - `text_source` (`Native` or `None`) and `needs_ocr`. A page needs OCR when it has no text but has images or heavy vector drawing, when it is mostly an image with little text, or when `quail-text`'s `garbage_report` says `Garbage`. That covers unmapped and private-use glyphs, mojibake, implausible words, an unnatural vowel share, and Cyrillic read as Latin look-alikes (`OKBMPHM CnOPA3YM`). A page also needs OCR when its font maps two different glyphs to the same letter for at least 40 letters and 3 % of its characters: a broken `ToUnicode` (Word 2010 writes ranges across gaps in the glyph order, so `моторних возила` reads `мптпрних впзила`), which the text checks cannot see. Only visible text on pages that are not mostly an image is checked, because capture fonts of OCR'd scans draw each letter with several glyphs.
     - A layer of unreadable glyphs (`broken_ratio()` or unmapped glyphs above 0.35) is dropped (`text_source = None`).
     - A look-alike layer keeps its `Native` text, whose digits and layout are right, with `needs_ocr = true`. `ocr.pages` then replaces it in the revised document (`OcrText::apply_to` replaces every page with `needs_ocr`). Without OCR, `text.lang` skips such pages, and the other text analyzers still read the layer.
   - `images` (core `PageImage`: page box and pixel size, first 64 per page) and `image_coverage`, so `Page::is_scan()` works.

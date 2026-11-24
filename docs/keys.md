@@ -22,7 +22,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `engine.dedup@1` | engine | any | - | `scan --dedup` only: a file whose bytes were already analyzed in the run reuses that record (`engine.duplicate_of`). |
 | `hash.identity@1` | analyzer | any | fast | BLAKE3 and XXH3-128 of the whole file, FastCDC chunk hashes. |
 | `docx.extract@1` | extractor | docx | fast | Streaming OOXML reader: sections as logical pages, zones, properties, rsids. |
-| `pdf.extract@2` | extractor | pdf | fast | Pure-Rust PDF reader: positioned text in reading order, zones, images, OCR flags, raster. |
+| `pdf.extract@3` | extractor | pdf | fast | Pure-Rust PDF reader: positioned text in reading order, zones, images, OCR flags, raster. |
 | `text.extract@1` | extractor | text | fast | Plain text: encoding (BOM, UTF-8/16, chardetng legacy guess), LF line endings, form-feed pages, paragraphs and headings. |
 | `text.stats@3` | analyzer | any | fast | Characters, words, scripts and garbage ratio of the extracted text. |
 | `text.lang@2` | analyzer | any | fast | Document language with top candidates (lingua + sr/hr/bs layer). |

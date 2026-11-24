@@ -1,6 +1,6 @@
 //! PDF extractor for quail.
 //!
-//! [`PdfExtractor`] (`pdf.extract@2`) turns a PDF into a [`Document`](quail_core::Document):
+//! [`PdfExtractor`] (`pdf.extract@3`) turns a PDF into a [`Document`](quail_core::Document):
 //! one physical [`Page`](quail_core::Page) per page with its size, its text in reading order
 //! and paragraph [`Block`](quail_core::Block)s carrying boxes (points, top-left origin) and
 //! zones (header/footer by geometry and repetition, body otherwise), and the images it draws.
