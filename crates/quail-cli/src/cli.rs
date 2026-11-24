@@ -22,7 +22,8 @@ pub enum Command {
     // Boxed: ScanArgs is ~290 bytes on Windows (larger PathBuf), far above the others.
     Scan(Box<ScanArgs>),
     /// Process one file and pretty-print its record (and, with --text, its pages).
-    Inspect(InspectArgs),
+    // Boxed for the same reason as Scan: with `ocr` and `llm-api` its flags make it the largest.
+    Inspect(Box<InspectArgs>),
     /// List every fact key and step this build knows, with one-line docs.
     Keys(KeysArgs),
     /// Versions of every step: the pipeline fingerprint used for re-indexing decisions.
