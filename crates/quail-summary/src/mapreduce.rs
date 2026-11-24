@@ -124,6 +124,7 @@ pub fn map_reduce(
             method: Method::Llm,
             checked,
             warnings,
+            usage: crate::summarizer::Usage::default(),
         },
         calls,
         map_fallbacks: fallbacks,

@@ -5,8 +5,9 @@ what an agent reads first about a file (~100–300 tokens); the summary says in 
 the document is. Both are built from the facts of the other crates and the start of the text,
 deterministically and without a model. For documents of **any length** (2 or 2,000 pages) the
 crate also builds the document's outline and a bounded **digest**: the input a small local model
-needs to summarize it. An optional local LLM (feature `llm`, opt-in) writes a more fluent
-abstract from the digest (or part by part, map-reduce), which is fact-checked before it is used.
+needs to summarize it. An optional LLM (opt-in: a local model with feature `llm`, or a model
+behind an HTTP API with feature `api`) writes a more fluent abstract from the digest (or part
+by part, map-reduce), which is fact-checked before it is used.
 
 Summaries are always in English. Names, numbers and identifiers are copied verbatim, in their
 original script; a non-English subject sentence is quoted and marked with its language.
@@ -21,9 +22,7 @@ original script; a non-English subject sentence is quoted and marked with its la
 | `summary.keywords@1` (`SummaryKeywords`) | Fast | same; provides `summary_terms` | `summary.keywords` |
 | `summary.topics@1` (`SummaryTopics`) | Standard | `document` / same + `summary_terms` | `summary.topics` |
 | `summary.digest@3` (`SummaryDigest`) | Standard | `document` / same + `summary_terms` | `summary.digest`, `summary.digest_tokens` |
-| `summary.llm@4` (`SummaryLlm`, feature `llm`) | Deep, opt-in | `document` / `revised_document ocr_text raster normalized_text` | `summary.keywords` | list of records `term key score count first_page entities?`, best first (below) |
-| `summary.topics` | record `method threshold sections segments truncated?`: `sections` list of `title page end_page keywords shift`, `segments` list of `title first sections page end_page keywords shift` (pages zero-based, `first` = index of the segment's first section) |
-| `summary.llm` |
+| `summary.llm@5` (`SummaryLlm`, feature `llm` or `api`) | Deep, opt-in | `document` / `revised_document ocr_text raster normalized_text` | `summary.llm` |
 
 **Ordering.** They read `ctx.facts`, so they must run after every fact producer. All of them are
 finalizers (`Analyzer::finalizer`): the engine runs them after every non-finalizer step,
@@ -51,7 +50,9 @@ budget and a minimum document size).
 | `summary.outline` | record `method total pages sections truncated?`: `method` `headings` / `windows`, `total` headings found, `sections` list of `title level page end_page source` (pages zero-based; `source` `block` / `keyword` / `numbered` / `capitals` / `size` / `window`) |
 | `summary.digest` | Text: the bounded model input, at most 2,000 estimated tokens by default (below) |
 | `summary.digest_tokens` | Int: estimated tokens of `summary.digest` |
-| `summary.llm` | record `text subject? title_en? method model checked cached input calls` (`method`: `llm` / `extractive_fallback`; `input`: `digest` / `map_reduce`) |
+| `summary.keywords` | list of records `term key score count first_page entities?`, best first (below) |
+| `summary.topics` | record `method threshold sections segments truncated?`: `sections` list of `title page end_page keywords shift`, `segments` list of `title first sections page end_page keywords shift` (pages zero-based, `first` = index of the segment's first section) |
+| `summary.llm` | record `text subject? title_en? method model checked cached input calls prompt_tokens? output_tokens?` (`method`: `llm` / `extractive_fallback`; `input`: `digest` / `map_reduce`; `model`: the local model id or `<provider>:<model>`; tokens as the runtime or API reported them, summed over the calls, absent when cached) |
 
 `summary.card` fields, in this order:
 
@@ -285,7 +286,7 @@ EXCERPTS (sentences copied from each section):
   loading, Apache-2.0): `default` = Qwen3.5-2B `Q4_K_M` (1.28 GB), `small` = Qwen3.5-0.8B `Q4_K_M`
   (0.53 GB). `cargo run -p quail-summary --features fetch --example fetch_models -- [small|default|all] [DIR]`;
   the directory is `$QUAIL_LLM_MODELS` or the user cache (`quail/llm-models`).
-- Prompt (version 2): fixed instructions first, then the card text and the digest body
+- Prompt (version 3): fixed instructions first, then the card text and the digest body
   (`LlmConfig::digest_tokens`, default 1,600 with the card): one call per document of any
   length. Greedy decoding, thinking off, output constrained by a grammar compiled from the JSON
   schema `{summary ≤ 400 chars, subject ≤ 120, title_en ≤ 120}`.
@@ -315,6 +316,83 @@ EXCERPTS (sentences copied from each section):
   or any `SummaryCache`).
 - Opt-in: `SummaryLlm` applies only with `LlmConfig::enabled`; invoices and purchase orders are
   skipped (their card says everything); one generation at a time per model.
+
+## LLM summary via an API (feature `api`)
+
+`ApiSummarizer` runs the same step (`summary.llm@5`) with a model behind an HTTP API. **It sends
+document text (the card and the digest) to the provider you configure**; the default build has
+no HTTP client and never opens a connection. Pure Rust: blocking `ureq` with rustls, no OpenSSL,
+no async runtime.
+
+```rust
+use std::sync::Arc;
+use quail_summary::api::{ApiConfig, ApiSummarizer, Connect, Env};
+use quail_summary::{LlmConfig, SummaryLlm};
+
+let env = Env::with_file(".env".as_ref())?;       // process environment first, then the file
+let req = Connect { provider: Some("anthropic".into()), ..Connect::default() };
+let api = ApiSummarizer::connect(&req, &env, ApiConfig::default())?;
+eprintln!("llm: {}", api.endpoint().describe()); // provider=anthropic model=claude-haiku-5-5 host=...
+let step = SummaryLlm::new(Arc::new(api), LlmConfig { enabled: true, ..LlmConfig::default() }, None);
+```
+
+- **Providers** (`api::endpoint`): OpenAI Chat Completions (`/v1/chat/completions`: presets
+  `openai`, `openai_compatible`, `openrouter`, `groq`, `vllm`, `ollama`; also LM Studio, SGLang
+  and llama.cpp's `llama-server`, so a self-hosted fine-tuned model is the `vllm` preset with
+  `API_URL`); Anthropic Messages (`/v1/messages`, `x-api-key`, `anthropic-version: 2023-06-01`);
+  AWS Bedrock Converse (`/model/{id}/converse`) with a bearer token.
+- **Configuration**, the same variables as hedgehog (`.env.example` at the repository root):
+  each setting comes from the argument (`Connect`), then the process environment, then the
+  `.env` file the caller names (`Env::with_file`; none is read otherwise), then the preset's
+  default, else a clear error naming the variable to set. `AI_PROVIDER` picks the preset
+  (when unset, the one preset with credentials); `AI_CHAT_MODEL` is the last model fallback
+  for that preset; `AI_MAX_CONCURRENT_LLM` caps concurrent calls process-wide (default 4).
+
+  | preset | key | base URL / region | model |
+  |---|---|---|---|
+  | `openai` | `OPENAI_API_KEY` | `OPENAI_BASE_URL` (optional) | `OPENAI_MODEL`, else `gpt-4o-mini` |
+  | `openai_compatible` | `OPENAI_API_KEY` (optional on localhost) | `OPENAI_BASE_URL` | `OPENAI_MODEL` |
+  | `openrouter` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL`, else openrouter.ai | `OPENROUTER_MODEL` |
+  | `groq` | `GROQ_API_KEY` | `GROQ_BASE_URL`, else api.groq.com | `GROQ_MODEL` |
+  | `vllm` | `API_TOKEN` (optional) | `API_URL` (`/v1` appended) | `API_MODEL` |
+  | `ollama` | `API_TOKEN` (optional) | `API_URL`, else `http://localhost:11434/v1` | `API_MODEL` |
+  | `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`, else api.anthropic.com | `ANTHROPIC_MODEL`, else `claude-haiku-5-5` |
+  | `bedrock` | `AI_BEDROCK_BEARER_TOKEN` | `AI_BEDROCK_REGION` | `AI_BEDROCK_MODEL` |
+
+- **Same guarantees as the local model**: the same prompt and JSON output (the system message
+  adds one sentence naming the JSON keys, `API_PROMPT_VERSION`), the same parser, the same fact
+  check, the same map-reduce. A failed check, an HTTP error, a refusal, a timeout or malformed
+  JSON gives the extractive summary (`method = extractive_fallback`) and a warning; never a
+  failed file.
+- **Decoding**: temperature 0 (not sent to Anthropic: current Claude models reject sampling
+  parameters), `max_tokens` 1,024 (512 per map step), JSON mode (`response_format =
+  json_object`) on the OpenAI protocol, thinking off: `chat_template_kwargs.enable_thinking =
+  false` for vLLM, Ollama and `openai_compatible`, `reasoning.enabled = false` for OpenRouter,
+  for Anthropic no `thinking` field (`disabled` is a 400 on Opus 5.5, Sonnet 5.5 and Fable) and
+  `output_config.effort = low`, so models think adaptively and briefly. A gateway that rejects
+  one of these optional fields (HTTP 400/422) gets the request again without them, and every
+  later request of that summarizer goes without them (one warning).
+- **Robustness** (`api::http`): each attempt gets `min(60 s, time left)`; a summary gets 120 s
+  and never runs past the file's deadline (`SummaryInput::deadline`); 408, 409, 429, 5xx,
+  timeouts and connection errors are retried at most 3 times with exponential backoff from
+  1 s (jittered, at most 30 s), at least what `retry-after` / `retry-after-ms` asks; an
+  exhausted quota is not retried; no redirects; responses read up to 4 MiB.
+- **Cache**: the summarizer id is `<preset>:<model>@1`; its fingerprint holds the protocol, the
+  base URL's host, the model, both prompt versions and the decoding settings, never the key.
+- **Keys** (`Secret`) never appear in `Debug` output, errors, warnings, records or logs; an error
+  body that echoes the key has it replaced by `***`.
+- **Usage**: `prompt_tokens` and `output_tokens` as the API reports them go into the
+  `summary.llm` record (also for a summary that fell back: the tokens were spent).
+- **Training log** (`api::log::TrainingLog`, `ApiConfig::log`, off by default): one JSONL row per
+  call with the card text, the digest or message the model read, the raw output, the fact-check
+  verdict, the provider, the model and the summarizer id, for building a fine-tuning set later.
+  **It contains document text: keep it private, never commit or share it.** A new file is
+  created with mode `0600` on Unix; keys are never written.
+- Tests (`tests/api.rs`) run every protocol against a local mock server (a `TcpListener`
+  thread): success, 429 with `retry-after`, 500, a timed-out attempt, the file deadline,
+  malformed JSON, a refusal, an output that fails the fact check, a rejected optional field,
+  key redaction, the training log, map-reduce and the `summary.llm` record. No test sends a
+  request off the machine.
 
 ## Measured
 

@@ -21,11 +21,14 @@
 //!   of any length, 2 or 2,000 pages: card, outline, start and the salient sentences of every
 //!   section, copied verbatim, within a token budget ([`digest`]). Any model can read it;
 //!   [`digest::map_parts`] splits a very long document for a map-reduce summary.
-//! - `SummaryLlm` (`summary.llm@4`, Deep, feature `llm`, opt-in): a local GGUF model reads the
-//!   digest (or, for very long documents and when configured, summarizes parts first and then
-//!   combines them) and writes `{summary, subject, title_en}` under a JSON grammar; every
-//!   output is [fact-checked](factcheck) against the card and the text it saw, and falls back
-//!   to the extractive summary when a claim is not found.
+//! - `SummaryLlm` (`summary.llm@5`, Deep, opt-in, feature `llm` or `api`): a language model
+//!   reads the digest (or, for very long documents and when configured, summarizes parts first
+//!   and then combines them) and writes `{summary, subject, title_en}`; every output is
+//!   [fact-checked](factcheck) against the card and the text it saw, and falls back to the
+//!   extractive summary when a claim is not found ([`llm`]). The model is a local GGUF file
+//!   (feature `llm`, [`llama`]) or one behind an HTTP API (feature `api`, [`api`]: `OpenAI` and
+//!   compatible servers, Anthropic, AWS Bedrock). The default build has neither and never
+//!   opens a network connection.
 //!
 //! Summaries are always in English. Names, numbers and identifiers are copied verbatim in their
 //! original script; a non-English subject sentence is quoted and marked with its language.
@@ -37,6 +40,8 @@
 //! step. They also declare `after` on every artifact a workspace step provides ([`AFTER`]).
 
 pub mod analyzer;
+#[cfg(feature = "api")]
+pub mod api;
 pub mod cache;
 pub mod card;
 pub mod digest;
@@ -46,6 +51,8 @@ pub mod format;
 pub mod input;
 pub mod keywords;
 #[cfg(feature = "llm")]
+pub mod llama;
+#[cfg(any(feature = "llm", feature = "api"))]
 pub mod llm;
 pub mod mapreduce;
 pub mod models;
@@ -60,15 +67,19 @@ pub use analyzer::{
     AFTER, AFTER_TERMS, SummaryCard, SummaryDigest, SummaryExtractive, SummaryKeywords,
     SummaryOutline, SummaryTopics, card_of,
 };
+#[cfg(feature = "api")]
+pub use api::{ApiConfig, ApiSummarizer, Endpoint, Env, Secret, TrainingLog};
 pub use card::{CardText, FileCard};
 pub use digest::{Digest, DigestConfig, DigestMethod, MapPart, MapReduceConfig};
 pub use extractive::Subject;
 pub use keywords::{Keyword, KeywordConfig};
 #[cfg(feature = "llm")]
-pub use llm::{LlmConfig, LlmSummarizer, SummaryLlm};
+pub use llm::LlmSummarizer;
+#[cfg(any(feature = "llm", feature = "api"))]
+pub use llm::{LlmConfig, SummaryLlm};
 pub use outline::{Outline, OutlineConfig, OutlineEntry, OutlineMethod};
 pub use summarizer::{
-    ExtractiveSummarizer, LongInput, Method, Summarizer, SummarizerId, Summary, SummaryInput,
+    ExtractiveSummarizer, LongInput, Method, Summarizer, SummarizerId, Summary, SummaryInput, Usage,
 };
 pub use terms::{StemLang, TermIndex};
 pub use topics::{TopicConfig, TopicMap, TopicSection, TopicSegment};
@@ -110,6 +121,6 @@ pub mod keys {
     pub const TOPICS: FactKey = FactKey::new("summary.topics");
     /// The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or
     /// `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or
-    /// `map_reduce`, `calls`). Feature `llm`.
+    /// `map_reduce`, `calls`, `prompt_tokens`?, `output_tokens`?). Feature `llm` or `api`.
     pub const LLM: FactKey = FactKey::new("summary.llm");
 }

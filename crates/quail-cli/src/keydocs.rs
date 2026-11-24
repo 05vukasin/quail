@@ -796,7 +796,7 @@ pub const SUMMARY: &[KeyDoc] = &[
     },
     KeyDoc {
         key: quail_summary::keys::LLM,
-        doc: "The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or `map_reduce`, `calls`). Feature `llm`.",
+        doc: "The LLM summary (Record: `text`, `subject`?, `title_en`?, `method` = `llm` or `extractive_fallback`, `model`, `checked`, `cached`, `input` = `digest` or `map_reduce`, `calls`, `prompt_tokens`?, `output_tokens`?). Feature `llm` or `api`.",
     },
 ];
 

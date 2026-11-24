@@ -72,6 +72,28 @@ impl Method {
     }
 }
 
+/// Tokens a summary cost, as the model runtime or the API reported them (zero when unknown).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    /// Prompt (input) tokens, every call summed.
+    pub prompt_tokens: u64,
+    /// Generated (output) tokens, every call summed.
+    pub output_tokens: u64,
+}
+
+impl Usage {
+    /// Adds the tokens of another call.
+    pub fn add(&mut self, other: Usage) {
+        self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+    }
+
+    /// Whether nothing was counted.
+    pub fn is_empty(&self) -> bool {
+        self.prompt_tokens == 0 && self.output_tokens == 0
+    }
+}
+
 /// One summary, always in English (quoted source sentences excepted).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Summary {
@@ -87,6 +109,8 @@ pub struct Summary {
     pub checked: bool,
     /// Why a model's output was not used, when it was not.
     pub warnings: Vec<String>,
+    /// Tokens the model calls cost (also when their output was not used).
+    pub usage: Usage,
 }
 
 /// The parts of a very long document for a hierarchical summary
@@ -143,6 +167,7 @@ impl Summarizer for ExtractiveSummarizer {
             method: Method::Extractive,
             checked: true,
             warnings: Vec::new(),
+            usage: Usage::default(),
         })
     }
 }
@@ -160,7 +185,7 @@ pub fn checked_or_fallback(
     input: &SummaryInput<'_>,
     got: Result<Summary>,
 ) -> Summary {
-    let fallback = |why: String| {
+    let fallback = |why: String, usage: Usage| {
         let mut s = ExtractiveSummarizer
             .summarize(input)
             .unwrap_or_else(|_| Summary {
@@ -170,15 +195,17 @@ pub fn checked_or_fallback(
                 method: Method::Extractive,
                 checked: true,
                 warnings: Vec::new(),
+                usage: Usage::default(),
             });
         s.method = Method::ExtractiveFallback;
         s.warnings.push(why);
+        s.usage = usage;
         s
     };
     match got {
         Ok(s) if s.checked => s,
-        Ok(s) => fallback(s.warnings.join("; ")),
-        Err(e) => fallback(format!("{}: {e}", summarizer.id())),
+        Ok(s) => fallback(s.warnings.join("; "), s.usage),
+        Err(e) => fallback(format!("{}: {e}", summarizer.id()), Usage::default()),
     }
 }
 
@@ -218,6 +245,7 @@ mod tests {
                 } else {
                     vec!["fact check failed: number:9".into()]
                 },
+                usage: Usage::default(),
             })
         }
     }
