@@ -200,6 +200,9 @@ fn features() -> Vec<&'static str> {
     if cfg!(feature = "ocr") {
         v.push("ocr");
     }
+    if cfg!(feature = "llm-api") {
+        v.push("llm-api");
+    }
     if cfg!(feature = "zstd") {
         v.push("zstd");
     }

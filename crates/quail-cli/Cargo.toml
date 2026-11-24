@@ -28,6 +28,10 @@ summary = ["dep:quail-summary"]
 # Pulls ONNX Runtime (prebuilt native binaries downloaded by the `ort` build script) and an
 # HTTPS client, so it is not in the default build. Needs `pdf` for page pixels.
 ocr = ["pdf", "dep:quail-ocr", "quail-ocr/paddle", "quail-ocr/fetch"]
+# LLM summaries through an HTTP API (`summary.llm@5` with `--llm`): OpenAI-compatible servers,
+# Anthropic, AWS Bedrock. Pulls an HTTPS client (pure Rust) and sends document text to the
+# provider the user picks, so it is not in the default build.
+llm-api = ["summary", "quail-summary/api"]
 # zstd-compressed output (`--zstd`). Links the C zstd library, so it is not in the default build.
 zstd = ["quail-io/zstd"]
 # Test-only crash injection in `--isolate` workers (`QUAIL_TEST_CRASH_ON`). Never ship it.

@@ -9,6 +9,7 @@
 //! - [`dump`]: `--dump-documents`, fed by the engine's artifacts hook.
 //! - [`isolate`]: `quail scan --isolate`, files processed in worker child processes.
 //! - `models` (feature `ocr`): `quail models fetch|list`, the OCR model files.
+//! - [`llm`]: `--llm`, LLM summaries through an API (feature `llm-api`).
 
 pub mod cli;
 pub mod dump;
@@ -16,6 +17,7 @@ pub mod info;
 pub mod inspect;
 pub mod isolate;
 pub mod keydocs;
+pub mod llm;
 #[cfg(feature = "ocr")]
 pub mod models;
 pub mod registry;
