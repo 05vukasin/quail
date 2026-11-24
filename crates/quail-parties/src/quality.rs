@@ -8,7 +8,8 @@
 //!   `Ok`.
 //! - [`is_role_term`]: only a contract role ("the Supplier", "Naručilac").
 //! - [`is_name_fragment`]: prose cut out of a sentence (opens or closes on a connector, a
-//!   label, a legal form; states a relation; a single generic word; mojibake).
+//!   label, a legal form; states a relation; a single generic word; mojibake; a word mixing
+//!   Latin and Cyrillic letters and digits).
 //! - [`names_a_product`]: ends on the goods ("... Licence", "... Support").
 //! - [`verdict`]: all of them, with the first reason that refuses the name.
 
@@ -534,7 +535,7 @@ fn closes_as_fragment(tokens: &[String]) -> bool {
 /// Prose the capture cut out rather than a name (`is_name_fragment`).
 pub fn is_name_fragment(name: &str) -> bool {
     let stripped = name.trim();
-    if stripped.is_empty() || stripped.contains('\u{FFFD}') {
+    if stripped.is_empty() || stripped.contains('\u{FFFD}') || mixes_scripts(stripped) {
         return true;
     }
     let lower = stripped.to_lowercase();
@@ -555,6 +556,23 @@ pub fn is_name_fragment(name: &str) -> bool {
         return true;
     }
     opens_as_fragment(stripped, &tokens) || closes_as_fragment(&tokens)
+}
+
+/// A word mixing Latin and Cyrillic letters with a digit among them (`УПРАI3Е`, `1IНИК`): a
+/// bad OCR or text layer, not a name. Mixed letters alone are kept: `Д.O.O.` and `СYСТЕМ`
+/// are typed that way.
+///
+/// ```
+/// use quail_parties::quality::mixes_scripts;
+/// assert!(mixes_scripts("ГРАДСКЕ УПРАI3Е"));
+/// assert!(!mixes_scripts("СПАРТА СYСТЕМ Д.O.O."));
+/// assert!(!mixes_scripts("Alfa Термо 2 d.o.o."));
+/// ```
+pub fn mixes_scripts(name: &str) -> bool {
+    name.split_whitespace().any(|w| {
+        let cyr = w.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c));
+        cyr && w.chars().any(|c| c.is_ascii_alphabetic()) && w.chars().any(|c| c.is_ascii_digit())
+    })
 }
 
 /// Ends on the goods rather than on a company (`names_a_product`).

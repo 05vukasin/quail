@@ -91,7 +91,7 @@ status   ok
   ref.cites            {kind="msa" relation="amends" raw="114/23" key="11423" date=2023-03-03}  conf 0.75  src ref.references@3  at p1 body [328..383] box(72,130,543,201)
 
 [party] 5 fact(s)
-  party.candidates  2 record(s)  src party.candidates@5
+  party.candidates  2 record(s)  src party.candidates@6
                       - {key="northwind logistics" surface="Northwind Logistics Ltd" score=0.99 roles=["customer", "signatory"]}
                       - {key="blue river software" surface="Blue River Software GmbH" score=0.99 roles=["supplier", "signatory"]}
 

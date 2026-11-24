@@ -66,7 +66,7 @@ fn boolean(r: &Run, k: &FactKey) -> bool {
 #[test]
 fn ids() {
     let e = PdfExtractor::new();
-    assert_eq!(e.id().to_string(), "pdf.extract@2");
+    assert_eq!(e.id().to_string(), "pdf.extract@3");
     assert_eq!(e.formats(), &[Format::Pdf]);
     assert_eq!(e.provides(), &["raster"]);
 }
@@ -646,4 +646,63 @@ fn lookalike_text_layer_is_kept_and_needs_ocr() {
     assert_eq!(int(&r, &keys::PAGES_NEEDING_OCR), 1);
     // Not an image: a born-digital page with a bad layer is not a scan.
     assert_eq!(int(&r, &keys::SCANNED_PAGES), 0);
+}
+
+#[test]
+fn font_mapping_two_glyphs_to_one_letter_needs_ocr() {
+    // Word 2010 writes `ToUnicode` ranges across gaps in the glyph order: the glyph of `о`
+    // maps to `п`, so `моторних возила` reads `мптпрних впзила`. The same here in Latin:
+    // the font maps both its `o` and its `p` glyph to `p`.
+    let lines = [
+        "Ugovor o zakupu poslovnog prostora zakljucen je izmedju zakupodavca i zakupca.",
+        "Zakupac je duzan da placa zakupninu do petog u mesecu za tekuci mesec, a u",
+        "slucaju kasnjenja placa zakonsku zateznu kamatu. Ugovor stupa na snagu danom",
+        "potpisivanja i vazi godinu dana, a moze se produziti aneksom ovog ugovora.",
+        "Ispitivanje upotrebljavanih vozila iz uvoza, kontrola i overa tehnickih podataka.",
+        "Cene usluga pojedinacno preporucenih motornih i prikljucnih vozila po vrsti.",
+    ];
+    let page = PageSpec {
+        lines: lines
+            .iter()
+            .enumerate()
+            .map(|(i, t)| line(72.0, 150.0 + 14.0 * i as f32, t))
+            .collect(),
+        full_page_image: false,
+    };
+    let build = |broken: bool| {
+        let mut doc = common::document(&[text_page(1, 3), page.clone()], &Extras::default());
+        if broken {
+            let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap \
+                /CMapName /Broken def 1 begincodespacerange <00> <FF> endcodespacerange \
+                2 beginbfrange <20> <6E> <0020> <70> <7E> <0070> endbfrange \
+                1 beginbfchar <6F> <0070> endbfchar \
+                endcmap CMapName currentdict /CMap defineresource pop end end";
+            let cmap_id = doc.add_object(lopdf::Stream::new(dictionary! {}, cmap.to_vec()));
+            for o in doc.objects.values_mut() {
+                if let lopdf::Object::Dictionary(d) = o
+                    && d.get(b"BaseFont").is_ok()
+                {
+                    d.set("ToUnicode", cmap_id);
+                }
+            }
+        }
+        common::save(&mut doc)
+    };
+    let r = run(build(true));
+    let doc = r.doc.as_ref().expect("doc");
+    let p = &doc.pages[1];
+    assert!(p.text.contains("Ugpvpr p zakupu"), "{}", p.text);
+    // The text alone passes the text checks: the font is what gives it away.
+    assert!(!quail_text::garbage::garbage_report(&p.text).needs_ocr());
+    assert!(p.needs_ocr);
+    assert_eq!(p.text_source, TextSource::Native);
+    assert!(
+        !doc.pages[0].needs_ocr,
+        "page 1 has no `o`/`p` collision worth OCR"
+    );
+    assert_eq!(int(&r, &keys::PAGES_NEEDING_OCR), 1);
+    assert_eq!(int(&r, &keys::SCANNED_PAGES), 0);
+    // The same document with a correct mapping does not.
+    let r = run(build(false));
+    assert_eq!(int(&r, &keys::PAGES_NEEDING_OCR), 0);
 }

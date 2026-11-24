@@ -15,8 +15,8 @@
 //! - **Decoding**: temperature 0 (not sent to Anthropic, whose current models reject sampling
 //!   parameters), a `max_tokens` cap, JSON mode where the protocol has one, thinking off
 //!   (`chat_template_kwargs.enable_thinking = false` for vLLM-style servers,
-//!   `reasoning.enabled = false` for `OpenRouter`, `thinking = disabled` and
-//!   `output_config.effort = low` for Anthropic). A gateway that rejects one of these optional
+//!   `reasoning.enabled = false` for `OpenRouter`; for Anthropic no `thinking` field (a
+//!   `disabled` one is a 400 on most current models) and `output_config.effort = low`). A gateway that rejects one of these optional
 //!   fields (400/422) gets the request again without them, once per summarizer, with a
 //!   warning.
 //! - **Robustness** ([`http`]): per-call timeouts within the file's deadline, bounded retries

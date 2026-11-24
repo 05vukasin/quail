@@ -288,7 +288,7 @@ fn anthropic_success() {
         b.get("temperature").is_none(),
         "no sampling parameters for Claude"
     );
-    assert_eq!(b["thinking"]["type"], "disabled");
+    assert!(b.get("thinking").is_none(), "no thinking field for Claude");
     assert_eq!(b["output_config"]["effort"], "low");
     assert_eq!(b["messages"][0]["role"], "user");
 }

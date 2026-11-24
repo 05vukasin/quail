@@ -1,6 +1,6 @@
 //! Per-file candidates for the companies a document is about, and the roles it gives them.
 //!
-//! Namespace: `party.*`. One analyzer, [`PartyCandidates`] (`party.candidates@5`, `Fast`,
+//! Namespace: `party.*`. One analyzer, [`PartyCandidates`] (`party.candidates@6`, `Fast`,
 //! requires `document`). It reports candidates, never verdicts: it does not say which company
 //! owns a file and it never compares files. A resolution service joins the keys across files
 //! (union-find on the `key` field of [`keys::COMPANY`], [`keys::ALIAS_OF`] pairs) and decides.
@@ -42,7 +42,7 @@
 //! | `quality` | `ok` or `suspect` (two bare Titlecase words: a person or a brand) |
 //! | `legal_form` | canonical form (`d.o.o.`, `LLC`, `GmbH`, ...); absent without one |
 //! | `jurisdiction`, `jurisdiction_conf` | ISO 3166 alpha-2, lowercase, several joined by `\|`, and its confidence; absent when unknown |
-//! | `roles`, `role_conf` | `supplier`, `customer`, `issuer`, `bill_to`, `ship_to`, `signatory`, `party`, `mentioned`, and a parallel list of confidences (mention conf × role weight) |
+//! | `roles`, `role_conf` | `supplier`, `customer`, `issuer`, `bill_to`, `ship_to`, `signatory`, `party`, `adviser`, `mentioned`, and a parallel list of confidences (mention conf × role weight) |
 //! | `defined_term` | the term a clause defines for it (`Naručilac`, `Supplier`); absent without one |
 //!
 //! Document level: [`keys::CANDIDATES`] (top 10 keys by noisy-or score, a list of records
@@ -66,7 +66,7 @@
 //! parties clause, 0.10 with a defined term stating a role (0.05 without), 0.06 in a
 //! letterhead or header (0.03 footer), 0.15 in a signature block, 0.30 after a role label
 //! (formed only), 0.05 in a heading, −0.30 for a bank in payment details; clamped to
-//! 0.05..=0.97. See the README for the measured precision per band.
+//! 0.05..=0.97; then × 0.3 for an adviser (auditor, banker, solicitor named as such). See the README for the measured precision per band.
 
 pub mod forms;
 pub mod names;

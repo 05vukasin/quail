@@ -368,7 +368,8 @@ let step = SummaryLlm::new(Arc::new(api), LlmConfig { enabled: true, ..LlmConfig
   parameters), `max_tokens` 1,024 (512 per map step), JSON mode (`response_format =
   json_object`) on the OpenAI protocol, thinking off: `chat_template_kwargs.enable_thinking =
   false` for vLLM, Ollama and `openai_compatible`, `reasoning.enabled = false` for OpenRouter,
-  `thinking = disabled` with `output_config.effort = low` for Anthropic. A gateway that rejects
+  for Anthropic no `thinking` field (`disabled` is a 400 on Opus 5.5, Sonnet 5.5 and Fable) and
+  `output_config.effort = low`, so models think adaptively and briefly. A gateway that rejects
   one of these optional fields (HTTP 400/422) gets the request again without them, and every
   later request of that summarizer goes without them (one warning).
 - **Robustness** (`api::http`): each attempt gets `min(60 s, time left)`; a summary gets 120 s

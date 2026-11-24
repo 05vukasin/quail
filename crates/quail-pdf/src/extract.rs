@@ -37,13 +37,13 @@ pub(crate) const REOPEN_AFTER_BYTES: u64 = 64 << 20;
 /// Below this much budget left after a refused decode, the file is treated as spent.
 const BUDGET_SPENT: u64 = 1 << 20;
 
-/// The PDF extractor (`pdf.extract@2`). Stateless; one instance serves every thread.
+/// The PDF extractor (`pdf.extract@3`). Stateless; one instance serves every thread.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PdfExtractor;
 
 impl PdfExtractor {
     /// Its id.
-    pub const ID: AnalyzerId = AnalyzerId::new("pdf.extract", 2);
+    pub const ID: AnalyzerId = AnalyzerId::new("pdf.extract", 3);
 
     /// New extractor.
     pub fn new() -> Self {
@@ -473,8 +473,13 @@ impl Walk<'_> {
         }
 
         let coverage = cap.image_coverage;
-        let (images, placements, unmapped, paths) =
-            (cap.images, cap.placements, cap.unmapped, cap.paths);
+        let (images, placements, unmapped, ambiguous, paths) = (
+            cap.images,
+            cap.placements,
+            cap.unmapped,
+            cap.ambiguous,
+            cap.paths,
+        );
         let blocks = layout::layout(cap.glyphs);
         if self.out.check_deadline().is_err() {
             self.out
@@ -531,6 +536,7 @@ impl Walk<'_> {
         let verdict = judge(&Signals {
             chars,
             unmapped,
+            ambiguous,
             report: quail_text::garbage::garbage_report(&text),
             image_coverage: coverage,
             images,

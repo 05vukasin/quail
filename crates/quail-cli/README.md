@@ -201,11 +201,11 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 |---|---|---|
 | (always) | quail-engine, quail-hash | `engine.sniff@2`, `hash.identity@1` |
 | `docx` (default) | quail-docx | `docx.extract@1` |
-| `pdf` (default) | quail-pdf | `pdf.extract@2` (provides the `raster` artifact) |
+| `pdf` (default) | quail-pdf | `pdf.extract@3` (provides the `raster` artifact) |
 | `text` (default) | quail-text | `text.extract@1` (extractor for `Format::Text`: `.txt` and anything sniffed as text), `text.stats@3`, `text.lang@2` |
 | `signals` (default) | quail-signals | `signal.scan@5` |
 | `refs` (default) | quail-refs | `ref.references@3` |
-| `parties` (default) | quail-parties | `party.candidates@5` |
+| `parties` (default) | quail-parties | `party.candidates@6` |
 | `clauses` (default) | quail-clauses | `clause.terms@1` |
 | `sketch` (default) | quail-sketch | `sketch.minhash@2`, `sketch.simhash_text@2`, `sketch.simhash_template@2`, `sketch.layout@2`, `sketch.invoice_layout@2`, `sketch.text_key@2` (Fast); `sketch.minhash_compat@3` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@4` (Standard, runs only on documents with a scanned page or a page needing OCR) |
 | `items` (default) | quail-items | `item.lines@6` (CPV categories from Standard) |

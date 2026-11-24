@@ -3,7 +3,7 @@
 //! | protocol | request | text | usage |
 //! |---|---|---|---|
 //! | `OpenAI` Chat Completions | `model`, `messages` (system, user), `max_tokens` (`max_completion_tokens` on api.openai.com), `temperature`, `response_format = json_object`, the preset's thinking switch | `choices[0].message.content` | `usage.prompt_tokens`, `usage.completion_tokens` |
-//! | Anthropic Messages | `model`, `max_tokens`, `system`, `messages` (user), `thinking = disabled`, `output_config.effort = low`; headers `x-api-key`, `anthropic-version` | the `text` blocks of `content` | `usage.input_tokens`, `usage.output_tokens` |
+//! | Anthropic Messages | `model`, `max_tokens`, `system`, `messages` (user), `output_config.effort = low` (no `thinking` field); headers `x-api-key`, `anthropic-version` | the `text` blocks of `content` | `usage.input_tokens`, `usage.output_tokens` |
 //! | Bedrock Converse | `messages` (user), `system`, `inferenceConfig` (`maxTokens`, `temperature`); header `Authorization: Bearer` | the `text` blocks of `output.message.content` | `usage.inputTokens`, `usage.outputTokens` |
 //!
 //! The *optional* fields (temperature, JSON mode, thinking switches, effort) are left out of a
@@ -27,7 +27,8 @@ pub struct Decoding {
     pub temperature: Option<f64>,
     /// Ask for a JSON object (`OpenAI` protocol `response_format`).
     pub json_mode: bool,
-    /// Switch thinking off (the preset's switch; Anthropic `thinking = disabled`).
+    /// Switch thinking off where the preset has a switch (`OpenAI` protocol only; Anthropic gets
+    /// a low [`Self::effort`] instead).
     pub thinking_off: bool,
     /// Anthropic `output_config.effort` (`None`: not sent).
     pub effort: Option<String>,
@@ -106,9 +107,8 @@ pub fn request(ep: &Endpoint, system: &str, user: &str, d: &Decoding, plain: boo
                 if let Some(t) = d.temperature {
                     body.insert("temperature".into(), json!(t));
                 }
-                if d.thinking_off {
-                    body.insert("thinking".into(), json!({"type": "disabled"}));
-                }
+                // No `thinking` field: `{"type": "disabled"}` is a 400 on Claude Opus 5.5, Sonnet
+                // 5.5 and Fable; a low effort keeps adaptive thinking short on every model.
                 if let Some(e) = &d.effort {
                     body.insert("output_config".into(), json!({"effort": e}));
                 }
@@ -145,7 +145,7 @@ pub fn has_optional(ep: &Endpoint, d: &Decoding) -> bool {
                 || d.json_mode
                 || (d.thinking_off && ep.thinking.body().is_some())
         }
-        Kind::Anthropic => d.temperature.is_some() || d.thinking_off || d.effort.is_some(),
+        Kind::Anthropic => d.temperature.is_some() || d.effort.is_some(),
         Kind::Bedrock => d.temperature.is_some(),
     }
 }
@@ -341,7 +341,10 @@ mod tests {
         let b: Json = serde_json::from_str(&r.body).unwrap();
         assert_eq!(b["model"], "claude-haiku-5-5");
         assert_eq!(b["system"], "S");
-        assert_eq!(b["thinking"]["type"], "disabled");
+        assert!(
+            b.get("thinking").is_none(),
+            "thinking=disabled is a 400 on most Claude models"
+        );
         assert_eq!(b["output_config"]["effort"], "low");
         assert!(b.get("temperature").is_none());
         assert!(

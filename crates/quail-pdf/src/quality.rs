@@ -6,6 +6,14 @@
 //! is unreadable glyphs ([`GarbageReport::broken_ratio`] or unmapped glyphs above
 //! [`MAX_GARBAGE`]) is dropped; a look-alike layer keeps its text (its digits and layout are
 //! right) until OCR replaces it (the OCR analyzer replaces every page with `needs_ocr`).
+//!
+//! A font whose `ToUnicode` maps two of its glyphs to the same letter is a second, font-level
+//! signal: the text reads almost right (`мптпрних впзила` for `моторних возила`, Word 2010's
+//! broken `bfrange`s) and passes every text check, but the page shows something else. When
+//! such letters ([`Signals::ambiguous`]) make at least [`MIN_AMBIGUOUS`] glyphs and
+//! [`AMBIGUOUS_SHARE`] of the page's characters, the page needs OCR and keeps its text. Pages
+//! that are mostly an image are left out: their text is an OCR layer, and capture fonts
+//! (Acrobat's "searchable image") draw each letter with several glyphs traced from the scan.
 
 use quail_text::garbage::GarbageReport;
 
@@ -18,6 +26,12 @@ const SCAN_MAX_TEXT_CHARS: usize = 200;
 const MOSTLY_IMAGE: f32 = 0.6;
 /// A text layer with more unreadable glyphs than this is dropped.
 const MAX_GARBAGE: f32 = 0.35;
+/// Ambiguous letters a page needs before its font mapping is distrusted.
+const MIN_AMBIGUOUS: usize = 40;
+/// Share of a page's characters that ambiguous letters must reach. Broken Word 2010 mappings
+/// land at 5-7 % (one letter, Cyrillic `о`, shown as another); on the dev corpora the only
+/// clean page with ambiguous letters has 2 of 584 (0.3 %).
+const AMBIGUOUS_SHARE: f32 = 0.03;
 /// Paths above which a page without text likely has its text drawn as outlines.
 const OUTLINED_TEXT_PATHS: usize = 200;
 /// Images covering less than this share of a text-less page (logos, 1-px spacers) do not
@@ -31,6 +45,9 @@ pub(crate) struct Signals {
     pub chars: usize,
     /// Glyphs drawn without a Unicode mapping.
     pub unmapped: usize,
+    /// Letters drawn by visible glyphs whose letter another glyph of the same font also maps
+    /// to (a broken `ToUnicode`, see the module docs).
+    pub ambiguous: usize,
     /// `quail-text`'s report on the extracted text.
     pub report: GarbageReport,
     /// Share of the page covered by images.
@@ -76,8 +93,12 @@ pub(crate) fn judge(s: &Signals) -> Verdict {
             scanned: mostly_image,
         };
     }
+    #[allow(clippy::cast_precision_loss)]
+    let ambiguous_font = !mostly_image
+        && s.ambiguous >= MIN_AMBIGUOUS
+        && s.ambiguous as f32 >= AMBIGUOUS_SHARE * s.chars as f32;
     let needs_ocr = if has_text {
-        s.report.needs_ocr() || (mostly_image && s.chars < SCAN_MAX_TEXT_CHARS)
+        s.report.needs_ocr() || ambiguous_font || (mostly_image && s.chars < SCAN_MAX_TEXT_CHARS)
     } else {
         (s.images > 0 && s.image_coverage >= MIN_SCAN_COVERAGE)
             || s.paths >= OUTLINED_TEXT_PATHS
@@ -152,6 +173,39 @@ mod tests {
             ..text(CLEAN)
         };
         assert!(!judge(&unmapped).keep_text);
+    }
+
+    #[test]
+    fn ambiguous_font_mapping_is_kept_and_ocrd() {
+        // A page whose font maps two glyphs to `п` (Word 2010's broken `bfrange`): the text
+        // passes every text check, the font says it is wrong.
+        let page = Signals {
+            ambiguous: 120,
+            ..text(&CLEAN.repeat(12))
+        };
+        assert!(!page.report.needs_ocr());
+        let v = judge(&page);
+        assert!(v.keep_text && v.needs_ocr && !v.scanned, "{v:?}");
+        // A couple of duplicate glyphs (a font with two `d`s) is not enough.
+        let few = Signals {
+            ambiguous: 2,
+            ..text(&CLEAN.repeat(4))
+        };
+        assert!(!judge(&few).needs_ocr);
+        // Below the share: a long page with a few dozen ambiguous letters.
+        let thin = Signals {
+            ambiguous: 45,
+            ..text(&CLEAN.repeat(20))
+        };
+        assert!(!judge(&thin).needs_ocr);
+        // A scan with a capture font (several glyphs per letter, traced from the image).
+        let capture = Signals {
+            ambiguous: 300,
+            images: 1,
+            image_coverage: 1.0,
+            ..text(&CLEAN.repeat(12))
+        };
+        assert!(!judge(&capture).needs_ocr);
     }
 
     #[test]
