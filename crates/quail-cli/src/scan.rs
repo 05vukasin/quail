@@ -276,6 +276,9 @@ fn mode(args: &ScanArgs, plan: &Plan, read: ReadOptions) -> Result<Mode, String>
         ocr: plan.ocr.clone(),
     };
     warn_without_ocr(spec.profile);
+    if args.isolate && args.llm.llm.is_some() {
+        return Err("--llm does not work with --isolate yet: drop one of them".to_owned());
+    }
     if args.isolate {
         let cap = spec.limits.max_bytes;
         let paths = path_source(args, read)?;
@@ -284,6 +287,7 @@ fn mode(args: &ScanArgs, plan: &Plan, read: ReadOptions) -> Result<Mode, String>
         return Ok(Mode::Isolated(Box::new((jobs, IsolatedRunner::new(opts)))));
     }
     let b = registry::builder_with(spec.profile, spec.limits, spec.ocr.as_ref());
+    let b = crate::llm::register(b, &args.llm, spec.profile)?;
     #[cfg(feature = "test-hooks")]
     let b = isolate::test_hooks::install_stall(b);
     let engine = b.build().map_err(|e| e.to_string())?;

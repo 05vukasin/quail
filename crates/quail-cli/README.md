@@ -173,6 +173,24 @@ quail scan --profile deep contracts/ -o records.jsonl
 Models: `quail models fetch --dir DIR` or `QUAIL_OCR_MODELS=DIR`. They are the PaddleOCR ONNX
 exports under Apache-2.0, listed with URL, size and SHA-256 in `quail_ocr::models::MANIFEST`.
 
+## LLM summary through an API (`llm-api` feature, not default)
+
+```sh
+cargo build --release -p quail-cli --features llm-api
+quail inspect contract.pdf --llm anthropic --env-file .env
+quail scan /data -o records.jsonl --llm vllm --llm-model my-finetune --env-file .env
+```
+
+`--llm [PRESET]` registers `quail_summary::SummaryLlm` with an `ApiSummarizer`
+(`src/llm.rs`), in the run's profile, with an in-memory cache so identical documents are asked
+once. `--llm-model`, `--env-file` (read only when named; the environment wins over it) and
+`--llm-log` (opt-in JSONL training log: it contains document text, keep it private) refine it.
+One line `quail: llm: provider=… model=… host=…` goes to stderr, never the key. Without `--llm`
+nothing changes; without the feature `--llm` is an error naming it; `--isolate` with `--llm`
+is refused for now. **It sends document text to the chosen provider.** Variables:
+`.env.example` at the repository root (hedgehog's names). Tests: `tests/llm.rs`, against a
+local mock server.
+
 ## Registry
 
 `src/registry.rs` is the only place that names concrete crates: `builder(profile, limits)`
@@ -193,6 +211,7 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `items` (default) | quail-items | `item.lines@6` (CPV categories from Standard) |
 | `summary` (default) | quail-summary | `summary.card@4`, `summary.extractive@2`, `summary.outline@1`, `summary.keywords@1`, `summary.topics@1` (Standard, documents of 20+ pages) (finalizers); `summary.digest@3` is in the crate, not registered by default |
 | `ocr` | quail-ocr | `ocr.pages@2` (Deep only; PP-OCRv6 on ONNX Runtime, native, not default) and `quail models` |
+| `llm-api` | quail-summary (`api`) | `--llm`: `summary.llm@5` through an API (OpenAI-compatible, Anthropic, Bedrock), not default |
 | `zstd` | (quail-io) | `--zstd` output |
 | `test-hooks` | - | test-only: `QUAIL_TEST_CRASH_ON=<substring>` makes `--isolate` workers abort on matching locators. Never ship it |
 

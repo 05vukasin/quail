@@ -124,6 +124,26 @@ A hung worker is killed after `2 x --timeout + 5 s`; timeouts are not retried. W
 `--json-stats`, the stats gain an `isolation` object (`crashes`, `crash_kinds`, `retries`,
 `retried_ok`, `poisoned`, `respawns`, `spawn_failures`).
 
+### LLM summary through an API (build feature `llm-api`)
+
+| option | default | effect |
+|---|---|---|
+| `--llm [PRESET]` | off | add `summary.llm@5`: a model behind an API summarizes each document from its card and digest, in any profile. PRESET: `openai`, `openai_compatible`, `anthropic`, `bedrock`, `openrouter`, `groq`, `vllm` (any self-hosted OpenAI-compatible server: vLLM, LM Studio, llama-server), `ollama`; without it, `AI_PROVIDER`, else the one provider with credentials. Put it after the paths, or write `--llm=PRESET` |
+| `--llm-model MODEL` | the preset's variable, then its default | model id (`anthropic`: `claude-haiku-5-5`; `openai`: `gpt-4o-mini`; the others need one) |
+| `--env-file PATH` | none | also read settings and keys from this `.env` file; variables already set in the environment win. No file is read unless named |
+| `--llm-log PATH` | off | append one JSONL row per model call (card, digest, model output, fact-check verdict, provider, model) for building a fine-tuning set. **It contains document text: keep it private** |
+
+**`--llm` sends document text (the card and the digest) to the provider.** The settings and
+their variable names are hedgehog's ([`.env.example`](../.env.example)). One line on stderr
+says what is used, never the key: `quail: llm: provider=anthropic model=claude-haiku-5-5
+host=api.anthropic.com`. A configuration error (no key, no model) stops the run before any
+file. Every summary is fact-checked like the local model's; a failed check, an HTTP error, a
+timeout or malformed output keeps the extractive summary (`method = extractive_fallback`) with a
+warning, never a failed file. Calls retry on 429/5xx with backoff, honour `retry-after`, stay
+within the file's `--timeout`, and at most `AI_MAX_CONCURRENT_LLM` (default 4) run at a time.
+Identical documents are asked once per run. Not with `--isolate` yet. A build without the
+feature rejects `--llm` with an error naming it.
+
 ### Behaviour
 
 - **Every input gets a record.** A file that cannot be opened, a manifest entry that is
@@ -166,6 +186,7 @@ quail inspect scan.pdf --json --text   # {"record": .., "document": ..}
 | `--text` | also print every page's text, block by block, with its zone |
 | `--json` | print JSON instead: the record, or `{"record": .., "document": ..}` with `--text` |
 | `--profile`, `--max-bytes`, `--max-decompressed`, `--max-pages`, `--timeout` | as for `scan` |
+| `--llm [PRESET]`, `--llm-model`, `--env-file`, `--llm-log` | as for `scan` ([LLM summary](#llm-summary-through-an-api-build-feature-llm-api)) |
 
 Each fact shows its value, `conf` (when below 1), `src` and evidence. Evidence prints as
 `at p1 body [775..802] box(72,280,528,344)`: page (one-based here; zero-based in JSON), zone,
@@ -225,8 +246,9 @@ default: `docx`, `pdf`, `text`, `signals`, `refs`, `parties`, `clauses`, `sketch
 | feature | effect |
 |---|---|
 | `ocr` | OCR of pages that need it (`ocr.pages@2`, only under `--profile deep`) and the `quail models` command. Links ONNX Runtime (prebuilt binaries downloaded by the `ort` build script) and an HTTPS client for the model download |
+| `llm-api` | `--llm`: LLM summaries through an API (`summary.llm@5`). Pure Rust HTTPS client; sends document text to the provider you pick |
 | `zstd` | `scan --zstd`; links the C zstd library |
 
-`quail version` lists the features of the binary at hand. The LLM summary (`quail-summary`'s
-`llm` feature) is not wired into the `quail` binary; see
-[quickstart.md](quickstart.md#8-llm-summary-opt-in).
+`quail version` lists the features of the binary at hand. The local-model LLM summary
+(`quail-summary`'s `llm` feature) is not wired into the `quail` binary; the API one is
+(`llm-api`, above). See [quickstart.md](quickstart.md#8-llm-summary-opt-in).

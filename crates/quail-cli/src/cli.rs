@@ -22,7 +22,8 @@ pub enum Command {
     // Boxed: ScanArgs is ~290 bytes on Windows (larger PathBuf), far above the others.
     Scan(Box<ScanArgs>),
     /// Process one file and pretty-print its record (and, with --text, its pages).
-    Inspect(InspectArgs),
+    // Boxed for the same reason as Scan: with `ocr` and `llm-api` its flags make it the largest.
+    Inspect(Box<InspectArgs>),
     /// List every fact key and step this build knows, with one-line docs.
     Keys(KeysArgs),
     /// Versions of every step: the pipeline fingerprint used for re-indexing decisions.
@@ -144,6 +145,29 @@ pub struct OcrArgs {
     pub ocr_page_time: Option<Duration>,
 }
 
+/// LLM summaries through an API (build feature `llm-api`), shared by `scan` and `inspect`.
+/// Without `--llm` nothing changes.
+#[derive(Clone, Debug, Default, Args)]
+pub struct LlmArgs {
+    /// Add an LLM summary (`summary.llm`) written by a model behind an API, in any profile.
+    /// PRESET: openai, `openai_compatible`, anthropic, bedrock, openrouter, groq, vllm, ollama;
+    /// without it, `AI_PROVIDER` (or the one provider with credentials). Sends the card and
+    /// the digest of every document to that provider. Needs the `llm-api` build feature.
+    #[arg(long, value_name = "PRESET", num_args = 0..=1, default_missing_value = "")]
+    pub llm: Option<String>,
+    /// Model id (default: the preset's variable, e.g. `ANTHROPIC_MODEL`, else its default).
+    #[arg(long, value_name = "MODEL", requires = "llm")]
+    pub llm_model: Option<String>,
+    /// Read settings and keys from this `.env` file too (variables already set in the
+    /// environment win). No file is read unless named here.
+    #[arg(long, value_name = "PATH", requires = "llm")]
+    pub env_file: Option<PathBuf>,
+    /// Append one JSONL row per model call (card, digest, output, fact-check verdict) to this
+    /// file, for building a fine-tuning set. It contains document text: keep it private.
+    #[arg(long, value_name = "PATH", requires = "llm")]
+    pub llm_log: Option<PathBuf>,
+}
+
 /// `quail scan`.
 #[derive(Debug, Args)]
 #[allow(clippy::struct_excessive_bools)] // independent flags
@@ -210,6 +234,9 @@ pub struct ScanArgs {
     #[cfg(feature = "ocr")]
     #[command(flatten)]
     pub ocr: OcrArgs,
+    /// LLM summaries through an API.
+    #[command(flatten)]
+    pub llm: LlmArgs,
     /// No progress line and no summary on stderr.
     #[arg(short, long)]
     pub quiet: bool,
@@ -260,6 +287,9 @@ pub struct InspectArgs {
     #[cfg(feature = "ocr")]
     #[command(flatten)]
     pub ocr: OcrArgs,
+    /// LLM summaries through an API.
+    #[command(flatten)]
+    pub llm: LlmArgs,
 }
 
 /// `quail keys`.
@@ -354,6 +384,35 @@ mod tests {
             LimitArgs::default().limits().max_decompressed,
             Limits::default().max_decompressed
         );
+    }
+
+    #[test]
+    fn llm_flags() {
+        let parse = |args: &[&str]| {
+            let mut v = vec!["quail", "inspect", "f.pdf"];
+            v.extend_from_slice(args);
+            match Cli::try_parse_from(v).map(|c| c.command) {
+                Ok(Command::Inspect(a)) => Ok(a.llm),
+                Ok(_) => unreachable!(),
+                Err(e) => Err(e.kind()),
+            }
+        };
+        assert_eq!(parse(&[]).unwrap().llm, None);
+        assert_eq!(parse(&["--llm"]).unwrap().llm.as_deref(), Some(""));
+        let a = parse(&[
+            "--llm",
+            "anthropic",
+            "--llm-model",
+            "m",
+            "--env-file",
+            ".env",
+        ])
+        .unwrap();
+        assert_eq!(a.llm.as_deref(), Some("anthropic"));
+        assert_eq!(a.llm_model.as_deref(), Some("m"));
+        assert_eq!(a.env_file, Some(PathBuf::from(".env")));
+        assert!(parse(&["--env-file", ".env"]).is_err(), "needs --llm");
+        assert!(parse(&["--llm-log", "x.jsonl"]).is_err(), "needs --llm");
     }
 
     #[test]

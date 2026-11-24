@@ -252,6 +252,19 @@ the environment, or from a `.env` file you name, with the variable names of
 [`.env.example`](../.env.example); keys never appear in logs, errors or records. Details:
 [quail-summary](../crates/quail-summary/README.md#llm-summary-via-an-api-feature-api).
 
+The `quail` binary has it behind the build feature `llm-api` and the flag `--llm`:
+
+```sh
+cargo build --release -p quail-cli --features llm-api
+cp .env.example .env    # fill in one provider's key; .env is git-ignored
+target/release/quail inspect contract.pdf --llm anthropic --env-file .env
+target/release/quail scan ./docs -o records.jsonl --llm vllm --env-file .env   # a self-hosted model
+```
+
+It prints one line saying which provider and model it uses (never the key), and each record
+gets `summary.llm` with the token counts. Without `--llm` nothing changes. Options:
+[cli.md](cli.md#llm-summary-through-an-api-build-feature-llm-api).
+
 ## Next
 
 - [concepts.md](concepts.md): what every part of a record means.
