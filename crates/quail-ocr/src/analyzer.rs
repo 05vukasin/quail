@@ -132,7 +132,8 @@ impl OcrPages {
     pub const NOT_COMPILED: &'static str = "ocr backend not compiled";
 
     /// OCR with engines from `factory`, one per worker thread, keeping up to `max_idle`
-    /// idle engines between files.
+    /// idle engines between files, each until it has been idle for
+    /// [`EnginePool::DEFAULT_IDLE_TIMEOUT`] ([`with_idle_timeout`](Self::with_idle_timeout)).
     pub fn new(factory: Arc<dyn EngineFactory>, max_idle: usize, config: OcrConfig) -> Self {
         Self {
             backend: Backend::Ready(EnginePool::new(factory, max_idle)),
@@ -230,6 +231,33 @@ impl OcrPages {
     pub fn with_config(mut self, config: OcrConfig) -> Self {
         self.config = config;
         self
+    }
+
+    /// Drops an idle engine once it has been idle for `timeout` (`None`: keeps up to
+    /// `max_idle` engines for the life of the analyzer). The default is
+    /// [`EnginePool::DEFAULT_IDLE_TIMEOUT`] (5 minutes); a long-running host that wants its
+    /// OCR memory back sooner after the last scanned page sets a shorter one. The output does
+    /// not change: the next page loads a new engine. See [`EnginePool`].
+    #[must_use]
+    pub fn with_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.backend = match self.backend {
+            Backend::Ready(p) => Backend::Ready(p.with_idle_timeout(timeout)),
+            b @ Backend::Unavailable(_) => b,
+        };
+        self
+    }
+
+    /// The engines, when a backend is ready.
+    pub fn engines(&self) -> Option<&EnginePool> {
+        match &self.backend {
+            Backend::Ready(p) => Some(p),
+            Backend::Unavailable(_) => None,
+        }
+    }
+
+    /// Drops every idle engine now (see [`EnginePool::trim`]); returns how many.
+    pub fn trim(&self) -> usize {
+        self.engines().map_or(0, EnginePool::trim)
     }
 
     /// Whether a backend is ready.

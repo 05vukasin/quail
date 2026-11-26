@@ -11,7 +11,14 @@ rust-version.workspace = true
 default = []
 # PP-OCRv6 (PaddleOCR) on ONNX Runtime through `oar-ocr`. Links a native ONNX Runtime that the
 # `ort` build script downloads (prebuilt for Linux x64/arm64, macOS arm64, Windows x64/arm64).
-paddle = ["dep:oar-ocr", "dep:image", "dep:sha2", "oar-ocr/download-binaries", "oar-ocr/simd"]
+paddle = [
+    "dep:oar-ocr",
+    "dep:image",
+    "dep:rayon",
+    "dep:sha2",
+    "oar-ocr/download-binaries",
+    "oar-ocr/simd",
+]
 # `fetch_models`: downloads the models of the manifest into the model directory, checking SHA-256.
 fetch = ["dep:ureq", "dep:sha2"]
 
@@ -25,11 +32,17 @@ blake3 = { version = "1.8", default-features = false, features = ["std", "pure"]
 # `ort = "=2.0.0-rc.15"` (ONNX Runtime 1.31) itself.
 oar-ocr = { version = "=0.11.0", default-features = false, optional = true }
 image = { version = "=0.25.10", default-features = false, optional = true }
+# oar-ocr's own dependency: each engine runs its pre- and post-processing on a pool of its own
+# (`PaddleEngine`), never on rayon's global one.
+rayon = { version = "1.8", optional = true }
 sha2 = { version = "0.11", optional = true }
 ureq = { version = "3.1", optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true
+# `tests/paddle.rs` renders its pages from generated text PDFs.
+quail-pdf = { path = "../quail-pdf" }
+lopdf = { version = "0.47.0", default-features = false }
 
 [lints]
 workspace = true

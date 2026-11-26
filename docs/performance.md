@@ -143,6 +143,36 @@ timeout 120m per file`. Peak RSS is summed over the process tree, sampled every 
   with the 2-minute default timeout on a loaded machine got OCR text and then
   `engine: timeout; 17 analyzer(s) not run`).
 
+### Idle engines and the OCR thread budget (#115, #116)
+
+`tests/paddle.rs` `measure` (ignored; how to run it is in its header), test profile
+(dependencies at `opt-level = 2`), one process, a 4 vCPU AMD EPYC server with 7.6 GiB, single
+runs. 12 warm pages of generated invoice text (Helvetica 11 pt, about 1500 characters) rendered
+at 300 DPI, read by `jobs` engines side by side. "Cores busy" is the process's CPU time over the
+wall time; "output" is a BLAKE3 of every page's `OcrPage` as JSON, the same in every row.
+
+| code | jobs x threads | pages/s | CPU s a page | cores busy | RSS after the burst | RSS after the idle timeout |
+|---|---|---|---|---|---|---|
+| before (`62108d4`) | 1 x 4 | 0.39 | 5.85 | 2.30 | 655 MiB | 655 MiB (engine kept) |
+| after | 1 x 4 | 0.39 | 5.78 | 2.27 | 630 MiB | 217 MiB (5 s timeout) |
+| after, doewood's `GLIBC_TUNABLES` | 1 x 4 | 0.39 | 5.83 | 2.27 | 604 MiB | 155 MiB |
+| before | 2 x 2 | 0.61 | 5.10 | 3.08 | 1147 MiB | 1147 MiB (engines kept) |
+| after | 2 x 2 | 0.63 | 4.96 | 3.14 | 1154 MiB | 283 MiB |
+
+The RSS before the engines was 120 to 127 MiB (the test's page images and the models' files).
+
+- **Idle engines (#115).** Dropping an idle engine gives back 410 to 450 MiB per engine with
+  glibc's defaults, and almost all of it (to 36 MiB above the start) with doewood's
+  `arena_max=2:mmap_threshold=131072`. Before, the memory stayed for the life of the process.
+  The default timeout is 5 minutes (`EnginePool::DEFAULT_IDLE_TIMEOUT`); a reload costs a
+  model load (0.25 s) and a slower first page.
+- **Thread budget (#116).** On an idle machine the speed is the same (the engine's own pool
+  replaces the global one thread for thread). Before, the pre- and post-processing of every
+  engine ran on rayon's global pool (one thread per CPU, shared with the host and the other
+  engines); now it runs on the engine's pool of `threads` threads, so `jobs × threads` bounds
+  OCR's threads even when the host's other workers are busy, and the global pool is never
+  started (`engines_never_start_the_global_rayon_pool` fails on `62108d4`).
+
 ## LLM summary
 
 Measured when `summary.llm` was added: 30 English CUAD dev documents, 4 threads, about 1,000
