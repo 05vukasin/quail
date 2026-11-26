@@ -18,9 +18,18 @@
 //!    better; when only some do, lines below [`PaddleConfig::mixed_reread_below`] are read
 //!    with both and the more confident Cyrillic reading wins; otherwise the page stays Latin.
 //!
+//! # Threads
+//!
 //! Every engine owns its ONNX Runtime sessions with [`PaddleConfig::intra_threads`] intra-op
-//! threads and no spinning; [`OcrPermits`](crate::OcrPermits) bound how many engines read at
-//! once.
+//! threads and no spinning, and a rayon pool of the same number of threads (`quail-ocr-N`)
+//! on which its whole page runs: `oar-ocr` resizes, normalizes and decodes on rayon, and
+//! inside the engine's pool that work never reaches rayon's global pool (one thread per CPU,
+//! shared with the host). A page alternates between the two (pre-processing, inference,
+//! post-processing), so an engine keeps at most `intra_threads` threads busy, and
+//! [`OcrPermits`](crate::OcrPermits) bound how many engines read at once: `jobs × threads`
+//! is the whole OCR budget. The parallel steps are order-preserving maps (results collected
+//! in input order, sums taken afterwards in order), so the output does not depend on the
+//! thread count.
 
 use std::path::{Path, PathBuf};
 
@@ -64,8 +73,9 @@ pub struct PaddleConfig {
     pub deskew_degrees: Option<f64>,
     /// Report word boxes.
     pub word_boxes: bool,
-    /// ONNX Runtime intra-op threads per session (1 by default;
-    /// [`OcrResources`](crate::OcrResources) picks it so that `jobs × threads` fits the CPUs).
+    /// ONNX Runtime intra-op threads per session, and the threads of the engine's rayon pool
+    /// for pre- and post-processing (1 by default; [`OcrResources`](crate::OcrResources)
+    /// picks it so that `jobs × threads` fits the CPUs).
     pub intra_threads: usize,
     /// Text lines recognized per batch. 1 by default: a batch is padded to its widest line,
     /// which costs both time and (kept) arena memory.
@@ -173,10 +183,13 @@ fn res_err(what: &str, e: impl std::fmt::Display) -> Error {
     Error::Resource(format!("{what}: {e}"))
 }
 
-/// One PP-OCR pipeline: its own ONNX Runtime sessions, used by one thread at a time.
+/// One PP-OCR pipeline: its own ONNX Runtime sessions and rayon pool, used by one thread at
+/// a time.
 pub struct PaddleEngine {
     id: EngineId,
     cfg: PaddleConfig,
+    /// Where [`recognize`](OcrEngine::recognize) runs (see [Threads](self#threads)).
+    threads: std::sync::Arc<rayon::ThreadPool>,
     ocr: OAROCR,
     orientation: Option<DocumentOrientationPredictor>,
     cyrillic: Option<TextRecognitionPredictor>,
@@ -241,9 +254,15 @@ impl PaddleEngine {
         } else {
             None
         };
+        let threads = rayon::ThreadPoolBuilder::new()
+            .num_threads(cfg.intra_threads.max(1))
+            .thread_name(|i| format!("quail-ocr-{i}"))
+            .build()
+            .map_err(|e| res_err("ocr thread pool", e))?;
         Ok(Self {
             id,
             cfg: cfg.clone(),
+            threads: std::sync::Arc::new(threads),
             ocr,
             orientation,
             cyrillic,
@@ -548,6 +567,14 @@ impl OcrEngine for PaddleEngine {
     }
 
     fn recognize(&mut self, image: &Image, hints: &OcrHints) -> Result<OcrPage> {
+        // Every rayon call of the page (here and in oar-ocr) goes to the engine's own pool.
+        let threads = self.threads.clone();
+        threads.install(|| self.read(image, *hints))
+    }
+}
+
+impl PaddleEngine {
+    fn read(&mut self, image: &Image, hints: OcrHints) -> Result<OcrPage> {
         crate::preprocess::validate(image)?;
         let rgb = to_rgb(image)?;
         let rot = self.orientation(&rgb)?;

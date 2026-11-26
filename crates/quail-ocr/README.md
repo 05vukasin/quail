@@ -49,7 +49,19 @@ OCR is far slower and heavier than every other step, so it has limits of its own
   the revised document then still run, on the pages read so far, and the record is `partial`
   with the problem `ocr: stopped after k of n pages to keep ... for the steps after it`.
 
-The intra-op thread count is not part of the engine fingerprint (it changes speed, not output).
+- **Threads.** An engine with `threads` intra-op threads also runs its pre- and
+  post-processing (resize, normalization, decoding; rayon in `oar-ocr`) on a rayon pool of its
+  own with `threads` threads, never on rayon's global pool. The two alternate within a page, so
+  OCR keeps at most `jobs × threads` threads busy.
+- **Idle engines.** An engine holds about 0.4 to 0.55 GiB (its ONNX Runtime arenas only grow).
+  `EnginePool` drops an engine once it has been idle for its idle timeout
+  (`EnginePool::DEFAULT_IDLE_TIMEOUT`, 5 minutes): a long-running host gets the memory back
+  after its last scanned page, and the next page loads a new engine (about 0.25 s, plus a
+  slower first page). `OcrPages::with_idle_timeout(Some(d))` sets another timeout, `None`
+  keeps idle engines for the life of the analyzer, and `OcrPages::trim()` drops them now.
+
+The thread count and the pooling are not part of the engine fingerprint (they change speed, not
+output).
 
 ## Keys
 
@@ -71,12 +83,17 @@ The intra-op thread count is not part of the engine fingerprint (it changes spee
   Cyrillic PP-OCRv5 recognizer re-reads a sample of the longest lines. A page where at least half
   of the sample reads as confident Cyrillic is read in both scripts, line by line. On a page where
   only some lines do, only the weak lines are re-read. Each engine owns its ONNX Runtime sessions
-  (`PaddleConfig::intra_threads` intra-op threads, no spinning), and `EnginePool` keeps at most one engine per OCR permit.
+  (`PaddleConfig::intra_threads` intra-op threads, no spinning) and a rayon pool of as many
+  threads, and `EnginePool` keeps at most one idle engine per OCR permit, for at most its idle
+  timeout.
 - **No backend** (the default build, pure Rust): for every file that has a page needing OCR, the
   analyzer reports the problem `ocr backend not compiled`. For other files it reports nothing.
 
 `OcrEngine` is the engine trait. Tests drive the analyzer with a scripted engine and an
-in-memory raster (`tests/analyzer.rs`), so CI covers everything except the native backend.
+in-memory raster (`tests/analyzer.rs`), so CI covers everything except the native backend;
+`tests/paddle.rs` (feature `paddle`, models in `$QUAIL_OCR_MODELS`) checks that the backend's
+output is byte-identical for 1, 2 and 4 threads and after an idle engine is loaded again, and
+that it never starts rayon's global pool.
 
 ## Models
 
