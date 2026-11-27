@@ -102,8 +102,8 @@ impl PdfRaster {
         }
     }
 
-    /// Pages whose interpretation the extractor stopped at the per-page draw-call or nesting
-    /// cap: `over_cap[i]` makes [`PageRaster::render`] and the scan lookups refuse page `i` at
+    /// Pages whose interpretation the extractor stopped at a per-page draw cap (draw calls,
+    /// nested clips and groups, or form data): `over_cap[i]` makes [`PageRaster::render`] and the scan lookups refuse page `i` at
     /// once (`LimitExceeded`), instead of interpreting it up to the same cap twice more (the
     /// scan lookup, then the render's dry run) only to refuse it then. A 2^n form fan-out page
     /// thus costs one capped interpretation per file, not three per caller.

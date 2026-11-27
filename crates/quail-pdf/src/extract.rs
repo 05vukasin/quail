@@ -227,7 +227,7 @@ struct Walk<'o> {
     /// Per page: interpreted completely (no abort, no refused decode) and drew a number of
     /// images other than one, so it holds no single embedded scan.
     no_scan: Vec<bool>,
-    /// Per page: interpretation stopped at the draw-call or nesting cap.
+    /// Per page: interpretation stopped at a per-page draw cap (calls, nestings, form data).
     over_cap: Vec<bool>,
 }
 
