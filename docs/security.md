@@ -73,8 +73,18 @@ pure-Rust hayro PDF crates with patches ([architecture.md](architecture.md#the-p
   halftone grids;
 - a render budget (time, bytes, rasterization work) for page renders.
 
-The DOCX reader is a streaming XML reader with no DOM. ZIP entries are inflated under the
-same `max_decompressed` budget, and nesting depth is bounded.
+The DOCX and PPTX readers are streaming XML readers with no DOM, on one shared package
+reader (`quail-ooxml`): at most 20 000 ZIP entries (counted from the end-of-central-directory
+record before the directory is parsed), unsafe entry names ignored, and the bytes entries
+*actually* inflate to charged against the same `max_decompressed` budget (declared sizes are
+never trusted). A DOCTYPE is never expanded, so entity bombs and external entities (XXE) do
+nothing; one XML event is at most 16 MiB; nesting depth is bounded.
+
+The HTML reader runs the html5ever tokenizer without its tree builder, so there is no DOM and
+the element stack is quail's own: 512 open elements, 32 nested tables, 1024 columns, 250 000
+blocks. HTML has no user-defined entities (only the fixed table of character references), and
+input that goes 16 MiB without completing a token (an endless comment, tag or attribute) stops
+the read. Nothing is fetched: no stylesheet, script, frame or image.
 
 ### Panic containment
 
@@ -110,16 +120,18 @@ Use `--isolate` for any corpus you do not control. Its cost is small for real do
 
 ## How it is tested
 
-- **Hostile test suites.** `crates/quail-pdf/tests/hostile.rs` and
-  `crates/quail-docx/tests/hostile.rs` generate crafted inputs in code (bombs, huge images,
+- **Hostile test suites.** `crates/quail-pdf/tests/hostile.rs`,
+  `crates/quail-docx/tests/hostile.rs`, `crates/quail-pptx/tests/hostile.rs` and
+  `crates/quail-html/tests/hostile.rs` generate crafted inputs in code (bombs, huge images,
   deep nesting, recursion, cycles) and fail if any of them gets through a limit.
 - **Fuzzing.** `quail-fuzz` is a mutation fuzzer for the whole pipeline that runs on stable
   Rust. Every case runs in a child process with memory, CPU and wall-clock limits, and the
   parent classifies how it ended: `ok`, `caught-panic`, `deadline`, `mem-high`, `slow`,
   `oom-abort`, `stack-overflow`, `timeout`, `cpu-limit`, `killed`, `abort`. Seeds are
-  generated (DOCX and PDF builders, hostile Unicode text); the mutators know the formats
-  (ZIP header lies, XML nesting storms, PDF filter chains, page-tree cycles, xref loops,
-  incremental updates with hostile objects). Each new crash signature is saved with a
+  generated (DOCX, PPTX and PDF builders, HTML shaped like EDGAR filings, hostile Unicode
+  text); the mutators know the formats (ZIP header lies, XML nesting storms, PDF filter
+  chains, page-tree cycles, xref loops, incremental updates with hostile objects, HTML
+  nesting floods, endless tokens and charset swaps). Each new crash signature is saved with a
   delta-debugged minimal copy. How to run it: [development.md](development.md#fuzzing).
 - **Isolation tests.** `quail-cli`'s tests crash workers on purpose (a test-only build
   feature) and check that every file still gets exactly one record.

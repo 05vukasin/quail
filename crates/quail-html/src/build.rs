@@ -50,7 +50,7 @@ const VOID: &[&str] = &[
 const DROPPED: &[&str] = &[
     "applet", "audio", "button", "canvas", "datalist", "frameset", "iframe", "map", "math", "nav",
     "noembed", "noframes", "noscript", "object", "script", "select", "style", "svg", "template",
-    "textarea", "video", "xmp",
+    "textarea", "title", "video", "xmp",
 ];
 
 /// Elements that start and end a block.
@@ -503,6 +503,9 @@ impl State {
 
     /// An item outside every table, onto the page.
     fn emit(&mut self, item: Item) {
+        if self.stats.pages_capped {
+            return;
+        }
         match item {
             Item::Block { text, kind, zone } => self.page.push(&text, kind, zone),
             Item::PageBreak => self.page_break(),

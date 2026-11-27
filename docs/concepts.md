@@ -127,7 +127,7 @@ rendered page:
 
 | field | meaning |
 |---|---|
-| `page` | zero-based page index (DOCX: section index; see below) |
+| `page` | zero-based page index (DOCX: section index; PPTX: slide index; see below) |
 | `zone` | `header`, `footer`, `body`, `title`, `table`, `signature` (left out when unknown) |
 | `span` | byte range `[start, end)` in that page's extracted text |
 | `bbox` | box on the page, in PDF points (1/72 inch) from the top-left corner |
@@ -137,7 +137,10 @@ one mentioned in passing; a date in a running footer is usually a print date. An
 the zone in their scores, and consumers can too.
 
 PDF pages are physical pages with geometry. DOCX has no fixed pages, so the extractor makes
-one *logical* page per section; such pages have no boxes. Plain text files are split into
+one *logical* page per section; such pages have no boxes. A PPTX gives one logical page per
+slide (its speaker notes are `note` blocks at the end of the page). An HTML file is split
+into logical pages at CSS page breaks (`page-break-before/after: always`, what SEC EDGAR
+filings put between printed pages), one page without them. Plain text files are split into
 logical pages at form feeds (one page without them), also without boxes. `quail inspect --text` prints the
 extracted page text, so a `span` can be checked by eye.
 
@@ -148,7 +151,8 @@ Everything in a record is produced by a **step**:
 - the engine's own steps: `engine.sniff` (format from the bytes) and, with `--dedup`,
   `engine.dedup`;
 - an **extractor** per format, turning bytes into a `Document`: `pdf.extract`,
-  `docx.extract`, `text.extract` (plain text, with encoding detection);
+  `docx.extract`, `pptx.extract`, `html.extract` (with the declared charset),
+  `text.extract` (plain text, with encoding detection);
 - **analyzers**, turning what is known so far into more facts: `hash.identity`, `text.stats`,
   `signal.scan`, `party.candidates`, ...
 

@@ -17,6 +17,9 @@ exact keys, ids and limits.
 | `quail-hash` | BLAKE3, XXH3-128 and FastCDC chunk hashes of the raw bytes | `hash.*` |
 | `quail-pdf` | PDF extractor on the vendored, hardened hayro crates; provides the page `raster` | `pdf.*` |
 | `quail-docx` | streaming DOCX (OOXML) extractor | `docx.*` |
+| `quail-pptx` | streaming PPTX (OOXML) extractor: slides, titles, tables, speaker notes | `pptx.*` |
+| `quail-ooxml` | the OOXML plumbing DOCX and PPTX share: the zip package under one decompression budget, the streaming XML walk, relationships. No facts | - |
+| `quail-html` | HTML extractor on the html5ever tokenizer: charset, blocks, tables, hidden content, page breaks, inline XBRL | `html.*` |
 | `quail-text` | text utilities (normalization, scripts, money parsing, encoding detection), the plain-text extractor and the text analyzers | `text.*` |
 | `quail-signals` | identifiers with check digits, dates with roles, amounts, contact domains | `signal.*` |
 | `quail-refs` | own document numbers, cited documents, titles, instrument kind | `ref.*` |
@@ -40,7 +43,7 @@ quail-cli ──▶ quail-worker ──▶ quail-engine ──▶ quail-core
     ├──▶ quail-io ──────────────────────────────────┤
     │                                               │
     └──▶ leaf crates (one cargo feature each)       │
-           pdf, docx, hash, ocr ────────────────────┤
+           pdf, docx, pptx, html, hash, ocr ────────┤
            signals, refs, parties, clauses,         │
            items, sketch, summary ──▶ quail-text ───┘
 ```
@@ -49,9 +52,10 @@ quail-cli ──▶ quail-worker ──▶ quail-engine ──▶ quail-core
 `quail-hash` and `quail-text`), the fuzzer wires an engine like `quail-cli` does.
 
 - `quail-core` depends only on `serde` and `thiserror`.
-- A leaf crate (pdf, docx, hash, signals, refs, parties, clauses, items, sketch, summary,
-  ocr) depends on `quail-core` and, when it needs text utilities, on `quail-text`. Never on
-  another leaf crate. A crate that reads another crate's facts (the summary card reads almost
+- A leaf crate (pdf, docx, pptx, html, hash, signals, refs, parties, clauses, items, sketch,
+  summary, ocr) depends on `quail-core` and, when it needs text utilities, on `quail-text`.
+  Never on another leaf crate. The two OOXML extractors share `quail-ooxml`, a library with
+  no steps and no keys. A crate that reads another crate's facts (the summary card reads almost
   all of them) names the keys as plain strings, and a test checks that each one is declared by
   its owner.
 - Only `quail-engine` (generically) and `quail-cli` (concretely) wire steps together.
@@ -71,12 +75,14 @@ quail-cli ──▶ quail-worker ──▶ quail-engine ──▶ quail-core
 
 ```
 bytes ──▶ sniff ──▶ extractor for the format ──▶ analyzers in plan order ──▶ finalizers ──▶ record
-          engine.    pdf / docx / text.extract     hash, text, signal, ref,      summary.card,
-          sniff@2    (Document, Raster)            party, clause, sketch, item   summary.extractive
+          engine.    pdf / docx / pptx /           hash, text, signal, ref,      summary.card,
+          sniff@3    html / text.extract           party, clause, sketch, item   summary.extractive
+                     (Document, Raster)
 ```
 
 1. **Sniff.** The format comes from the bytes only, never the file name: `%PDF-` near the
-   start, a ZIP whose directory holds `word/document.xml`, image magic numbers, or text. The
+   start, a ZIP whose directory holds `word/document.xml` or `ppt/presentation.xml`, image
+   magic numbers, text that starts like HTML, or other text. The
    work is bounded and nothing is inflated.
 2. **Extract.** The extractor registered for that format (one per format) builds the
    `Document` artifact and file-level facts. Formats with page geometry also provide a

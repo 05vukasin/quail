@@ -12,6 +12,9 @@ crates/
   quail-hash     identity: digests, content-defined chunks                  namespace hash.*
   quail-pdf      PDF extractor (vendored, hardened hayro)                   namespace pdf.*
   quail-docx     DOCX extractor                                             namespace docx.*
+  quail-pptx     PPTX extractor                                             namespace pptx.*
+  quail-ooxml    OOXML package, XML walk, relationships (DOCX and PPTX)
+  quail-html     HTML extractor (html5ever tokenizer, EDGAR / inline XBRL)  namespace html.*
   quail-text     text utilities + text-level analyzers                      namespace text.*
   quail-signals  identifiers, dates, amounts, contacts                      namespace signal.*
   quail-refs     own numbers, cited documents, titles, instrument kind      namespace ref.*
@@ -35,8 +38,9 @@ tools/           scripts (dataset fetchers, CPV index, key reference)
 ## Dependency rules
 
 - `quail-core` depends on nothing but `serde` and `thiserror`.
-- A leaf crate (hash, text, pdf, docx, io, ...) depends on `quail-core` and, when it needs
-  text utilities, on `quail-text`. Never on another leaf crate.
+- A leaf crate (hash, text, pdf, docx, pptx, html, io, ...) depends on `quail-core` and, when
+  it needs text utilities, on `quail-text`. Never on another leaf crate; `quail-ooxml` is the
+  shared OOXML library of `quail-docx` and `quail-pptx` (no steps, no keys).
 - Only `quail-engine` and `quail-cli` know concrete extractors and analyzers.
 - A crate that pulls a native library (ONNX Runtime, llama.cpp, the C zstd library) puts it
   behind a cargo feature, so the default build is pure Rust and builds anywhere `cargo build`
@@ -160,7 +164,8 @@ $B seeds DIR                                               # write the generated
 - Each new crash signature (`class@where`, e.g. `stack-overflow@docx.extract@1`) is saved under
   `<out>/crashes/` with a minimized copy and a line in `crashes/summary.tsv`.
 - A fix comes with a regression test that builds the minimized input in code (the
-  `tests/hostile.rs` suites of `quail-pdf` and `quail-docx`), not with the file itself.
+  `tests/hostile.rs` suites of `quail-pdf`, `quail-docx`, `quail-pptx` and `quail-html`), not
+  with the file itself.
 - Run the fuzzer for at least an hour on any change to an extractor, a decoder or the
   vendored crates, and report the iterations and findings in the PR.
 - Child-process limits are Unix-only; CPU limits and peak-RSS measurement are Linux-only.

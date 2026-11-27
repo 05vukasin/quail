@@ -101,6 +101,10 @@ fn hidden_and_dropped_content() {
 </body>"#);
     assert_eq!(r.texts(), vec!["Visible one", "Visible two"]);
     assert_eq!(r.int("html.hidden_elements"), Some(3));
+    // Only the first title is the fact; no title is page text.
+    let r = run("<title>First</title><p>body</p><title>Second</title>");
+    assert_eq!(r.texts(), vec!["body"]);
+    assert_eq!(r.str("html.title").as_deref(), Some("First"));
 }
 
 #[test]

@@ -94,8 +94,10 @@ The facts come in layers, each built on the ones before:
   `deep`) and an LLM-written summary exist as optional steps with their own native libraries
   and downloaded models; the default build is pure Rust and runs rules, statistics and small
   built-in dictionaries.
-- **It does not read every format.** PDF, DOCX and plain text (with its encoding detected) are
-  the formats it extracts; other files get their format, MIME type and hashes.
+- **It does not read every format.** PDF, DOCX, PPTX, HTML (with its declared charset, SEC
+  EDGAR filings and inline XBRL included) and plain text (with its encoding detected) are the
+  formats it extracts; other files (XLSX, RTF, e-mail, archives) get their format, MIME type
+  and hashes. HTML is read as it is: no stylesheet, script or linked resource is fetched.
 
 ## Where to go next
 
