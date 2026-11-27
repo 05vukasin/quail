@@ -1,0 +1,18 @@
+[package]
+name = "quail-ooxml"
+description = "Shared OOXML plumbing for the DOCX and PPTX extractors: a defensive zip package, a streaming XML walk, relationships"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+# Same major as hedgehog uses. Reading only needs inflate: the pure-Rust zlib-rs backend,
+# without the zopfli compressor the `deflate` feature also pulls in.
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+quick-xml = { version = "0.42.0", default-features = false }
+
+[lints]
+workspace = true

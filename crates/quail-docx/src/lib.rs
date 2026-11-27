@@ -42,12 +42,12 @@ mod body;
 mod extract;
 pub mod keys;
 mod numbering;
-mod package;
 mod props;
-mod rels;
 mod styles;
 mod util;
-mod xml;
+
+// The package, XML walk and relationships are shared with quail-pptx.
+use quail_ooxml::{package, rels, xml};
 
 use quail_core::{AnalyzerId, Blob, Document, Emitter, Extractor, Format, Limits, Result};
 

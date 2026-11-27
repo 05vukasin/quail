@@ -2900,6 +2900,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "quail-core",
+ "quail-ooxml",
  "quick-xml",
  "zip",
 ]
@@ -3001,6 +3002,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "ureq",
+]
+
+[[package]]
+name = "quail-ooxml"
+version = "0.1.0"
+dependencies = [
+ "quail-core",
+ "quick-xml",
+ "zip",
 ]
 
 [[package]]

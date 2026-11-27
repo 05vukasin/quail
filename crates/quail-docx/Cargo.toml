@@ -9,12 +9,12 @@ rust-version.workspace = true
 
 [dependencies]
 quail-core.workspace = true
-# Same major as hedgehog uses. Reading only needs inflate: the pure-Rust zlib-rs backend,
-# without the zopfli compressor the `deflate` feature also pulls in.
-zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+quail-ooxml = { path = "../quail-ooxml" }
 quick-xml = { version = "0.42.0", default-features = false }
 
 [dev-dependencies]
+# The tests write their packages (same version and backend as quail-ooxml reads).
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]

@@ -3,64 +3,17 @@
 
 use std::io::Read;
 
-use quail_core::{Date, Emitter, FactKey, Value};
+use quail_core::{Emitter, FactKey, Value};
 
 use crate::keys;
 use crate::package::Package;
 use crate::rels::Rels;
 use crate::util::{MAX_LIST, Notes, clean};
+use quail_ooxml::{parse_date, root_fields};
 use crate::xml::{Ev, Flow, attr, attr_exact, name, on, val, walk};
 
 /// Facts gathered so far, emitted together at the end.
 pub(crate) type Facts = Vec<(FactKey, Value)>;
-
-/// Children of the root element with their text: `(local name, text)`.
-fn root_fields(
-    pkg: &mut Package<'_>,
-    part: &str,
-    out: &Emitter,
-    warn: &mut Notes,
-) -> Vec<(String, String)> {
-    let mut fields = Vec::new();
-    let Some(reader) = pkg.open_part(part) else {
-        return fields;
-    };
-    let mut depth = 0usize;
-    let mut cur: Option<(String, String)> = None;
-    let r = walk(reader, out, |ev| {
-        match ev {
-            Ev::Start(e) => {
-                depth += 1;
-                if depth == 2 {
-                    cur = Some((name(e).to_owned(), String::new()));
-                }
-            }
-            Ev::Text(t) => {
-                if depth == 2
-                    && let Some((_, s)) = cur.as_mut()
-                    && s.len() < 64 << 10
-                {
-                    s.push_str(t);
-                }
-            }
-            Ev::End(_) => {
-                if depth == 2
-                    && let Some(f) = cur.take()
-                    && fields.len() < 1000
-                {
-                    fields.push(f);
-                }
-                depth = depth.saturating_sub(1);
-            }
-            Ev::Empty(_) => {}
-        }
-        Flow::Go
-    });
-    if let Err(stop) = r {
-        warn.stop(&stop, part);
-    }
-    fields
-}
 
 fn text_fact(facts: &mut Facts, key: FactKey, raw: &str) {
     let v = clean(raw);
@@ -222,29 +175,6 @@ pub(crate) fn custom(
 
 /// Most rsids kept (real documents have tens to a few thousand).
 const MAX_RSIDS: usize = 100_000;
-
-/// The calendar date of a W3CDTF value (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, optionally
-/// followed by `Thh:mm...`). Missing month or day count as 1.
-pub(crate) fn parse_date(v: &str) -> Option<Date> {
-    let v = v.trim();
-    let date = v.split(['T', ' ']).next()?;
-    let mut it = date.split('-');
-    let y: i16 = it.next().filter(|y| y.len() == 4)?.parse().ok()?;
-    let m: u8 = match it.next() {
-        Some(m) if m.len() == 2 => m.parse().ok()?,
-        Some(_) => return None,
-        None => 1,
-    };
-    let d: u8 = match it.next() {
-        Some(d) if d.len() == 2 => d.parse().ok()?,
-        Some(_) => return None,
-        None => 1,
-    };
-    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    Some(Date { y, m, d })
-}
 
 /// An rsid as Word writes it: exactly eight hex digits.
 pub(crate) fn parse_rsid(v: &str) -> Option<u64> {
@@ -506,24 +436,6 @@ mod tests {
         assert_eq!(parse_rsid("00A1B2C3D"), None);
         assert_eq!(parse_rsid("00A1B2CG"), None);
         assert!(is_custom_item("customXml/item12.xml"));
-        assert_eq!(
-            parse_date("2021-05-04T08:00:00Z"),
-            Some(Date {
-                y: 2021,
-                m: 5,
-                d: 4
-            })
-        );
-        assert_eq!(
-            parse_date("2021"),
-            Some(Date {
-                y: 2021,
-                m: 1,
-                d: 1
-            })
-        );
-        assert_eq!(parse_date("2021-13-01"), None);
-        assert_eq!(parse_date("yesterday"), None);
         assert!(!is_custom_item("customXml/itemProps1.xml"));
     }
 }
