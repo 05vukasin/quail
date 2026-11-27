@@ -90,6 +90,13 @@ The crate using them (`quail-pdf`) cannot do that from outside.
   to the next `endobj` (`EndobjCursor`, found walking forward once). An unclosed dictionary
   repeated 80 000 times made every header skip the following objects as nested garbage, up
   to the nesting cap: quadratic, 10 s for 4 MB.
+- **`xref.rs`, `object/dict.rs`, `object/mod.rs` (repair nesting):** the repair scan's object
+  validation and dictionary probes allow `REPAIR_NESTING_DEPTH` (32) levels of nesting instead
+  of 512 (they start their skips that far below the cap; `probe_dict` takes the start depth).
+  `11 0 obj << /Roo` repeated 264 000 times (one unclosed chain of dictionaries, one `endobj`
+  at the end) made every header and every `<<` walk 512 levels deep: 3.3 s for 4 MB. An object
+  nested deeper than 32 levels is not found by the repair scan; files with a valid xref are not
+  affected.
 - **`object/stream.rs`:** `Stream::encoded_len`, the stored data length without a copy.
 - **`content/mod.rs`:** an inline image's end is probed (`starts_with_content` on the content
   after a candidate `EI`) at most `MAX_CONTENT_PROBES` (64) times; then the candidate is taken
@@ -107,6 +114,10 @@ The crate using them (`quail-pdf`) cannot do that from outside.
 
 ### hayro-interpret 0.9.0
 
+- **`context.rs`:** the fallback font (Helvetica, for a `Tf` naming a font the resources
+  lack, or text shown before any `Tf`) is built once per `Context`. hayro-font builds a new one,
+  with a 256-entry code-to-glyph table, on every call: a page selecting a missing font 60 000
+  times spent about 20 µs on each, in extraction and again in the render's dry run and render.
 - **`x_object/decode/mod.rs`:** image and mask sample buffers are sized from `/Width` ×
   `/Height`. Images above the file's pixel cap are refused (and flagged) before anything is
   allocated, whatever filter they use or how small their data is.
