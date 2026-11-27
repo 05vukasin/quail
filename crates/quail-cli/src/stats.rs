@@ -350,8 +350,8 @@ mod tests {
             "source: <file>: io: denied (os error #)"
         );
         assert_eq!(
-            kind("", "docx.extract@22: page 3 of 40"),
-            "docx.extract@22: page # of #"
+            kind("", "docx.extract@12: page 3 of 40"),
+            "docx.extract@12: page # of #"
         );
         let mut t = Tally::default();
         t.add("x", "page 7 broken");
