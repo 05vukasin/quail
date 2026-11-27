@@ -145,7 +145,7 @@ fn bare_numbers_stay_low_or_absent() {
     assert!(texts(&run(&format!("Order {p} shipped")), &keys::RS_PIB).is_empty());
     // Serbian page: kept, at low confidence.
     let f = run(&format!("Ugovor o nabavci, broj {p}"));
-    assert_eq!(texts(&f, &keys::RS_PIB), [p.clone()]);
+    assert_eq!(texts(&f, &keys::RS_PIB), [p]);
     assert!(conf_of(&f, &keys::RS_PIB) <= 0.3);
     // An 8-digit number without its label is never an MB.
     assert!(texts(&run(&format!("Ugovor {}", mb())), &keys::RS_MB).is_empty());
@@ -170,7 +170,7 @@ fn phone_pib_and_account_are_told_apart() {
         "PIB {p}\nTel: 011/123-4567, +381 64 123 4567\nTekući račun: {short}\nBroj strane 5 od 12, godina 2023."
     );
     let f = run(&text);
-    assert_eq!(texts(&f, &keys::RS_PIB), [p.clone()]);
+    assert_eq!(texts(&f, &keys::RS_PIB), [p]);
     assert_eq!(texts(&f, &keys::RS_ACCOUNT), [dashed]);
     let phones = texts(&f, &keys::PHONE);
     assert!(phones.contains(&"+381111234567".to_owned()), "{phones:?}");
@@ -739,7 +739,7 @@ fn long_punctuation_runs_scan_in_linear_time() {
     // Dot leaders between a label and its value still count.
     let p = pib();
     let f = run(&format!("PIB: {}{p}", ". ".repeat(20)));
-    assert_eq!(texts(&f, &keys::RS_PIB), [p.clone()]);
+    assert_eq!(texts(&f, &keys::RS_PIB), std::slice::from_ref(&p));
     // The label is the one that decides: an unlabelled 9-digit number needs it.
     let f = run(&format!("PIB: {}{p}", ". ".repeat(80)));
     assert!(conf_of(&f, &keys::RS_PIB) < 0.95);

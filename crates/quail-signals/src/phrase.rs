@@ -193,12 +193,7 @@ pub(crate) fn find_after<C: Copy>(
         if p.line(j) - line > reach.lines {
             return None;
         }
-        if !p.wordlike(j) {
-            skipped += 1;
-            if skipped > MAX_SKIPPED {
-                return None;
-            }
-        } else {
+        if p.wordlike(j) {
             for (phrase, c) in table {
                 if let Some(last) = starts_at(p, j, phrase) {
                     return Some((*c, last));
@@ -209,6 +204,11 @@ pub(crate) fn find_after<C: Copy>(
             }
             words += 1;
             if words > reach.words {
+                return None;
+            }
+        } else {
+            skipped += 1;
+            if skipped > MAX_SKIPPED {
                 return None;
             }
         }

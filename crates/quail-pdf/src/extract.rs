@@ -327,17 +327,7 @@ fn pages(
         ..
     } = walk;
 
-    // Zones need every page: repetition is a cross-page signal.
-    if out.check_deadline().is_ok() {
-        assign_zones(&mut pending);
-    } else {
-        out.problem("timeout: zones not assigned");
-        for p in &mut pending {
-            for b in &mut p.page.blocks {
-                b.zone = Zone::Body;
-            }
-        }
-    }
+    zone_pages(&mut pending, out);
     let doc = Document {
         pages: pending.into_iter().map(|p| p.page).collect(),
     };
@@ -360,6 +350,20 @@ fn scan_facts(scanned: usize, pages: usize, out: &mut Emitter) {
     out.fact(keys::SCANNED_PAGES, int(scanned));
     if pages > 0 {
         out.fact(keys::IS_SCANNED, Value::Bool(scanned * 2 > pages));
+    }
+}
+
+/// Zones need every page: repetition is a cross-page signal. Out of time, every block is body.
+fn zone_pages(pending: &mut [Pending], out: &mut Emitter) {
+    if out.check_deadline().is_ok() {
+        assign_zones(pending);
+    } else {
+        out.problem("timeout: zones not assigned");
+        for p in pending {
+            for b in &mut p.page.blocks {
+                b.zone = Zone::Body;
+            }
+        }
     }
 }
 

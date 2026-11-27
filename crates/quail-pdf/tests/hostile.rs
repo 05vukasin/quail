@@ -589,7 +589,11 @@ fn a_page_over_the_draw_cap_is_refused_by_the_raster_at_once() {
         raster.0.embedded_scan_reduced(0, 128, &limits),
         Some(Err(Error::LimitExceeded("draw operations per page")))
     ));
-    assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+    assert!(
+        t.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        t.elapsed()
+    );
 }
 
 #[test]
@@ -636,7 +640,8 @@ fn heavy_fanout_pdf(levels: u32, heavy: u32, junk: usize) -> Vec<u8> {
         } else {
             (b"BT /F1 1 Tf (a) Tj ET".to_vec(), FONT.to_owned())
         };
-        let dict = format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << {res} >>");
+        let dict =
+            format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << {res} >>");
         let body = if k != heavy {
             stream_flate(&dict, &content)
         } else if junk > 0 {
@@ -644,7 +649,9 @@ fn heavy_fanout_pdf(levels: u32, heavy: u32, junk: usize) -> Vec<u8> {
         } else {
             let mut plain = b"x\x9c".to_vec();
             for _ in 0..40 {
-                plain.extend_from_slice(b"BT /F1 12 Tf 72 700 Td (UGOVOR O KUPOPRODAJI br. 12) Tj ET ");
+                plain.extend_from_slice(
+                    b"BT /F1 12 Tf 72 700 Td (UGOVOR O KUPOPRODAJI br. 12) Tj ET ",
+                );
             }
             plain.extend_from_slice(&content);
             stream_raw(&format!("/Filter /FlateDecode {dict}"), &plain)
@@ -664,7 +671,11 @@ fn costly_forms_in_a_fanout_are_cut_by_the_form_data_cap() {
         let bytes = heavy_fanout_pdf(levels, heavy, junk);
         let t = Instant::now();
         let r = run(bytes, &Limits::default());
-        assert!(t.elapsed() < Duration::from_secs(5), "{heavy}: {:?}", t.elapsed());
+        assert!(
+            t.elapsed() < Duration::from_secs(5),
+            "{heavy}: {:?}",
+            t.elapsed()
+        );
         assert!(r.doc.is_ok());
         assert!(has_problem(&r, "draw operations"), "{:?}", r.problems);
     }
@@ -687,7 +698,11 @@ fn unclosed_dictionaries_repair_in_linear_time() {
     let r = run(bytes, &Limits::default());
     assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
     let doc = r.doc.expect("doc");
-    assert!(doc.pages[0].text.contains("repaired"), "{:?}", doc.pages[0].text);
+    assert!(
+        doc.pages[0].text.contains("repaired"),
+        "{:?}",
+        doc.pages[0].text
+    );
 }
 
 #[test]

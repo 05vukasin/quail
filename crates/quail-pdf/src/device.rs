@@ -29,7 +29,7 @@ pub(crate) const MAX_CALLS_PER_PAGE: u64 = 4_000_000;
 /// form fan-out early (hayro re-parses a form's content on each use, ~6 µs per call), while
 /// plain drawing keeps the larger [`MAX_CALLS_PER_PAGE`] budget.
 pub(crate) const MAX_NESTINGS_PER_PAGE: u64 = 250_000;
-/// Bytes of XObject dictionaries and stored stream data a page may re-parse: hayro parses a
+/// Bytes of `XObject` dictionaries and stored stream data a page may re-parse: hayro parses a
 /// form's dictionary and content again on every `Do`. A form fan-out is cut by
 /// [`MAX_NESTINGS_PER_PAGE`] when its forms are small, but one form of a few MB (a 2.8 MB
 /// dictionary of junk, a broken stream that fails to inflate every time) drawn thousands of
@@ -49,7 +49,7 @@ pub(crate) enum Abort {
     /// The file's time budget ran out.
     Deadline,
     /// More than [`MAX_CALLS_PER_PAGE`] draw calls, [`MAX_NESTINGS_PER_PAGE`] clips and
-    /// groups, or [`MAX_XOBJECT_BYTES_PER_PAGE`] of XObject data.
+    /// groups, or [`MAX_XOBJECT_BYTES_PER_PAGE`] of `XObject` data.
     TooManyCalls,
 }
 
@@ -119,7 +119,7 @@ impl<'e> Watchdog<'e> {
         }
     }
 
-    /// An XObject about to be drawn, with the bytes hayro re-parses for it: counted against
+    /// An `XObject` about to be drawn, with the bytes hayro re-parses for it: counted against
     /// [`MAX_XOBJECT_BYTES_PER_PAGE`]. One such draw can cost milliseconds, so the deadline
     /// is checked on every one.
     pub(crate) fn x_object(&mut self, bytes: usize) {
