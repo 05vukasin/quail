@@ -15,7 +15,14 @@ use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
 use core::fmt::{Debug, Display, Formatter};
 
-const MAX_OBJECT_NESTING_DEPTH: usize = 512;
+pub(crate) const MAX_OBJECT_NESTING_DEPTH: usize = 512;
+
+/// quail: nesting the xref repair scan allows when it validates an object or probes a
+/// dictionary (it starts its skips this far below [`MAX_OBJECT_NESTING_DEPTH`]). Every object
+/// header and every `<<` of a damaged file is probed, and each probe of an unclosed dictionary
+/// chain (`11 0 obj << /Roo` repeated 264 000 times in 4 MB) ran 512 levels deep: 3 s. Real
+/// objects nest a few levels.
+pub(crate) const REPAIR_NESTING_DEPTH: usize = 32;
 
 mod bool;
 mod date;

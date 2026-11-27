@@ -113,6 +113,11 @@ impl EndobjCursor {
     }
 }
 
+/// quail: the depth the repair scan's skips and probes start at, leaving them
+/// `REPAIR_NESTING_DEPTH` levels.
+const REPAIR_BASE_DEPTH: usize =
+    object::MAX_OBJECT_NESTING_DEPTH - object::REPAIR_NESTING_DEPTH;
+
 fn fallback_xref_map_inner<'a>(
     data: &'a PdfData,
     mut dummy_ctx: ReaderContext<'a>,
@@ -143,7 +148,11 @@ fn fallback_xref_map_inner<'a>(
                 // quail: within the window up to the next `endobj`.
                 let end = endobj.window_end(data.as_ref(), cloned.offset());
                 let mut cloned = Reader::new_with(&data.as_ref()[..end], cloned.offset());
-                if cloned.skip::<Object<'_>>(false).is_some() {
+                // quail: with `REPAIR_NESTING_DEPTH` levels of room.
+                if cloned
+                    .skip_with_depth::<Object<'_>>(false, REPAIR_BASE_DEPTH)
+                    .is_some()
+                {
                     xref_map.insert(obj_id, EntryType::Normal(cur_pos));
                     last_obj_num = Some(obj_id);
                     dummy_ctx.set_obj_number(obj_id);
@@ -161,7 +170,7 @@ fn fallback_xref_map_inner<'a>(
             let mut probe_reader = Reader::new_with(&data.as_ref()[..end], r.offset());
             if r.peek_bytes(2).is_some_and(|b| b == b"<<")
                 && let Some(probe) =
-                    { probe_dict(&mut probe_reader, &dummy_ctx, Some(b"<<"), b">>") }
+                    { probe_dict(&mut probe_reader, &dummy_ctx, Some(b"<<"), b">>", REPAIR_BASE_DEPTH) }
             {
                 r.jump(probe_reader.offset());
                 if probe.has_root || probe.has_type {

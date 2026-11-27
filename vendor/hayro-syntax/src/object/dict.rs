@@ -225,6 +225,7 @@ fn read_inner<'a>(
         ctx,
         start_tag,
         end_tag,
+        0,
         #[inline]
         |name, offset, _| {
             offsets.insert(name, offset);
@@ -248,11 +249,14 @@ pub(crate) struct DictProbe<'a> {
 // We use that method during fallback xref parsing, so that we can search for
 // the dictionaries we need without allocating the whole hash map.
 // If the above TODOs are ever resolved, we can probably remove this method.
+// quail: `base_depth` is the nesting depth the probe starts at (the repair scan probes with
+// less room, see `REPAIR_NESTING_DEPTH`).
 pub(crate) fn probe_dict<'a>(
     r: &mut Reader<'a>,
     ctx: &ReaderContext<'a>,
     start_tag: Option<&[u8]>,
     end_tag: &[u8],
+    base_depth: usize,
 ) -> Option<DictProbe<'a>> {
     let mut has_root = false;
     let mut has_type = false;
@@ -262,6 +266,7 @@ pub(crate) fn probe_dict<'a>(
         ctx,
         start_tag,
         end_tag,
+        base_depth,
         #[inline]
         |name, _, _value_reader| {
             if name.as_ref() == keys::ROOT {
@@ -286,12 +291,14 @@ fn parse_dict_with<'a, F>(
     ctx: &ReaderContext<'a>,
     start_tag: Option<&[u8]>,
     end_tag: &[u8],
+    base_depth: usize,
     mut on_entry: F,
 ) -> Option<&'a [u8]>
 where
     F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
 {
-    let depth = usize::from(start_tag.is_some());
+    // quail: plus `base_depth`.
+    let depth = base_depth + usize::from(start_tag.is_some());
     let dict_data = r.tail()?;
     let start_offset = r.offset();
 

@@ -68,6 +68,10 @@ pub struct Context<'a> {
     pub(crate) glyph_scratch: Vec<PositionedGlyph<'a>>,
     // quail: how many Type3 glyph procedures enclose this context (forms do not count).
     pub(crate) type3_depth: u32,
+    // quail: the fallback (Helvetica) font, built once per context. `standard_font` builds a
+    // new font on every call (a 256-entry code-to-glyph table each time), so a page that
+    // selected a missing font 60 000 times spent seconds there.
+    fallback_font: std::cell::OnceCell<Option<crate::font::Font<'a>>>,
 }
 
 impl<'a> Context<'a> {
@@ -115,6 +119,7 @@ impl<'a> Context<'a> {
             nesting_depth,
             glyph_scratch: Vec::new(),
             type3_depth: 0,
+            fallback_font: std::cell::OnceCell::new(),
         }
     }
 
@@ -384,9 +389,14 @@ impl<'a> Context<'a> {
     }
 
     pub(crate) fn fallback_font(&self) -> Option<TextStateFont<'a>> {
-        self.interpreter_cache
-            .font_cache
-            .standard_font(StandardFont::Helvetica, &self.settings.font_resolver)
+        // quail: cached (see `fallback_font` above).
+        self.fallback_font
+            .get_or_init(|| {
+                self.interpreter_cache
+                    .font_cache
+                    .standard_font(StandardFont::Helvetica, &self.settings.font_resolver)
+            })
+            .clone()
             .map(TextStateFont::Fallback)
     }
 

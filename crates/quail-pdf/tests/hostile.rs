@@ -728,6 +728,62 @@ fn inline_image_end_search_is_bounded() {
 }
 
 #[test]
+fn a_missing_font_selected_often_is_cheap() {
+    // Fuzz finding (quail #134, `slow@sketch.page_phash@4`): a page whose `/Contents` lists one
+    // stream 60 000 times, each selecting a font the page does not have. hayro built a new
+    // fallback Helvetica (a 256-entry glyph table) on every such `Tf`, in extraction and again
+    // in the render's dry run and the render: 7 s. Here 1 M selections in one stream.
+    let mut c = b"BT ".to_vec();
+    for _ in 0..1_000_000 {
+        c.extend_from_slice(b"/F9 12 Tf ");
+    }
+    c.extend_from_slice(b"72 700 Td (fallback text) Tj ET");
+    let bytes = page_pdf(&c, FONT, vec![]);
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    let raster = r.raster.expect("raster");
+    let image = raster.0.render(0, 36.0, &Limits::default());
+    // Generous for slow CI runners (Windows debug); before the fix this took ~50 s.
+    assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+    let doc = r.doc.expect("doc");
+    assert!(
+        doc.pages[0].text.contains("fallback text"),
+        "{:?}",
+        doc.pages[0].text
+    );
+    assert!(image.is_ok(), "{image:?}");
+}
+
+#[test]
+fn unclosed_nested_dictionaries_repair_in_linear_time() {
+    // Fuzz finding (quail #134, `slow@pdf.extract@4`): `11 0 obj << /Roo` repeated 264 000
+    // times and no usable xref. The repair scan validates every object header and probes
+    // every `<<`; each probe of the never-closed chain of dictionaries ran to the nesting cap
+    // of 512 levels. The repair scan now allows 32 levels.
+    let mut bytes = page_pdf(b"BT /F1 12 Tf 72 700 Td (repaired) Tj ET", FONT, vec![]);
+    let cut = bytes.windows(4).position(|w| w == b"xref").expect("xref");
+    bytes.truncate(cut);
+    for _ in 0..1_600_000 {
+        bytes.extend_from_slice(b"11 0 obj\n<</Roo");
+    }
+    bytes.extend_from_slice(b"t 1 0 R >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    // The raster parses the file again (a second repair).
+    let raster = r.raster.expect("raster");
+    let image = raster.0.render(0, 36.0, &Limits::default());
+    // Generous for slow CI runners (Windows debug); before the fix this took ~43 s.
+    assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+    let doc = r.doc.expect("doc");
+    assert!(
+        doc.pages[0].text.contains("repaired"),
+        "{:?}",
+        doc.pages[0].text
+    );
+    assert!(image.is_ok(), "{image:?}");
+}
+
+#[test]
 fn type3_recursion_is_bounded() {
     // A Type3 glyph whose procedure shows the same glyph twice: recursion through fonts.
     let charproc = stream_flate("", b"1000 0 0 0 1000 1000 d1 BT /T3 1 Tf (a) Tj (a) Tj ET");
