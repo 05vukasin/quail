@@ -145,7 +145,7 @@ fn bare_numbers_stay_low_or_absent() {
     assert!(texts(&run(&format!("Order {p} shipped")), &keys::RS_PIB).is_empty());
     // Serbian page: kept, at low confidence.
     let f = run(&format!("Ugovor o nabavci, broj {p}"));
-    assert_eq!(texts(&f, &keys::RS_PIB), [p]);
+    assert_eq!(texts(&f, &keys::RS_PIB), [p.clone()]);
     assert!(conf_of(&f, &keys::RS_PIB) <= 0.3);
     // An 8-digit number without its label is never an MB.
     assert!(texts(&run(&format!("Ugovor {}", mb())), &keys::RS_MB).is_empty());
@@ -170,7 +170,7 @@ fn phone_pib_and_account_are_told_apart() {
         "PIB {p}\nTel: 011/123-4567, +381 64 123 4567\nTekući račun: {short}\nBroj strane 5 od 12, godina 2023."
     );
     let f = run(&text);
-    assert_eq!(texts(&f, &keys::RS_PIB), [p]);
+    assert_eq!(texts(&f, &keys::RS_PIB), [p.clone()]);
     assert_eq!(texts(&f, &keys::RS_ACCOUNT), [dashed]);
     let phones = texts(&f, &keys::PHONE);
     assert!(phones.contains(&"+381111234567".to_owned()), "{phones:?}");
@@ -707,6 +707,42 @@ fn cap_and_limits_make_problems() {
     };
     let (_, problems) = run_doc(doc(&["abcdefghij", "PIB 1"]), &limits);
     assert!(problems.iter().any(|p| p.contains("text limit")));
+}
+
+#[test]
+fn one_long_line_of_dates_scans_in_linear_time() {
+    // Fuzz finding (quail #131): a 3 MB text of one line, `15.03.2024. ` over and over. Every
+    // date on the first page's head lines asked whether it stands alone on its line by
+    // walking back to the line's start: quadratic, minutes of CPU.
+    let line = "15.03.2024. ".repeat(250_000);
+    let t = std::time::Instant::now();
+    let (f, _) = run_doc(doc(&[&line]), &Limits::default());
+    assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+    assert_eq!(values(&f, &keys::DATE), [date(2024, 3, 15)]);
+    // Still a head date when it is alone on its line, after a place.
+    let f = run("Beograd, 15.03.2024.\nUGOVOR");
+    assert_eq!(values(&f, &keys::DATE_SIGNED), [date(2024, 3, 15)]);
+}
+
+#[test]
+fn long_punctuation_runs_scan_in_linear_time() {
+    // Fuzz finding (quail #131, a DOCX): one paragraph of 300 000 `(` and 38 000 `)`. The
+    // label and role searches count words, not punctuation, so every candidate on the line
+    // walked the whole run.
+    let mut text = "UGOVOR O KUPOPRODAJI br. 12/2024\n".repeat(2_000);
+    text.push_str(&"(".repeat(300_000));
+    text.push_str(&")".repeat(38_000));
+    text.push_str(" PIB 101 RSD 15.03.2024. +381 11 123 4567 with note");
+    let t = std::time::Instant::now();
+    let _ = run(&text);
+    assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+    // Dot leaders between a label and its value still count.
+    let p = pib();
+    let f = run(&format!("PIB: {}{p}", ". ".repeat(20)));
+    assert_eq!(texts(&f, &keys::RS_PIB), [p.clone()]);
+    // The label is the one that decides: an unlabelled 9-digit number needs it.
+    let f = run(&format!("PIB: {}{p}", ". ".repeat(80)));
+    assert!(conf_of(&f, &keys::RS_PIB) < 0.95);
 }
 
 #[test]

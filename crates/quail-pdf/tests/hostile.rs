@@ -571,6 +571,126 @@ fn form_fanout_is_cut_by_the_draw_cap_or_deadline() {
 }
 
 #[test]
+fn a_page_over_the_draw_cap_is_refused_by_the_raster_at_once() {
+    // Fuzz finding (quail #131): the extractor stops a 2^n form fan-out at the draw cap and
+    // marks the page as needing OCR; page hashing and OCR then interpreted it up to the same
+    // cap twice more (the scan lookup, then the render's dry run). The extractor's raster now
+    // refuses such a page without interpreting it.
+    let r = run(fanout_pdf(40), &Limits::default());
+    assert!(has_problem(&r, "draw operations"), "{:?}", r.problems);
+    let raster = r.raster.expect("raster");
+    let limits = Limits::default();
+    let t = Instant::now();
+    assert!(matches!(
+        raster.0.render(0, 36.0, &limits),
+        Err(Error::LimitExceeded("draw operations per page"))
+    ));
+    assert!(matches!(
+        raster.0.embedded_scan_reduced(0, 128, &limits),
+        Some(Err(Error::LimitExceeded("draw operations per page")))
+    ));
+    assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+}
+
+#[test]
+fn one_huge_text_show_is_bounded_in_memory() {
+    // Fuzz finding (quail #131, `oom-abort@pdf.extract@3`): one `Tj` of a few million
+    // characters (a 20 KB file inflating to 8 MB of content). hayro collected every glyph of
+    // a run (~180 bytes each) before handing it to the device: 1.4 GiB, then the allocation
+    // failure aborted the process. Runs now reach the device in bounded pieces.
+    // 3 M glyphs per page, below the 4 M draw cap, so the page still gives text.
+    let text = "15.03.2024. ".repeat(250_000);
+    let half = "15.03.2024. ".repeat(125_000);
+    for content in [
+        format!("BT /F1 11 Tf 72 740 Td ({text}) Tj ET"),
+        format!("BT /F1 11 Tf 72 740 Td [({half}) -250 ({half})] TJ ET"),
+    ] {
+        let bytes = page_pdf(content.as_bytes(), FONT, vec![]);
+        let (r, peak) = peak_of(|| run(bytes.clone(), &Limits::default()));
+        assert!(peak < 192 * MIB, "peak {} MiB", peak / MIB);
+        let doc = r.doc.expect("doc");
+        assert!(
+            doc.pages[0].text.starts_with("15.03.2024. 15.03.2024."),
+            "{:?}",
+            doc.pages[0].text.get(..40)
+        );
+        // The render path shows the same runs.
+        let raster = PdfRaster::new(Blob::from(bytes));
+        let (_, peak) = peak_of(|| raster.render(0, 36.0, &Limits::default()));
+        assert!(peak < 192 * MIB, "render peak {} MiB", peak / MIB);
+    }
+}
+
+/// [`fanout_pdf`] with form `10 + heavy` made costly to draw: `junk` bytes of garbage in its
+/// dictionary, or (`junk == 0`) content that claims `/FlateDecode` but is stored plain, so
+/// every draw fails to inflate it again.
+fn heavy_fanout_pdf(levels: u32, heavy: u32, junk: usize) -> Vec<u8> {
+    let mut extra = Vec::new();
+    for k in 0..levels {
+        let n = 10 + k;
+        let (content, res) = if k + 1 < levels {
+            (
+                b"/X Do /X Do".to_vec(),
+                format!("/XObject << /X {} 0 R >>", n + 1),
+            )
+        } else {
+            (b"BT /F1 1 Tf (a) Tj ET".to_vec(), FONT.to_owned())
+        };
+        let dict = format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << {res} >>");
+        let body = if k != heavy {
+            stream_flate(&dict, &content)
+        } else if junk > 0 {
+            stream_flate(&format!("{} {dict}", "e ".repeat(junk / 2)), &content)
+        } else {
+            let mut plain = b"x\x9c".to_vec();
+            for _ in 0..40 {
+                plain.extend_from_slice(b"BT /F1 12 Tf 72 700 Td (UGOVOR O KUPOPRODAJI br. 12) Tj ET ");
+            }
+            plain.extend_from_slice(&content);
+            stream_raw(&format!("/Filter /FlateDecode {dict}"), &plain)
+        };
+        extra.push((n, body));
+    }
+    page_pdf(b"/X Do", "/XObject << /X 10 0 R >>", extra)
+}
+
+#[test]
+fn costly_forms_in_a_fanout_are_cut_by_the_form_data_cap() {
+    // Fuzz findings (quail #131, `deadline@pdf.extract@3`, `slow@pdf.extract`): a 2^n form
+    // fan-out with one costly form deep inside. hayro re-parses a form on every `Do`, so a
+    // 2.8 MB junk dictionary, or a stream that fails to inflate, drawn thousands of times took
+    // the whole file deadline while the nesting cap was still far.
+    for (heavy, junk) in [(26, 2 * MIB), (13, 0)] {
+        let bytes = heavy_fanout_pdf(40, heavy, junk);
+        let t = Instant::now();
+        let r = run(bytes, &Limits::default());
+        assert!(t.elapsed() < Duration::from_secs(5), "{heavy}: {:?}", t.elapsed());
+        assert!(r.doc.is_ok());
+        assert!(has_problem(&r, "draw operations"), "{:?}", r.problems);
+    }
+}
+
+#[test]
+fn unclosed_dictionaries_repair_in_linear_time() {
+    // Fuzz finding (quail #131, `slow@pdf.extract`): 4 MB of `5 0 obj << /Type /eam endobj`
+    // and no xref. The repair scan validates every object header by skipping the object after
+    // it; an unclosed dictionary swallowed the following objects as nested garbage, up to the
+    // nesting cap of 512, from every header. Validation now stops at the next `endobj`.
+    let mut bytes = page_pdf(b"BT /F1 12 Tf 72 700 Td (repaired) Tj ET", FONT, vec![]);
+    let cut = bytes.windows(4).position(|w| w == b"xref").expect("xref");
+    bytes.truncate(cut);
+    for _ in 0..80_000 {
+        bytes.extend_from_slice(b"5 0 obj\n<< /Filter /FlateDecode /Type /eam endobj\n");
+    }
+    bytes.extend_from_slice(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    let doc = r.doc.expect("doc");
+    assert!(doc.pages[0].text.contains("repaired"), "{:?}", doc.pages[0].text);
+}
+
+#[test]
 fn type3_recursion_is_bounded() {
     // A Type3 glyph whose procedure shows the same glyph twice: recursion through fonts.
     let charproc = stream_flate("", b"1000 0 0 0 1000 1000 d1 BT /T3 1 Tf (a) Tj (a) Tj ET");

@@ -102,7 +102,8 @@ One fact per distinct (key, value) per file, with the evidence of its most confi
 Reads at most `Limits::max_text_bytes`, checks the deadline per page, keeps at most 200 distinct values
 per key (`MAX_PER_KEY`) and 4 000 dates per file before resolving their order; each limit records a
 `problem` (record becomes `Partial`) and keeps what was found. No regular expressions: every rule looks
-a bounded number of tokens around a candidate, so the scan is linear in the text.
+a bounded number of tokens around a candidate (searches walk over at most 64 punctuation tokens, and a
+date's "alone on its line" check stops at the third word before it), so the scan is linear in the text.
 
 ## Calibration (conf ≈ measured precision)
 

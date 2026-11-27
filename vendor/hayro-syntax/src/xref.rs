@@ -71,6 +71,48 @@ fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8]) -> (XrefMap, Option
     fallback_xref_map_inner(data, ReaderContext::dummy(), true, password)
 }
 
+/// quail: where the repair scan's validation of an object at `pos` must stop: the next
+/// `endobj`. A well-formed object ends before it; an unclosed dictionary (`5 0 obj << /Type
+/// /X endobj`, repeated 80 000 times in 4 MB) otherwise made every object header skip
+/// hundreds of the following objects as nested garbage, up to the nesting cap: quadratic,
+/// 10 s. Positions are found walking forward once, as the scan does.
+struct EndobjCursor {
+    /// Start of the next `endobj` at or after `searched_from`, or `None` when there is none.
+    next: Option<usize>,
+    searched_from: usize,
+    started: bool,
+}
+
+impl EndobjCursor {
+    fn new() -> Self {
+        Self {
+            next: None,
+            searched_from: 0,
+            started: false,
+        }
+    }
+
+    /// End of the window for a validation starting at `pos` (the data's end when no
+    /// `endobj` follows).
+    fn window_end(&mut self, data: &[u8], pos: usize) -> usize {
+        let stale = match self.next {
+            Some(n) => n < pos,
+            None => !self.started,
+        };
+        if stale {
+            self.started = true;
+            let from = pos.max(self.searched_from);
+            self.next = data
+                .get(from..)
+                .and_then(|tail| tail.windows(6).position(|w| w == b"endobj"))
+                .map(|i| from + i);
+            // Without a match, nothing after `from` matches later either.
+            self.searched_from = self.next.unwrap_or(data.len());
+        }
+        self.next.unwrap_or(data.len())
+    }
+}
+
 fn fallback_xref_map_inner<'a>(
     data: &'a PdfData,
     mut dummy_ctx: ReaderContext<'a>,
@@ -84,6 +126,8 @@ fn fallback_xref_map_inner<'a>(
     let mut r = Reader::new(data.as_ref());
 
     let mut last_obj_num = None;
+    // quail: validation windows end at the next `endobj`.
+    let mut endobj = EndobjCursor::new();
 
     loop {
         let cur_pos = r.offset();
@@ -96,6 +140,9 @@ fn fallback_xref_map_inner<'a>(
                 let mut cloned = r.clone();
                 // Check that the object following it is actually valid before inserting it.
                 cloned.skip_white_spaces_and_comments();
+                // quail: within the window up to the next `endobj`.
+                let end = endobj.window_end(data.as_ref(), cloned.offset());
+                let mut cloned = Reader::new_with(&data.as_ref()[..end], cloned.offset());
                 if cloned.skip::<Object<'_>>(false).is_some() {
                     xref_map.insert(obj_id, EntryType::Normal(cur_pos));
                     last_obj_num = Some(obj_id);
@@ -108,12 +155,15 @@ fn fallback_xref_map_inner<'a>(
         } else {
             // Then, try to check whether we have a dictionary, in particular a trailer
             // dictionary.
-            let mut probe_reader = r.clone();
+            // quail: a dictionary is probed within the window up to the next `endobj` too;
+            // offsets stay those of the whole file.
+            let end = endobj.window_end(data.as_ref(), r.offset());
+            let mut probe_reader = Reader::new_with(&data.as_ref()[..end], r.offset());
             if r.peek_bytes(2).is_some_and(|b| b == b"<<")
                 && let Some(probe) =
                     { probe_dict(&mut probe_reader, &dummy_ctx, Some(b"<<"), b">>") }
             {
-                r = probe_reader;
+                r.jump(probe_reader.offset());
                 if probe.has_root || probe.has_type {
                     let mut dict_reader = Reader::new(probe.data);
                     if let Some(dict) = dict_reader.read_with_context::<Dict<'_>>(&dummy_ctx) {

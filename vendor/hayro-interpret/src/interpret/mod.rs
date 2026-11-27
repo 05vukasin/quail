@@ -610,7 +610,7 @@ pub fn interpret<'a>(
                             text::apply_glyph_run_adjustment(context, num.as_f32());
                         }
                         Object::String(text) => {
-                            text::append_text_string(context, resources, &text);
+                            text::append_text_string(context, device, resources, &text);
                         }
                         _ => {}
                     }
@@ -666,6 +666,8 @@ pub fn interpret<'a>(
                 let warning_sink = context.settings.warning_sink.clone();
                 let transfer_function = context.compositing().transfer_function.clone();
                 if let Some(x_object) = resources.get_x_object(x.0).and_then(|s| {
+                    // quail: report what this draw re-parses.
+                    device.on_x_object(s.dict().data().len().saturating_add(s.encoded_len()));
                     XObject::new(
                         &s,
                         |name| context.get_color_space(resources, name),

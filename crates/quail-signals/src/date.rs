@@ -15,7 +15,7 @@ use crate::checksum::valid_ymd;
 use crate::conf;
 use crate::keys;
 use crate::page::PageText;
-use crate::phrase::{Reach, find_before_wrapped};
+use crate::phrase::{MAX_SKIPPED, Reach, find_before_wrapped};
 
 /// What a keyword before a date says it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,6 +282,7 @@ fn cited(p: &PageText, first: usize) -> bool {
     // X, is made effective as of Y`): the noun sits in a phrase of the subject, so another
     // instrument there does not decide; the subject's own noun further back does.
     let mut verb = false;
+    let mut skipped = 0;
     let mut j = first;
     while j > 0 && words < CITED_WORDS {
         j -= 1;
@@ -289,6 +290,10 @@ fn cited(p: &PageText, first: usize) -> bool {
             return false;
         }
         if !p.wordlike(j) {
+            skipped += 1;
+            if skipped > MAX_SKIPPED {
+                return false;
+            }
             continue;
         }
         words += 1;
@@ -310,12 +315,17 @@ fn cited(p: &PageText, first: usize) -> bool {
 fn determiner(p: &PageText, j: usize, line: u32) -> Option<bool> {
     let mut k = j;
     let mut between = 0;
+    let mut skipped = 0;
     while k > 0 && between < 14 {
         k -= 1;
         if line - p.line(k).min(line) > 4 || sentence_end(p, k) || matches!(p.text(k), ":" | ")") {
             return None;
         }
         if !p.wordlike(k) {
+            skipped += 1;
+            if skipped > MAX_SKIPPED {
+                return None;
+            }
             continue;
         }
         let w = p.key(k);
@@ -341,7 +351,8 @@ fn determiner(p: &PageText, j: usize, line: u32) -> Option<bool> {
 fn earlier_before(p: &PageText, k: usize) -> bool {
     let mut seen = 0;
     let mut j = k;
-    while j > 0 && seen < 4 {
+    // Punctuation is walked over too, at most `MAX_SKIPPED` tokens of it.
+    while j > 0 && seen < 4 && k - j <= MAX_SKIPPED {
         j -= 1;
         if sentence_end(p, j) {
             return false;
@@ -399,16 +410,23 @@ fn alone_on_line(p: &PageText, a: usize, b: usize) -> bool {
     let line = p.line(a);
     let mut before = 0;
     let mut j = a;
+    // At most a two-word place before it: stop at the third word, or a long line made of
+    // dates walks back to its start from every date (quadratic; a 3 MB line ran minutes).
     while j > 0 && p.line(j - 1) == line {
         j -= 1;
         if p.wordlike(j) {
             before += 1;
+            if before > 2 {
+                return false;
+            }
+        } else if a - j > MAX_SKIPPED {
+            return false;
         }
     }
     let place = before == 0 || (before <= 2 && a > 0 && p.text(a - 1) == ",");
     let mut k = b + 1;
     while k < p.len() && p.line(k) == p.line(b) {
-        if p.wordlike(k) && !YEAR_WORDS.contains(&p.key(k)) {
+        if (p.wordlike(k) && !YEAR_WORDS.contains(&p.key(k))) || k - b > MAX_SKIPPED {
             return false;
         }
         k += 1;
