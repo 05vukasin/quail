@@ -9,7 +9,7 @@
 //! ```text
 //! quail-fuzz fuzz --out DIR [--jobs N] [--iterations N] [--time SECS] [--seed N] [--seeds DIR]
 //!                 [--mem-mb 1024] [--cpu-secs 30] [--timeout 60] [--deadline 20]
-//!                 [--mem-high-mb 512] [--slow-ms 5000] [--kinds docx,pdf,txt]
+//!                 [--mem-high-mb 512] [--slow-ms 5000] [--kinds docx,pptx,html,pdf,txt]
 //!                 [--no-minimize] [--min-secs 120] [--no-render]
 //! quail-fuzz run FILE...           classify each file (child process, same limits)
 //! quail-fuzz exec FILE             run one file in this process and print the report
@@ -134,6 +134,8 @@ fn real_main() -> Result<(), String> {
                         "docx" => Some(Kind::Docx),
                         "pdf" => Some(Kind::Pdf),
                         "txt" | "text" => Some(Kind::Text),
+                        "pptx" => Some(Kind::Pptx),
+                        "html" => Some(Kind::Html),
                         _ => None,
                     })
                     .collect()

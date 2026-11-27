@@ -18,7 +18,7 @@ pub struct KeyDoc {
 pub const ENGINE: &[KeyDoc] = &[
     KeyDoc {
         key: quail_engine::keys::FORMAT,
-        doc: "Detected format, as `quail_core::Format::as_str` (`pdf`, `docx`, `zip`, `image`, `text`, `unknown`).",
+        doc: "Detected format, as `quail_core::Format::as_str` (`pdf`, `docx`, `pptx`, `html`, `zip`, `image`, `text`, `unknown`).",
     },
     KeyDoc {
         key: quail_engine::keys::MIME,
@@ -272,6 +272,148 @@ pub const DOCX: &[KeyDoc] = &[
     KeyDoc {
         key: quail_docx::keys::CLM_SECOND_PARTY,
         doc: "Filled legal-entity name of the CLM form's Second Party (usually the supplier). Text.",
+    },
+];
+
+/// Keys of `quail_pptx::keys`.
+#[cfg(feature = "pptx")]
+pub const PPTX: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_pptx::keys::TITLE,
+        doc: "`dc:title`. Text.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::SUBJECT,
+        doc: "`dc:subject`. Text.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::CREATOR,
+        doc: "`dc:creator`. Text.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::LAST_MODIFIED_BY,
+        doc: "`cp:lastModifiedBy`. Text.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::KEYWORDS,
+        doc: "`cp:keywords`. Text.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::CREATED,
+        doc: "`dcterms:created`: the calendar date of the W3CDTF value. Date; an unparsable value is reported in a warning instead.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::MODIFIED,
+        doc: "`dcterms:modified`, like `pptx.created`. Date.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::APPLICATION,
+        doc: "`Application`, e.g. `Microsoft Office PowerPoint`. Text.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::COMPANY,
+        doc: "`Company`. Text.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::SLIDES,
+        doc: "Slides listed in `presentation.xml` (`p:sldIdLst`), read or not. Int.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::HIDDEN_SLIDES,
+        doc: "Slides marked hidden (`show=\"0\"`); their text is still read. Int.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::NOTES_SLIDES,
+        doc: "Slides whose speaker notes have text. Int.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::TABLES,
+        doc: "Tables (`a:tbl`) emitted as table cells. Int.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::HIDDEN_SHAPES,
+        doc: "Shapes and groups with text left out because they are hidden (`cNvPr hidden=\"1\"`). Int.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::HAS_MACROS,
+        doc: "A `vbaProject.bin` part is present (`.pptm`). Bool.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::IMAGES,
+        doc: "Parts under `ppt/media/`. Int.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::EMBEDDED_OBJECTS,
+        doc: "Parts under `ppt/embeddings/`. Int.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::ZIP_ENTRIES,
+        doc: "Entries in the zip directory. Int.",
+    },
+    KeyDoc {
+        key: quail_pptx::keys::DUPLICATE_ENTRIES,
+        doc: "Entries whose name repeats an earlier one, exactly or by case. Int.",
+    },
+];
+
+/// Keys of `quail_html::keys`.
+#[cfg(feature = "html")]
+pub const HTML: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_html::keys::ENCODING,
+        doc: "Encoding the text was decoded with (WHATWG name, e.g. `UTF-8`, `windows-1252`). Text.",
+    },
+    KeyDoc {
+        key: quail_html::keys::ENCODING_SOURCE,
+        doc: "Where `html.encoding` came from: `bom`, `meta` (`<meta charset>` or `http-equiv`), `xml` (the XML declaration), `utf8` (none declared, valid UTF-8) or `guess`. Text.",
+    },
+    KeyDoc {
+        key: quail_html::keys::DECODE_ERRORS,
+        doc: "Bytes that were not valid in `html.encoding` and became U+FFFD (only when there were any). Int.",
+    },
+    KeyDoc {
+        key: quail_html::keys::TITLE,
+        doc: "Text of the first `<title>`, whitespace collapsed. Text.",
+    },
+    KeyDoc {
+        key: quail_html::keys::LANG,
+        doc: "`lang` (or `xml:lang`) of the `<html>` element. Text.",
+    },
+    KeyDoc {
+        key: quail_html::keys::GENERATOR,
+        doc: "`content` of `<meta name=\"generator\">` (e.g. `Workiva`, `Microsoft Word 15`). Text.",
+    },
+    KeyDoc {
+        key: quail_html::keys::INLINE_XBRL,
+        doc: "The file is inline XBRL: it declares the inline XBRL namespace or uses `ix:` facts. Bool.",
+    },
+    KeyDoc {
+        key: quail_html::keys::IX_FACTS,
+        doc: "Inline XBRL facts (`ix:nonFraction` and `ix:nonNumeric`, hidden ones included). Int.",
+    },
+    KeyDoc {
+        key: quail_html::keys::XBRL_DEI,
+        doc: "The `dei:` cover facts of an inline XBRL filing, `name=value` in file order, hidden ones included (e.g. `DocumentType=10-K`, `EntityRegistrantName=...`, `EntityCentralIndexKey=0000123456`). At most 200, values at most 1 KiB. List of Text.",
+    },
+    KeyDoc {
+        key: quail_html::keys::TABLES,
+        doc: "Data tables emitted as table cells. Int.",
+    },
+    KeyDoc {
+        key: quail_html::keys::LAYOUT_TABLES,
+        doc: "Layout tables (one cell, or cells holding headings, lists, page breaks or other tables) whose cells were read as ordinary blocks. Int.",
+    },
+    KeyDoc {
+        key: quail_html::keys::HIDDEN_ELEMENTS,
+        doc: "Elements left out as hidden (`hidden`, `display:none`, `visibility:hidden`, `ix:header`), counted at the outermost one. Int.",
+    },
+    KeyDoc {
+        key: quail_html::keys::SCRIPTS,
+        doc: "`<script>` elements (their code is never run or kept). Int.",
+    },
+    KeyDoc {
+        key: quail_html::keys::ELEMENTS,
+        doc: "Start tags read. Int.",
     },
 ];
 

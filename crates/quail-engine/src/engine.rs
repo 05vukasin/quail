@@ -14,7 +14,7 @@ use crate::panic::contain;
 use crate::sniff::{Sniff, detect};
 
 /// Id of the sniffing step, the source of `engine.format` and `engine.mime`.
-pub const SNIFF_ID: AnalyzerId = AnalyzerId::new("engine.sniff", 2);
+pub const SNIFF_ID: AnalyzerId = AnalyzerId::new("engine.sniff", 3);
 
 /// Runs extractors and analyzers over files. Built by
 /// [`EngineBuilder`](crate::EngineBuilder); immutable and shared between worker threads.

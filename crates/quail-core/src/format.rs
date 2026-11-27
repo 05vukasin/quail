@@ -10,6 +10,10 @@ pub enum Format {
     Pdf,
     /// Office Open XML word processing document.
     Docx,
+    /// Office Open XML presentation.
+    Pptx,
+    /// HTML or XHTML (including inline XBRL).
+    Html,
     /// Any other ZIP container.
     Zip,
     /// Raster image.
@@ -26,6 +30,8 @@ impl Format {
         match self {
             Self::Pdf => "pdf",
             Self::Docx => "docx",
+            Self::Pptx => "pptx",
+            Self::Html => "html",
             Self::Zip => "zip",
             Self::Image => "image",
             Self::Text => "text",

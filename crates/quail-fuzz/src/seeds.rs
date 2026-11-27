@@ -1,5 +1,9 @@
-//! Generated seed inputs: DOCX packages from a small builder, PDFs from lopdf and from raw
-//! bytes, plain text full of awkward Unicode. All content is synthetic.
+//! Generated seed inputs: DOCX and PPTX packages from small builders, PDFs from lopdf and
+//! from raw bytes, HTML shaped like EDGAR filings and old web pages, plain text full of
+//! awkward Unicode. All content is synthetic.
+
+// Seeds are built once per run: readable `map(format!).collect()` over speed.
+#![allow(clippy::format_collect)]
 
 use lopdf::content::{Content, Operation};
 use lopdf::{Document as LoDoc, Object, Stream, dictionary};
@@ -16,15 +20,29 @@ pub enum Kind {
     Pdf,
     /// Plain text.
     Text,
+    /// A zip package (PPTX).
+    Pptx,
+    /// HTML.
+    Html,
 }
 
 impl Kind {
     /// Guess from the bytes.
     pub fn of(bytes: &[u8]) -> Self {
+        let head = &bytes[..bytes.len().min(1024)];
         if bytes.starts_with(b"PK") {
-            Self::Docx
-        } else if pdfgen::find(&bytes[..bytes.len().min(1024)], b"%PDF").is_some() {
+            if pdfgen::find(bytes, b"ppt/presentation.xml").is_some() {
+                Self::Pptx
+            } else {
+                Self::Docx
+            }
+        } else if pdfgen::find(head, b"%PDF").is_some() {
             Self::Pdf
+        } else if [&b"<html"[..], b"<!doctype html", b"<body", b"<table"]
+            .iter()
+            .any(|t| pdfgen::find(&head.to_ascii_lowercase(), t).is_some())
+        {
+            Self::Html
         } else {
             Self::Text
         }
@@ -36,6 +54,8 @@ impl Kind {
             Self::Docx => "docx",
             Self::Pdf => "pdf",
             Self::Text => "txt",
+            Self::Pptx => "pptx",
+            Self::Html => "html",
         }
     }
 
@@ -574,12 +594,210 @@ pub fn text_seeds() -> Vec<Vec<u8>> {
     v
 }
 
+// -- PPTX -------------------------------------------------------------------------------------
+
+const PNS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
+
+/// A shape with an optional placeholder, an optional offset and paragraphs.
+fn pshape(id: u32, ph: &str, pos: Option<(i64, i64)>, lines: &[&str]) -> String {
+    let xfrm = pos
+        .map(|(x, y)| format!(r#"<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="1" cy="1"/></a:xfrm>"#))
+        .unwrap_or_default();
+    let paras: String = lines
+        .iter()
+        .map(|l| {
+            format!(
+                "<a:p><a:r><a:rPr lang=\"sr-Latn-RS\"/><a:t>{}</a:t></a:r></a:p>",
+                esc(l)
+            )
+        })
+        .collect();
+    format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="s{id}"/><p:cNvSpPr/><p:nvPr>{ph}</p:nvPr></p:nvSpPr><p:spPr>{xfrm}</p:spPr><p:txBody><a:bodyPr/>{paras}</p:txBody></p:sp>"#
+    )
+}
+
+fn psld(root: &str, shapes: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:{root} {PNS}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{shapes}</p:spTree></p:cSld></p:{root}>"#
+    )
+}
+
+/// A presentation from slides (shapes XML, notes text).
+fn pptx(slides: &[(String, Option<&str>)]) -> Vec<u8> {
+    const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let rels = |inner: String| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="{PKG}">{inner}</Relationships>"#
+        )
+    };
+    let rel = |id: &str, t: &str, target: &str| {
+        format!(r#"<Relationship Id="{id}" Type="{REL}/{t}" Target="{target}"/>"#)
+    };
+    let mut e = vec![
+        Entry::new(
+            "[Content_Types].xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>"#,
+        ),
+        Entry::new(
+            "_rels/.rels",
+            rels(rel("rId1", "officeDocument", "ppt/presentation.xml")),
+        ),
+    ];
+    let ids: String = (1..=slides.len())
+        .map(|i| format!(r#"<p:sldId id="{}" r:id="rIdS{i}"/>"#, 255 + i))
+        .collect();
+    e.push(Entry::new(
+        "ppt/presentation.xml",
+        format!(r#"<?xml version="1.0" encoding="UTF-8"?><p:presentation {PNS}><p:sldIdLst>{ids}</p:sldIdLst></p:presentation>"#),
+    ));
+    let prels: String = (1..=slides.len())
+        .map(|i| {
+            rel(
+                &format!("rIdS{i}"),
+                "slide",
+                &format!("slides/slide{i}.xml"),
+            )
+        })
+        .collect();
+    e.push(Entry::new("ppt/_rels/presentation.xml.rels", rels(prels)));
+    for (k, (shapes, notes)) in slides.iter().enumerate() {
+        let i = k + 1;
+        e.push(Entry::new(
+            format!("ppt/slides/slide{i}.xml"),
+            psld("sld", shapes),
+        ));
+        let mut r = rel("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml");
+        if let Some(n) = notes {
+            r.push_str(&rel(
+                "rId2",
+                "notesSlide",
+                &format!("../notesSlides/notesSlide{i}.xml"),
+            ));
+            let body = pshape(2, r#"<p:ph type="body" idx="1"/>"#, None, &[n]);
+            e.push(Entry::new(
+                format!("ppt/notesSlides/notesSlide{i}.xml"),
+                psld("notes", &body),
+            ));
+        }
+        e.push(Entry::new(
+            format!("ppt/slides/_rels/slide{i}.xml.rels"),
+            rels(r),
+        ));
+    }
+    let layout = pshape(2, r#"<p:ph type="title"/>"#, Some((457_200, 274_638)), &[])
+        + &pshape(3, r#"<p:ph idx="1"/>"#, Some((457_200, 1_600_200)), &[]);
+    e.push(Entry::new(
+        "ppt/slideLayouts/slideLayout1.xml",
+        psld("sldLayout", &layout),
+    ));
+    zipfmt::write(&e, Eocd::default(), b"")
+}
+
+/// Every generated PPTX seed.
+pub fn pptx_seeds() -> Vec<Vec<u8>> {
+    let title = |t: &str| pshape(2, r#"<p:ph type="title"/>"#, None, &[t]);
+    let body = |lines: &[&str]| pshape(3, r#"<p:ph idx="1"/>"#, None, lines);
+    let tc = |t: &str, a: &str| {
+        format!(
+            "<a:tc{a}><a:txBody><a:bodyPr/><a:p><a:r><a:t>{}</a:t></a:r></a:p></a:txBody></a:tc>",
+            esc(t)
+        )
+    };
+    let table = format!(
+        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="t"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="3000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tr>{}{}{}</a:tr><a:tr>{}{}{}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#,
+        tc("Rb", ""),
+        tc("Opis", r#" gridSpan="2""#),
+        tc("", r#" hMerge="1""#),
+        tc("1", r#" rowSpan="2""#),
+        tc("Usluga", ""),
+        tc("1.234.567,89 RSD", ""),
+    );
+    let group = format!(
+        r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="20" name="g"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="10" y="10"/></a:xfrm></p:grpSpPr>{}{}</p:grpSp>"#,
+        pshape(21, "", Some((5_000_000, 10)), &[BUSINESS[6]]),
+        pshape(22, "", Some((10, 10)), &[BUSINESS[7]]),
+    );
+    vec![
+        pptx(&[
+            (
+                title(BUSINESS[0]) + &body(&BUSINESS[1..5]),
+                Some(BUSINESS[5]),
+            ),
+            (title("Cene") + &table, None),
+            (
+                group + &pshape(30, "", Some((0, 6_000_000)), &TRICKY[..3]),
+                Some(TRICKY[3]),
+            ),
+        ]),
+        pptx(&[(
+            title(BUSINESS[8]) + &body(&[BUSINESS[9], BUSINESS[10], BUSINESS[11]]),
+            None,
+        )]),
+    ]
+}
+
+// -- HTML -------------------------------------------------------------------------------------
+
+/// Every generated HTML seed: an inline XBRL 10-K, an old upper-case 8-K, a web page with
+/// scripts, navigation and hidden content, a windows-1250 page.
+pub fn html_seeds() -> Vec<Vec<u8>> {
+    let p: String = BUSINESS
+        .iter()
+        .map(|l| format!("<p><font size=\"2\">{}</font></p>\n", esc(l)))
+        .collect();
+    let ten_k = format!(
+        r#"<?xml version='1.0' encoding='ASCII'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:ix="http://www.xbrl.org/2013/inlineXBRL" xmlns:dei="http://xbrl.sec.gov/dei/2023">
+<head><title>exmp-20231231</title></head><body>
+<div style="display:none"><ix:header><ix:hidden><ix:nonNumeric name="dei:EntityCentralIndexKey" contextRef="c">0000999999</ix:nonNumeric></ix:hidden></ix:header></div>
+<table style="width:100%"><tr><td>
+<p style="text-align:center">FORM <ix:nonNumeric name="dei:DocumentType" contextRef="c">10-K</ix:nonNumeric></p>
+{p}<hr style="page-break-after:always"/>
+<h2>Item&#160;8. Financial Statements</h2>
+<table><tr><td>&#160;</td><td colspan="2"><b>2023</b></td></tr>
+<tr><td>Net sales</td><td>$</td><td><ix:nonFraction name="us-gaap:Revenues" contextRef="c" unitRef="usd" scale="6">1,234</ix:nonFraction></td></tr>
+<tr><td rowspan="2">Net loss</td><td></td><td>(<ix:nonFraction name="us-gaap:NetIncomeLoss" contextRef="c" unitRef="usd" sign="-">56</ix:nonFraction>)</td></tr></table>
+<p style="page-break-before:always">Signatures</p></td></tr></table></body></html>"#
+    );
+    let eight_k = r#"<HTML><HEAD><TITLE>form8-k.htm</TITLE><META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1"></HEAD>
+<BODY><CENTER><FONT SIZE=4><B>FORM 8-K</B></FONT></CENTER>
+<TABLE WIDTH="100%"><TR><TD><TABLE><TR><TD><FONT SIZE=2>Delaware</FONT><TD>&nbsp;<TD>001-99999
+<TR><TD>(State)<TD>&nbsp;<TD>(File No.)</TABLE></TD></TR></TABLE>
+<P><FONT SIZE=2><B>Item&nbsp;2.02</B>&nbsp;&nbsp;Results of Operations.</FONT>
+<P>On May&nbsp;1 the Company issued a release (the &#147;Release&#148;).
+</BODY></HTML>"#.to_owned();
+    let tricky: String = TRICKY
+        .iter()
+        .map(|t| format!("<li>{}</li>", esc(t)))
+        .collect();
+    let web = format!(
+        r#"<!DOCTYPE html><html lang="sr"><head><meta charset="utf-8"><title>Ugovor</title><style>p{{color:red}}</style><script>var s = "</p><p>"; if (a < b && c > d) {{}}</script></head>
+<body><nav><a href="/">Početna</a></nav><header><h1>Okvirni sporazum</h1></header>
+<main><p hidden>skriveno</p><div style="visibility:hidden">nevidljivo</div>
+<ul>{tricky}</ul><pre>  Rb   Opis
+  1    Usluga</pre><table><caption>Cene</caption><thead><tr><th>Rb<th>Iznos<tbody><tr><td>1<td>1.000,00</table>
+<noscript>JS</noscript><template><p>t</p></template><textarea>x</textarea>
+&amp; &copy; &#8212; &#x1F600; &notin &bogus; &#0; &#xD800;</main><footer>Strana 1 od 3</footer></body></html>"#
+    );
+    let mut cp1250 = b"<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=windows-1250\"></head><body><p>\x8Aifra \x9Eiro ra\xE8un \xE8lan 5</p>".to_vec();
+    cp1250.extend_from_slice(b"<table><tr><td>Iznos<td>1.234,00</table></body></html>");
+    vec![
+        ten_k.into_bytes(),
+        eight_k.into_bytes(),
+        web.into_bytes(),
+        cp1250,
+    ]
+}
+
 /// All generated seeds with their kind.
 pub fn all() -> Vec<(Kind, Vec<u8>)> {
     let mut v: Vec<(Kind, Vec<u8>)> = Vec::new();
     v.extend(docx_seeds().into_iter().map(|b| (Kind::Docx, b)));
     v.extend(pdf_seeds().into_iter().map(|b| (Kind::Pdf, b)));
     v.extend(text_seeds().into_iter().map(|b| (Kind::Text, b)));
+    v.extend(pptx_seeds().into_iter().map(|b| (Kind::Pptx, b)));
+    v.extend(html_seeds().into_iter().map(|b| (Kind::Html, b)));
     v
 }
 
@@ -596,6 +814,10 @@ mod tests {
             if *k == Kind::Docx {
                 let parts = zipfmt::read(b, 1 << 20).unwrap();
                 assert!(parts.iter().any(|(n, _)| n == b"word/document.xml"));
+            }
+            if *k == Kind::Pptx {
+                let parts = zipfmt::read(b, 1 << 20).unwrap();
+                assert!(parts.iter().any(|(n, _)| n == b"ppt/slides/slide1.xml"));
             }
         }
     }

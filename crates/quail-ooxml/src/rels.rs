@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use quail_core::Emitter;
 
-use crate::package::{Package, resolve_target};
 use crate::Notes;
+use crate::package::{Package, resolve_target};
 use crate::xml::{Ev, Flow, attr_exact, name, walk};
 
 /// One relationship of a source part.

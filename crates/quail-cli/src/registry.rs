@@ -75,6 +75,20 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[Format::Docx],
         doc: "Streaming OOXML reader: sections as logical pages, zones, properties, rsids.",
     },
+    #[cfg(feature = "pptx")]
+    StepDoc {
+        id: quail_pptx::ID,
+        kind: StepKind::Extractor,
+        formats: &[Format::Pptx],
+        doc: "Streaming OOXML reader: slides as logical pages in reading order, titles, tables, speaker notes.",
+    },
+    #[cfg(feature = "html")]
+    StepDoc {
+        id: quail_html::ID,
+        kind: StepKind::Extractor,
+        formats: &[Format::Html],
+        doc: "HTML5 tokenizer: declared charset, headings, lists and tables as blocks, hidden content and scripts dropped, CSS page breaks, inline XBRL.",
+    },
     #[cfg(feature = "pdf")]
     StepDoc {
         id: quail_pdf::PdfExtractor::ID,
@@ -311,6 +325,10 @@ pub fn builder_with(profile: Profile, limits: Limits, ocr: Option<&OcrSettings>)
         .analyzer(Box::new(quail_hash::IdentityAnalyzer));
     #[cfg(feature = "docx")]
     let b = b.extractor(Box::new(quail_docx::DocxExtractor::new()));
+    #[cfg(feature = "pptx")]
+    let b = b.extractor(Box::new(quail_pptx::PptxExtractor::new()));
+    #[cfg(feature = "html")]
+    let b = b.extractor(Box::new(quail_html::HtmlExtractor::new()));
     #[cfg(feature = "pdf")]
     let b = b.extractor(Box::new(quail_pdf::PdfExtractor::new()));
     #[cfg(feature = "text")]
@@ -367,6 +385,10 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     ];
     #[cfg(feature = "docx")]
     v.push(("quail-docx", keydocs::DOCX));
+    #[cfg(feature = "pptx")]
+    v.push(("quail-pptx", keydocs::PPTX));
+    #[cfg(feature = "html")]
+    v.push(("quail-html", keydocs::HTML));
     #[cfg(feature = "pdf")]
     v.push(("quail-pdf", keydocs::PDF));
     #[cfg(feature = "text")]
@@ -538,6 +560,10 @@ mod tests {
             ("quail-hash", "quail-hash/src/lib.rs"),
             #[cfg(feature = "docx")]
             ("quail-docx", "quail-docx/src/keys.rs"),
+            #[cfg(feature = "pptx")]
+            ("quail-pptx", "quail-pptx/src/keys.rs"),
+            #[cfg(feature = "html")]
+            ("quail-html", "quail-html/src/keys.rs"),
             #[cfg(feature = "pdf")]
             ("quail-pdf", "quail-pdf/src/lib.rs"),
             #[cfg(feature = "text")]

@@ -42,10 +42,18 @@ const XLSX: Sniff = Sniff::new(
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 );
 const PPTX: Sniff = Sniff::new(
-    Format::Zip,
+    Format::Pptx,
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 );
 const ZIP: Sniff = Sniff::new(Format::Zip, "application/zip");
+/// Bytes inspected for an HTML start (after a BOM, an XML declaration, comments).
+pub const HTML_WINDOW: usize = 1024;
+/// Tags that start an HTML document or fragment, compared ignoring ASCII case. Only HTML
+/// vocabulary: an XML file starting with its own root element stays text.
+const HTML_TAGS: &[&[u8]] = &[
+    b"html", b"head", b"body", b"title", b"meta", b"div", b"p", b"table", b"font", b"center",
+    b"h1", b"h2", b"h3", b"h4", b"h5", b"h6", b"br", b"hr",
+];
 const OCTET: Sniff = Sniff::new(Format::Unknown, "application/octet-stream");
 
 /// Detects the format of `bytes`. Shortcut for `detect(bytes).format`.
@@ -239,7 +247,8 @@ impl ZipNames {
             DOCX
         } else if self.content_types && self.xl {
             XLSX
-        } else if self.content_types && self.ppt {
+        } else if self.ppt {
+            // Like `word/document.xml`: the main part the extractor needs, content types or not.
             PPTX
         } else if self.content_types && self.word_part {
             DOCX
@@ -386,21 +395,29 @@ fn utf16_without_bom(w: &[u8]) -> Option<bool> {
 
 /// Text heuristic over the first [`TEXT_WINDOW`] bytes: no NUL, few control characters, and
 /// valid UTF-8 (a multi-byte sequence cut by the window is fine). Single-byte legacy
-/// encodings (Windows-125x, Latin-n) pass as text without a charset.
+/// encodings (Windows-125x, Latin-n) pass as text without a charset. Text that starts like
+/// HTML ([`html_start`]) is HTML.
 fn text(bytes: &[u8]) -> Option<Sniff> {
-    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
-        return Some(Sniff::new(Format::Text, "text/plain; charset=utf-16"));
-    }
     let w = &bytes[..bytes.len().min(TEXT_WINDOW)];
-    if let Some(be) = utf16_without_bom(w) {
-        return Some(Sniff::new(
-            Format::Text,
-            if be {
-                "text/plain; charset=utf-16be"
-            } else {
-                "text/plain; charset=utf-16le"
-            },
-        ));
+    let bom16 = if w.starts_with(&[0xFF, 0xFE]) {
+        Some(false)
+    } else if w.starts_with(&[0xFE, 0xFF]) {
+        Some(true)
+    } else {
+        None
+    };
+    if let Some(be) = bom16.or_else(|| utf16_without_bom(w)) {
+        let html = html_start(&ascii_of_utf16(w, be));
+        let mime = match (html, bom16.is_some(), be) {
+            (true, true, _) => "text/html; charset=utf-16",
+            (true, false, true) => "text/html; charset=utf-16be",
+            (true, false, false) => "text/html; charset=utf-16le",
+            (false, true, _) => "text/plain; charset=utf-16",
+            (false, false, true) => "text/plain; charset=utf-16be",
+            (false, false, false) => "text/plain; charset=utf-16le",
+        };
+        let format = if html { Format::Html } else { Format::Text };
+        return Some(Sniff::new(format, mime));
     }
     let mut control = 0usize;
     for &c in w {
@@ -420,11 +437,83 @@ fn text(bytes: &[u8]) -> Option<Sniff> {
         // Only a sequence cut at the window end, and only when the window is not the file.
         Err(e) => e.error_len().is_none() && w.len() < bytes.len(),
     };
-    Some(if utf8 {
-        Sniff::new(Format::Text, "text/plain; charset=utf-8")
-    } else {
-        Sniff::new(Format::Text, "text/plain")
+    let html = html_start(w);
+    Some(match (html, utf8) {
+        (true, true) => Sniff::new(Format::Html, "text/html; charset=utf-8"),
+        (true, false) => Sniff::new(Format::Html, "text/html"),
+        (false, true) => Sniff::new(Format::Text, "text/plain; charset=utf-8"),
+        (false, false) => Sniff::new(Format::Text, "text/plain"),
     })
+}
+
+/// The ASCII bytes of the first [`HTML_WINDOW`] UTF-16 code units of `w` (a BOM included):
+/// a unit outside ASCII becomes `0xFF`, which no HTML start matches.
+fn ascii_of_utf16(w: &[u8], be: bool) -> Vec<u8> {
+    w.chunks_exact(2)
+        .take(HTML_WINDOW)
+        .map(|p| {
+            let (hi, lo) = if be { (p[0], p[1]) } else { (p[1], p[0]) };
+            if hi == 0 && lo.is_ascii() { lo } else { 0xFF }
+        })
+        .collect()
+}
+
+/// Whether the first [`HTML_WINDOW`] bytes start like an HTML document: after a UTF-8 BOM
+/// (or a UTF-16 one, as `0xFF` bytes), whitespace, an XML declaration and comments, either
+/// `<!DOCTYPE html` or a start tag from [`HTML_TAGS`] (`<html`, `<body`, `<table`, ...),
+/// ignoring ASCII case. A namespace prefix is allowed (`<xhtml:html>`).
+fn html_start(head: &[u8]) -> bool {
+    let mut b = &head[..head.len().min(HTML_WINDOW)];
+    b = b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b);
+    while let Some(&0xFF) = b.first() {
+        b = &b[1..];
+    }
+    loop {
+        b = trim_ascii_start(b);
+        if b.starts_with(b"<?") {
+            let Some(end) = find(b, b"?>") else {
+                return false;
+            };
+            b = &b[end + 2..];
+        } else if b.starts_with(b"<!--") {
+            let Some(end) = find(&b[4..], b"-->") else {
+                return false;
+            };
+            b = &b[4 + end + 3..];
+        } else {
+            break;
+        }
+    }
+    let Some(rest) = b.strip_prefix(b"<") else {
+        return false;
+    };
+    if rest.len() >= 8 && rest[..8].eq_ignore_ascii_case(b"!doctype") {
+        let after = trim_ascii_start(&rest[8..]);
+        return after.len() >= 4
+            && after[..4].eq_ignore_ascii_case(b"html")
+            && after.get(4).is_none_or(|c| !c.is_ascii_alphanumeric());
+    }
+    let name_len = rest
+        .iter()
+        .position(|c| !(c.is_ascii_alphanumeric() || *c == b':'))
+        .unwrap_or(rest.len());
+    // The tag name must end inside the window, at a space, `>` or `/`.
+    if name_len == rest.len()
+        || !matches!(
+            rest[name_len],
+            b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r' | 0x0C
+        )
+    {
+        return false;
+    }
+    let name = &rest[..name_len];
+    let local = name.rsplit(|&c| c == b':').next().unwrap_or(name);
+    HTML_TAGS.iter().any(|t| local.eq_ignore_ascii_case(t))
+}
+
+fn trim_ascii_start(b: &[u8]) -> &[u8] {
+    let n = b.iter().take_while(|c| c.is_ascii_whitespace()).count();
+    &b[n..]
 }
 
 #[cfg(test)]
@@ -640,6 +729,65 @@ mod tests {
         names.push("word/document.xml".to_owned());
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         assert_eq!(sniff(&zip_with(&refs, true)), Format::Docx);
+    }
+
+    #[test]
+    fn html_documents_and_fragments() {
+        let html = |b: &[u8]| detect(b);
+        assert_eq!(
+            html(b"<!DOCTYPE html>\n<html><body>x</body></html>"),
+            Sniff::new(Format::Html, "text/html; charset=utf-8")
+        );
+        assert_eq!(
+            sniff(b"\xEF\xBB\xBF  <!doctype HTML PUBLIC \"-//W3C//DTD\">"),
+            Format::Html
+        );
+        // EDGAR: an XML declaration (inline XBRL is XHTML), comments, upper-case tags.
+        let ixbrl = b"<?xml version='1.0' encoding='ASCII'?>\n<!-- Workiva -->\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:ix=\"http://www.xbrl.org/2013/inlineXBRL\">";
+        assert_eq!(sniff(ixbrl), Format::Html);
+        assert_eq!(sniff(b"<HTML>\n<HEAD><TITLE>10-K</TITLE>"), Format::Html);
+        assert_eq!(sniff(b"<TITLE>8-K</TITLE>"), Format::Html);
+        assert_eq!(sniff(b"<table border=0><tr><td>x"), Format::Html);
+        assert_eq!(sniff(b"<xhtml:html>"), Format::Html);
+        assert_eq!(detect(b"<p>caf\xE9</p>").mime, "text/html");
+        // Not HTML: other XML, markup further in, prose, a tag name cut by the window.
+        assert_eq!(
+            sniff(b"<?xml version=\"1.0\"?><invoice><p>1</p></invoice>"),
+            Format::Text
+        );
+        assert_eq!(sniff(b"Note: use <html> tags\n"), Format::Text);
+        assert_eq!(sniff(b"<pre>x</pre>"), Format::Text);
+        assert_eq!(
+            sniff(b"<!DOCTYPE note SYSTEM \"n.dtd\"><note/>"),
+            Format::Text
+        );
+        assert_eq!(sniff(b"<!doctype htmlx>"), Format::Text);
+        assert_eq!(sniff(b"<!-- never closed <html>"), Format::Text);
+        assert_eq!(sniff(b"<html"), Format::Text);
+        // UTF-16, with and without a BOM.
+        let s = "<html><body><p>Ugovor broj 12/2024 između dve strane.</p></body></html>";
+        let le: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(s.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        assert_eq!(
+            detect(&le),
+            Sniff::new(Format::Html, "text/html; charset=utf-16")
+        );
+        let be: Vec<u8> = s.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        assert_eq!(detect(&be).mime, "text/html; charset=utf-16be");
+    }
+
+    #[test]
+    fn pptx_is_pptx() {
+        let pptx = zip_with(&["[Content_Types].xml", "ppt/presentation.xml"], true);
+        assert_eq!(detect(&pptx), PPTX);
+        assert_eq!(sniff(&pptx), Format::Pptx);
+        assert_eq!(
+            sniff(&zip_with(&["ppt/presentation.xml"], true)),
+            Format::Pptx
+        );
     }
 
     #[test]

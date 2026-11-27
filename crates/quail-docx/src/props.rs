@@ -9,8 +9,8 @@ use crate::keys;
 use crate::package::Package;
 use crate::rels::Rels;
 use crate::util::{MAX_LIST, Notes, clean};
-use quail_ooxml::{parse_date, root_fields};
 use crate::xml::{Ev, Flow, attr, attr_exact, name, on, val, walk};
+use quail_ooxml::{parse_date, root_fields};
 
 /// Facts gathered so far, emitted together at the end.
 pub(crate) type Facts = Vec<(FactKey, Value)>;

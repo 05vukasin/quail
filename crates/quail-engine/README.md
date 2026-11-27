@@ -8,11 +8,11 @@ caller registers them on an `EngineBuilder`.
 
 | key             | value | meaning                                                       |
 |-----------------|-------|---------------------------------------------------------------|
-| `engine.format` | text  | `pdf`, `docx`, `zip`, `image`, `text`, `unknown`              |
+| `engine.format` | text  | `pdf`, `docx`, `pptx`, `html`, `zip`, `image`, `text`, `unknown` |
 | `engine.mime`   | text  | most specific MIME type known from the bytes                  |
 | `engine.duplicate_of` | text | `dedup_by_content` only: locator of the earlier file with the same bytes whose record this one reuses |
 
-`engine.format` and `engine.mime` come from the step `engine.sniff@2`, the first entry of
+`engine.format` and `engine.mime` come from the step `engine.sniff@3`, the first entry of
 every record's `steps`; `engine.duplicate_of` from `engine.dedup@1`, the last.
 
 ## Sniffing
@@ -24,16 +24,21 @@ Bytes only, never the file name; bounded work, no inflation, never panics (and r
   prefix that reads as text, e.g. a note or source code quoting `%PDF-1.7`, means text).
 - ZIP (`PK\x03\x04`): up to 8 end-of-central-directory candidates from the end (a comment
   can hold a fake one), then at most 20 000 directory entries (the DOCX extractor's entry
-  cap), looking for `word/document.xml` (DOCX) and `[Content_Types].xml`, ignoring ASCII
-  case. With `[Content_Types].xml` but a main part under another name, an XML part directly
-  under `word/` means DOCX (the extractor finds the main part through `_rels/.rels`). A
-  garbage or ZIP64 directory falls back to walking local headers. XLSX/PPTX get their MIME
-  type but stay `zip`.
+  cap), looking for `word/document.xml` (DOCX), `ppt/presentation.xml` (PPTX) and
+  `[Content_Types].xml`, ignoring ASCII case. With `[Content_Types].xml` but a main part
+  under another name, an XML part directly under `word/` means DOCX (the extractor finds the
+  main part through `_rels/.rels`). A garbage or ZIP64 directory falls back to walking local
+  headers. XLSX gets its MIME type but stays `zip`.
 - PNG, JPEG, GIF, TIFF, WebP, JPEG 2000, HEIC/AVIF, BMP: image.
 - First 8 KiB without NUL and with under 1% control bytes: text (`charset=utf-8` when valid
   UTF-8; UTF-16 by BOM). UTF-16 without a BOM is text too (`charset=utf-16le`/`be`): a third
   of the 2-byte units with a zero byte on one side, almost none on the other, and those
   units printable.
+- Text is `html` (`text/html`, same charset rules) when its first 1024 bytes, after a BOM,
+  whitespace, an XML declaration and comments, start with `<!DOCTYPE html` or an HTML tag:
+  `html`, `head`, `body`, `title`, `meta`, `div`, `p`, `table`, `font`, `center`, `h1`-`h6`,
+  `br`, `hr` (any case, namespace prefix allowed). EDGAR filings (`<HTML>`, inline XBRL after
+  `<?xml ...?>`) match; other XML and prose that mentions tags stay `text`.
 - Everything else (OLE2, gzip, 7z, RAR, RTF, ...): unknown, with a MIME type when known.
 
 ## Building

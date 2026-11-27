@@ -30,7 +30,7 @@ everything quail knows about that file:
 | `schema` | version of the record format (currently 1); bumped on any breaking change |
 | `locator` | where the file came from: the path as walked, or the locator given in a manifest |
 | `size` | bytes |
-| `format` | sniffed from the bytes: `pdf`, `docx`, `zip`, `image`, `text`, `unknown` |
+| `format` | sniffed from the bytes: `pdf`, `docx`, `pptx`, `html`, `zip`, `image`, `text`, `unknown` |
 | `pages` | pages extracted, when the file is a document |
 | `facts` | every fact, in the order the steps produced them |
 | `steps` | every step that ran, with its version |

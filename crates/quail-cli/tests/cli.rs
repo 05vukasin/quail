@@ -605,12 +605,19 @@ fn keys_and_version() {
         .iter()
         .map(|s| s["id"].as_str().unwrap().to_owned())
         .collect();
-    // Extractors in format order (PDF before DOCX), then the analyzers in registration order.
-    let mut expected = vec!["engine.sniff@2"];
+    // Extractors in format order (PDF, DOCX, PPTX, HTML, text), then the analyzers in
+    // registration order.
+    let mut expected = vec!["engine.sniff@3"];
     if cfg!(feature = "pdf") {
         expected.push("pdf.extract@3");
     }
     expected.push("docx.extract@1");
+    if cfg!(feature = "pptx") {
+        expected.push("pptx.extract@1");
+    }
+    if cfg!(feature = "html") {
+        expected.push("html.extract@1");
+    }
     if cfg!(feature = "text") {
         expected.push("text.extract@1");
     }

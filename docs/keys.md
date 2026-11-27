@@ -18,7 +18,7 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 
 | step | kind | formats | profile | what it does |
 |---|---|---|---|---|
-| `engine.sniff@2` | engine | any | fast | Format and MIME type from the bytes (magic numbers, ZIP directory). |
+| `engine.sniff@3` | engine | any | fast | Format and MIME type from the bytes (magic numbers, ZIP directory). |
 | `engine.dedup@1` | engine | any | - | `scan --dedup` only: a file whose bytes were already analyzed in the run reuses that record (`engine.duplicate_of`). |
 | `hash.identity@1` | analyzer | any | fast | BLAKE3 and XXH3-128 of the whole file, FastCDC chunk hashes. |
 | `docx.extract@1` | extractor | docx | fast | Streaming OOXML reader: sections as logical pages, zones, properties, rsids. |
@@ -53,7 +53,7 @@ Declared by `quail-engine`. 3 keys.
 
 | key | documentation |
 |---|---|
-| `engine.format` | Detected format, as `quail_core::Format::as_str` (`pdf`, `docx`, `zip`, `image`, `text`, `unknown`). |
+| `engine.format` | Detected format, as `quail_core::Format::as_str` (`pdf`, `docx`, `pptx`, `html`, `zip`, `image`, `text`, `unknown`). |
 | `engine.mime` | Most specific MIME type known from the bytes, e.g. `application/pdf`. |
 | `engine.duplicate_of` | On a record reused from an earlier file of the same run with the same bytes (`RunOptions::dedup_by_content`): the locator of that first file. Its record was not re-analyzed: the other facts are the first file's, and its only timing is the `engine.dedup` step. |
 
