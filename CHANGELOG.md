@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Key contract facts and the key-facts card (#129)
+
+- New step `contract.facts@1` (`quail-contract`, feature `contract`, in the default build): the
+  key facts of a contract or invoice, each with a `contract.highlight`, on native and OCR text,
+  in Serbian (Latin and Cyrillic) and English: parties with their role, identifiers (PIB, MB,
+  VAT, registration number, accounts, IBAN, BIC), address, representative and signatories;
+  term, renewal, notice period and termination rights; days to pay, payment method, advance,
+  indexation and late-payment interest; penalties, guarantees, liability caps,
+  confidentiality, service levels, deadlines and the warranty period; governing law, court,
+  arbitration and language; annexes and what an amendment changes. It reuses the facts of
+  the other steps (`party.company`, `signal.*` identifiers and dates, `clause.*`, `ref.*`)
+  instead of finding them again. Nothing is guessed: a fact without a cue is absent.
+- New step `card.facts@1` (`quail-card`, feature `card`, in the default build): the
+  normalised key-facts card `card.*`, one canonical value per field (ISO dates, money,
+  durations in months or days, codes), with `card.text` and a `card.highlight` per source
+  fact.
+- `quail-fuzz` runs both steps.
+
 ### Payment facts (#128)
 
 - New step `payment.extract@1` (`quail-payment`, feature `payment`, in the default build): what

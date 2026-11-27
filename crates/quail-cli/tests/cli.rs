@@ -574,6 +574,7 @@ fn inspect_pretty_prints_facts_and_text() {
 
 #[test]
 #[cfg(feature = "docx")]
+#[allow(clippy::too_many_lines)] // one check of the whole step listing
 fn keys_and_version() {
     let o = run(&["keys"]);
     assert!(o.status.success());
@@ -658,6 +659,17 @@ fn keys_and_version() {
     if cfg!(feature = "payment") {
         expected.push("payment.extract@1");
     }
+    // Then the contract facts and the card that reads them.
+    let after_payment = [
+        (cfg!(feature = "contract"), "contract.facts@1"),
+        (cfg!(feature = "card"), "card.facts@1"),
+    ];
+    expected.extend(
+        after_payment
+            .iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, id)| *id),
+    );
     if cfg!(feature = "summary") {
         expected.extend([
             // Plan order: the card and the topic map run after the keywords they read.
@@ -676,7 +688,13 @@ fn keys_and_version() {
         .map(|f| f.as_str().unwrap())
         .collect();
     assert_eq!(features.contains(&"clauses"), cfg!(feature = "clauses"));
-    assert_eq!(features.contains(&"payment"), cfg!(feature = "payment"));
+    for (name, on) in [
+        ("payment", cfg!(feature = "payment")),
+        ("contract", cfg!(feature = "contract")),
+        ("card", cfg!(feature = "card")),
+    ] {
+        assert_eq!(features.contains(&name), on, "{name}");
+    }
     // Deterministic.
     let again: Json = serde_json::from_slice(&run(&["version", "--json"]).stdout).unwrap();
     assert_eq!(again["fingerprint"], v["fingerprint"]);

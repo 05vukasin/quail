@@ -592,8 +592,40 @@ pub fn text_seeds() -> Vec<Vec<u8>> {
     bad.extend_from_slice(BUSINESS[5].as_bytes());
     v.push(bad);
     v.push(text_body(PAYMENT).into_bytes());
+    v.push(text_body(CONTRACT).into_bytes());
     v
 }
+
+/// Contract cues for `contract.facts` and `card.facts`: party marks with identifiers and
+/// representatives, term, notice, payment terms, penalties, guarantees, law, annexes,
+/// signature blocks, Latin and Cyrillic, plus cut-off cues.
+const CONTRACT: &[&str] = &[
+    "1. Alfa Soft d.o.o., sa sedištem u Beogradu, ul. Knez Mihailova 10, PIB 100000024, MB 07000012, koga zastupa direktor Petar Petrović (u daljem tekstu: Izvođač)",
+    "2. Гама д.о.о., ПИБ 100000032, кога заступа директор Јован Јовановић (у даљем тексту: Наручилац)",
+    "between Alpha LLC, with its registered office at 1 Main St (the \"Supplier\"), represented by John Smith, CEO, and Beta GmbH, VAT No. DE136695976 (the \"Customer\").",
+    "Naručilac: Beta d.o.o.",
+    "PIB: 100000032",
+    "Ugovor se zaključuje na period od 12 (dvanaest) meseci i automatski se produžava za isti period.",
+    "Svaka strana može otkazati ugovor uz otkazni rok od 30 dana. Ugovor se zaključuje na neodređeno vreme.",
+    "Naručilac plaća u roku od 15 dana od dana prijema fakture, virmanski. Net 30.",
+    "Ugovorna kazna iznosi 0,5% za svaki dan kašnjenja, a najviše 10%. Liquidated damages of 1% per week, up to a maximum of",
+    "bankarsku garanciju za dobro izvršenje posla u visini od 10%; blanko menica; performance bond of 5%",
+    "Ukupna odgovornost ograničena je na iznos ugovorene cene. Liability shall not exceed the fees paid in the 12 months",
+    "Vreme odziva je 4 sata, dostupnost 99,5%. respond within 2 hours, resolve within",
+    "Na ovaj ugovor primenjuje se pravo Republike Srbije. Za sve sporove nadležan je Privredni sud u Beogradu.",
+    "arbitration under the ICC Rules, seat of arbitration shall be London. Spoljnotrgovinska arbitraža pri",
+    "Ugovor je sačinjen na srpskom i engleskom jeziku; merodavna je verzija na srpskom",
+    "Prilog 1: Tehnička specifikacija",
+    "Prilozi:",
+    "1. Cenovnik",
+    "ANEKS BR. 1 Ovim aneksom menja se član 2 i glasi: Briše se član",
+    "Za Naručioca",
+    "Marko Marković, generalni direktor",
+    "Za",
+    "(u daljem tekstu:",
+    "koga zastupa",
+    "u roku od",
+];
 
 /// Payment cues for `payment.extract`: subjects, prices with VAT markers, periods, rates,
 /// penalties, Latin and Cyrillic.

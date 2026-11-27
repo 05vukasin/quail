@@ -1,0 +1,23 @@
+[package]
+name = "quail-contract"
+description = "Key contract and invoice facts with highlights: parties and identifiers, term, payment terms, obligations, law and disputes, annexes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+quail-text = { path = "../quail-text" }
+# The keyed line reader (`lex`) and the amount reader (`amount::amount_at`).
+quail-payment = { path = "../quail-payment" }
+
+[dev-dependencies]
+quail-signals = { path = "../quail-signals" }
+quail-refs = { path = "../quail-refs" }
+quail-parties = { path = "../quail-parties" }
+quail-clauses = { path = "../quail-clauses" }
+
+[lints]
+workspace = true
