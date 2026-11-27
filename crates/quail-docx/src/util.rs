@@ -2,32 +2,10 @@
 
 use std::collections::HashSet;
 
-/// Longest property value kept, in bytes.
-pub(crate) const MAX_VALUE: usize = 4096;
+pub(crate) use quail_ooxml::{Notes, clean};
+
 /// Most distinct names kept in a list fact.
 pub(crate) const MAX_LIST: usize = 1000;
-
-/// Control characters replaced by spaces, whitespace runs collapsed, trimmed, capped at
-/// [`MAX_VALUE`] bytes.
-pub(crate) fn clean(s: &str) -> String {
-    let mut out = String::with_capacity(s.len().min(MAX_VALUE));
-    let mut space = false;
-    for c in s.chars() {
-        if c.is_whitespace() || c.is_control() || c == '\u{fffd}' {
-            space = true;
-            continue;
-        }
-        if out.len() + c.len_utf8() + 1 > MAX_VALUE {
-            break;
-        }
-        if space && !out.is_empty() {
-            out.push(' ');
-        }
-        space = false;
-        out.push(c);
-    }
-    out
-}
 
 /// Distinct values in first-seen order, compared case-insensitively, first spelling kept.
 #[derive(Debug, Default)]
@@ -106,39 +84,6 @@ fn percent_lower(h: &str) -> String {
     h.to_lowercase()
 }
 
-/// What the extractor tells the record besides facts: warnings (notes about the file) and
-/// problems (it stopped short: a limit, the deadline, a broken part), which make the record
-/// partial.
-#[derive(Debug, Default)]
-pub(crate) struct Notes {
-    /// Warnings.
-    pub warnings: Vec<String>,
-    /// Problems.
-    pub problems: Vec<String>,
-}
-
-impl Notes {
-    /// A warning.
-    pub fn push(&mut self, msg: impl Into<String>) {
-        self.warnings.push(msg.into());
-    }
-
-    /// A problem: the result is partial.
-    pub fn problem(&mut self, msg: impl Into<String>) {
-        self.problems.push(msg.into());
-    }
-
-    /// A part ended early: always a problem.
-    pub fn stop(&mut self, stop: &crate::xml::Stop, part: &str) {
-        self.problem(stop.describe(part));
-    }
-
-    /// Moves warnings in.
-    pub fn append(&mut self, v: &mut Vec<String>) {
-        self.warnings.append(v);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,7 +107,6 @@ mod tests {
 
     #[test]
     fn cleaning() {
-        assert_eq!(clean("  a \u{1}\n b  "), "a b");
         let mut d = Distinct::default();
         d.add("Ann");
         d.add("ann ");

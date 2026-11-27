@@ -4,13 +4,13 @@ use std::collections::HashMap;
 
 use quail_core::Emitter;
 
+use crate::Notes;
 use crate::package::{Package, resolve_target};
-use crate::util::Notes;
 use crate::xml::{Ev, Flow, attr_exact, name, walk};
 
 /// One relationship of a source part.
 #[derive(Clone, Debug)]
-pub(crate) struct Rel {
+pub struct Rel {
     /// `Id`, e.g. `rId4`.
     pub id: String,
     /// Last segment of `Type`, e.g. `header`, `hyperlink`, `officeDocument`.
@@ -23,7 +23,7 @@ pub(crate) struct Rel {
 
 /// The relationships of one source part.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Rels {
+pub struct Rels {
     source: String,
     list: Vec<Rel>,
     by_id: HashMap<String, usize>,

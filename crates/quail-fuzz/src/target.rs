@@ -349,6 +349,8 @@ impl Target {
             .quiet_panics(true)
             .analyzer(Box::new(Traced(quail_hash::IdentityAnalyzer)))
             .extractor(Box::new(TracedExtractor(quail_docx::DocxExtractor::new())))
+            .extractor(Box::new(TracedExtractor(quail_pptx::PptxExtractor::new())))
+            .extractor(Box::new(TracedExtractor(quail_html::HtmlExtractor::new())))
             .extractor(Box::new(TracedExtractor(PlainText)))
             .analyzer(Box::new(Traced(quail_text::TextStats)))
             .analyzer(Box::new(Traced(quail_text::TextLang::new())))

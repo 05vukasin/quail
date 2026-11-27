@@ -1,0 +1,21 @@
+[package]
+name = "quail-html"
+description = "HTML extractor: streaming html5ever tokenizer, blocks for headings, lists and tables, EDGAR and inline XBRL aware"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+# Only the tokenizer (the WHATWG tokenizer states and the full named-character-reference
+# table); no tree builder, so no DOM: the block structure and its depth bounds are ours.
+html5ever = "0.40.1"
+# Decoding of the declared charset (WHATWG encodings) and the legacy-encoding guess when
+# none is declared; both already in the tree through quail-text.
+encoding_rs = "0.8.44"
+chardetng = "1.0.0"
+
+[lints]
+workspace = true

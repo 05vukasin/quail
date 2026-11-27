@@ -99,7 +99,7 @@ pub fn minimize(
         budget,
         trials: 0,
     };
-    if kind == Kind::Docx
+    if matches!(kind, Kind::Docx | Kind::Pptx)
         && let Some(entries) = zipfmt::read(data, 64 << 20)
         && o.test(&rezip(&entries))
     {

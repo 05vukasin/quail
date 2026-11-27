@@ -36,7 +36,7 @@ fn emits_format_and_mime_and_runs_everything() {
     assert_eq!(rec.facts_for("mock.extractor").count(), 1);
     assert_eq!(ran(&rec), ["mock.a"]);
     let steps: Vec<_> = rec.steps.iter().map(ToString::to_string).collect();
-    assert_eq!(steps, ["engine.sniff@2", "mock.text@1", "mock.a@1"]);
+    assert_eq!(steps, ["engine.sniff@3", "mock.text@1", "mock.a@1"]);
     assert_eq!(rec.timings.len(), 3);
 }
 

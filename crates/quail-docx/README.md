@@ -1,7 +1,8 @@
 # quail-docx
 
 DOCX extractor for quail: a streaming OOXML reader on `zip` (inflate only) and `quick-xml`
-(event reader, no DOM). Pure Rust, no `unsafe`.
+(event reader, no DOM). The package reader, the XML walk and the relationships are in
+`quail-ooxml`, shared with `quail-pptx`. Pure Rust, no `unsafe`.
 
 - Extractor id: `docx.extract@1` (`quail_docx::ID`), formats `[Format::Docx]`.
 - Public API: `DocxExtractor` (implements `quail_core::Extractor`), `ID`, `keys::*`.

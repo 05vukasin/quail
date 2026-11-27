@@ -21,7 +21,7 @@ const DEADLINE_EVERY: u32 = 2048;
 
 /// What the walk callback sees.
 #[derive(Clone, Copy)]
-pub(crate) enum Ev<'e> {
+pub enum Ev<'e> {
     /// Start tag; the callback may answer [`Flow::Skip`] to skip its whole subtree.
     Start(&'e BytesStart<'e>),
     /// Self-closing tag.
@@ -34,7 +34,7 @@ pub(crate) enum Ev<'e> {
 
 /// What the walk does next.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Flow {
+pub enum Flow {
     /// Keep going.
     Go,
     /// Skip the subtree of the element just started (only meaningful for `Start`).
@@ -45,7 +45,7 @@ pub(crate) enum Flow {
 
 /// Why a walk ended early.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Stop {
+pub enum Stop {
     /// The XML is malformed (or not UTF-8) from this point on.
     Malformed(String),
     /// The part could not be read (a corrupt or lying zip entry).
@@ -74,12 +74,12 @@ impl Stop {
 }
 
 /// Largest single XML event (one text node, one tag) read by default.
-pub(crate) const MAX_EVENT: u64 = 16 << 20;
+pub const MAX_EVENT: u64 = 16 << 20;
 const EVENT_MSG: &str = "single XML event too large";
 
 /// What a finished walk noticed besides the events.
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct WalkInfo {
+pub struct WalkInfo {
     /// Entity references that are neither predefined nor character references (they come
     /// from a DOCTYPE, which is not expanded): dropped.
     pub unknown_entities: u64,
@@ -107,7 +107,7 @@ impl<R: Read> Read for Guard<R> {
 }
 
 /// Streams the events of one part to `f`, with the default event size cap.
-pub(crate) fn walk(
+pub fn walk(
     part: impl Read,
     deadline: &Emitter,
     f: impl FnMut(Ev<'_>) -> Flow,
@@ -117,7 +117,7 @@ pub(crate) fn walk(
 
 /// Streams the events of one part to `f`. Returns at end of input or when `f` stops.
 /// Skipped subtrees are read event by event, so the deadline still applies inside them.
-pub(crate) fn walk_with(
+pub fn walk_with(
     part: impl Read,
     deadline: &Emitter,
     max_event: u64,
@@ -215,17 +215,17 @@ fn classify(e: &quick_xml::Error, max_event: u64) -> Stop {
 }
 
 /// The part of a qualified name after the prefix.
-pub(crate) fn local(name: &str) -> &str {
+pub fn local(name: &str) -> &str {
     name.rsplit_once(':').map_or(name, |(_, l)| l)
 }
 
 /// Local name of a start tag.
-pub(crate) fn name<'e>(e: &'e BytesStart<'_>) -> &'e str {
+pub fn name<'e>(e: &'e BytesStart<'_>) -> &'e str {
     local(e.name().0)
 }
 
 /// Value of the attribute with this local name, entities resolved.
-pub(crate) fn attr<'e>(e: &'e BytesStart<'_>, local_name: &str) -> Option<Cow<'e, str>> {
+pub fn attr<'e>(e: &'e BytesStart<'_>, local_name: &str) -> Option<Cow<'e, str>> {
     e.attributes()
         .with_checks(false)
         .flatten()
@@ -234,7 +234,7 @@ pub(crate) fn attr<'e>(e: &'e BytesStart<'_>, local_name: &str) -> Option<Cow<'e
 }
 
 /// Attribute with this exact qualified name (for unprefixed attributes such as `Id`).
-pub(crate) fn attr_exact<'e>(e: &'e BytesStart<'_>, qname: &str) -> Option<Cow<'e, str>> {
+pub fn attr_exact<'e>(e: &'e BytesStart<'_>, qname: &str) -> Option<Cow<'e, str>> {
     e.attributes()
         .with_checks(false)
         .flatten()
@@ -243,12 +243,12 @@ pub(crate) fn attr_exact<'e>(e: &'e BytesStart<'_>, qname: &str) -> Option<Cow<'
 }
 
 /// `w:val`.
-pub(crate) fn val<'e>(e: &'e BytesStart<'_>) -> Option<Cow<'e, str>> {
+pub fn val<'e>(e: &'e BytesStart<'_>) -> Option<Cow<'e, str>> {
     attr(e, "val")
 }
 
 /// An on/off property: on unless `w:val` says `0`, `false`, `off` or `none`.
-pub(crate) fn on(e: &BytesStart<'_>) -> bool {
+pub fn on(e: &BytesStart<'_>) -> bool {
     !matches!(
         val(e).as_deref().map(str::trim),
         Some("0" | "false" | "off" | "none")
@@ -256,6 +256,6 @@ pub(crate) fn on(e: &BytesStart<'_>) -> bool {
 }
 
 /// `w:val` as an integer.
-pub(crate) fn val_int(e: &BytesStart<'_>) -> Option<i64> {
+pub fn val_int(e: &BytesStart<'_>) -> Option<i64> {
     val(e).and_then(|v| v.trim().parse().ok())
 }

@@ -21,6 +21,8 @@ TITLES = {
     "hash": "hash: identity of the bytes",
     "pdf": "pdf: PDF extractor",
     "docx": "docx: DOCX extractor",
+    "pptx": "pptx: PPTX extractor",
+    "html": "html: HTML extractor",
     "text": "text: text statistics and language",
     "signal": "signal: identifiers, dates, amounts, contacts",
     "ref": "ref: document numbers, citations, titles",

@@ -31,7 +31,7 @@ stderr tail, and a line in `crashes/summary.tsv`.
 ## Target
 
 The engine as `quail-cli` wires it, in the `Deep` profile: `hash.identity`, `docx.extract`,
-`pdf.extract` (with its `raster`), `text.stats`, `text.lang`, `signal.scan`, `ref.references`,
+`pptx.extract`, `html.extract`, `pdf.extract` (with its `raster`), `text.stats`, `text.lang`, `signal.scan`, `ref.references`,
 `party.candidates`, every `sketch.*` analyzer including `sketch.page_phash` (renders through the
 raster), plus a fuzz-only plain-text extractor (`fuzz.text@1`: pages at form feeds, a block per
 line) so the text analyzers see the tricky-Unicode inputs. After the engine, when the extractor
@@ -47,8 +47,12 @@ step, so the worker here speaks its own one-line protocol. The limits are the sa
 
 Seeds are generated (no files needed): DOCX packages from a builder (styles, numbering, tables,
 headers, notes, comments, fields, tracked changes, content controls, text boxes, custom
-properties), PDFs from lopdf and from raw bytes (Type0 font with a `ToUnicode` CMap, forms,
-object streams, incremental updates, inline images) and text full of awkward Unicode. `--seeds
+properties), PPTX packages (titles, body placeholders with layout positions, tables with spans
+and merges, groups, speaker notes), PDFs from lopdf and from raw bytes (Type0 font with a
+`ToUnicode` CMap, forms, object streams, incremental updates, inline images), HTML shaped like
+EDGAR filings (an inline XBRL 10-K with a hidden `ix:header` and layout tables, an upper-case
+8-K with unclosed cells, a windows-1250 page, a web page with scripts, navigation and hidden
+content) and text full of awkward Unicode. `--seeds
 DIR` adds files.
 
 - bytes: flips, interesting bytes and integers, inserts, deletes, duplicates, amplification,
@@ -58,6 +62,11 @@ DIR` adds files.
   values, DOCTYPE/entities, encodings, namespaces, field-char storms), dropped / duplicated /
   renamed entries, 60 000 empty entries, a 256 MiB deflate bomb, size / CRC / name lies, unknown
   methods, EOCD lies, relationship cycles and escapes, content-type swaps;
+- PPTX: the DOCX package mutators above, aimed at the first slide;
+- HTML: snippets (raw-text elements, comments, CDATA, charset declarations, `ix:` tags, absurd
+  spans), nesting floods up to 10^6 levels (`div`, tables, lists, hidden spans), tokens that
+  never end (comments, tags, attribute values), element and reference floods, charset swaps,
+  re-encoding as UTF-16;
 - PDF: content-stream edits (inflated, mutated, re-compressed, `/Length` and xref fixed), filter
   chains with absurd predictors, hostile constructs appended as an incremental update (2^n form
   fan-out, form / Type3 / pattern recursion, `/Contents` repeated 200 000 times, huge

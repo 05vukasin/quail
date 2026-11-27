@@ -9,9 +9,11 @@ use crate::cli::{KeysArgs, VersionArgs};
 use crate::registry::{self, STEPS};
 
 /// Formats an extractor can be registered for.
-const FORMATS: [Format; 6] = [
+const FORMATS: [Format; 8] = [
     Format::Pdf,
     Format::Docx,
+    Format::Pptx,
+    Format::Html,
     Format::Zip,
     Format::Image,
     Format::Text,
@@ -169,6 +171,12 @@ fn features() -> Vec<&'static str> {
     let mut v = Vec::new();
     if cfg!(feature = "docx") {
         v.push("docx");
+    }
+    if cfg!(feature = "pptx") {
+        v.push("pptx");
+    }
+    if cfg!(feature = "html") {
+        v.push("html");
     }
     if cfg!(feature = "pdf") {
         v.push("pdf");

@@ -1,0 +1,20 @@
+[package]
+name = "quail-pptx"
+description = "PPTX extractor: slides as pages in reading order, titles, tables and speaker notes, streaming OOXML parse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+quail-ooxml = { path = "../quail-ooxml" }
+quick-xml = { version = "0.42.0", default-features = false }
+
+[dev-dependencies]
+# The tests write their packages (same version and backend as quail-ooxml reads).
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[lints]
+workspace = true

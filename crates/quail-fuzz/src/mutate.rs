@@ -1,6 +1,7 @@
-//! Mutators: plain byte edits for every input, plus structure-aware ones that take DOCX
-//! packages apart (mutate the XML parts, re-zip with lies) and edit PDF objects and content
-//! streams (re-compressed, xref rebuilt) so mutations reach the parsers behind the container.
+//! Mutators: plain byte edits for every input, plus structure-aware ones that take DOCX and
+//! PPTX packages apart (mutate the XML parts, re-zip with lies), edit PDF objects and content
+//! streams (re-compressed, xref rebuilt) so mutations reach the parsers behind the container,
+//! and inject hostile HTML (deep nesting, endless tokens, charset swaps, inline XBRL).
 
 use std::sync::OnceLock;
 
@@ -699,7 +700,9 @@ fn docx(rng: &mut Rng, input: &[u8]) -> Option<(Vec<u8>, &'static str)> {
                 // mutate an XML part, the main document most often
                 let i = if rng.chance(1, 2) {
                     es.iter()
-                        .position(|e| e.name == b"word/document.xml")
+                        .position(|e| {
+                            e.name == b"word/document.xml" || e.name == b"ppt/slides/slide1.xml"
+                        })
                         .unwrap_or(i)
                 } else {
                     let xmls: Vec<usize> = (0..es.len()).filter(|&j| is_xml(&es[j].name)).collect();
@@ -1659,9 +1662,179 @@ pub fn mutate(rng: &mut Rng, kind: Kind, input: &[u8], other: &[u8]) -> (Vec<u8>
             let n = bytes(rng, &mut v, OOXML, other);
             (v, n)
         }),
+        Kind::Pptx => docx(rng, input).unwrap_or_else(|| {
+            let mut v = input.to_vec();
+            let n = bytes(rng, &mut v, PPTX, other);
+            (v, n)
+        }),
         Kind::Pdf => pdf(rng, input, other),
         Kind::Text => text(rng, input, other),
+        Kind::Html => html(rng, input, other),
     }
+}
+
+// -- HTML ----------------------------------------------------------------------------------------
+
+/// `PresentationML` snippets for the byte mutator of broken PPTX packages.
+const PPTX: &[&str] = &[
+    "<p:grpSp>",
+    "</p:grpSp>",
+    "<p:sp>",
+    "<a:p>",
+    "<a:t>",
+    r#"<p:ph type="title"/>"#,
+    r#"<a:off x="-9223372036854775808" y="9223372036854775807"/>"#,
+    r#"<a:tc gridSpan="4294967295" rowSpan="0" hMerge="1">"#,
+    r#"<p:sldId id="256" r:id="rId1"/>"#,
+    r#"<p:cNvPr id="1" name="" hidden="1"/>"#,
+];
+
+/// HTML snippets inserted at random places.
+const HTML: &[&str] = &[
+    "<p>",
+    "</p>",
+    "<td>",
+    "<tr>",
+    "<table>",
+    "</table>",
+    "<li>",
+    "<br>",
+    "<hr style=\"page-break-after:always\">",
+    "<div style=\"display:none\">",
+    "<div hidden>",
+    "</div>",
+    "<script>",
+    "</script>",
+    "<style>",
+    "<title>",
+    "<textarea>",
+    "<plaintext>",
+    "<xmp>",
+    "<!--",
+    "-->",
+    "<![CDATA[",
+    "<?xml version='1.0' encoding='utf-16'?>",
+    "<meta charset=\"windows-1251\">",
+    "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=shift_jis\">",
+    "<ix:nonNumeric name=\"dei:DocumentType\">",
+    "</ix:nonNumeric>",
+    "<ix:header>",
+    "<ix:nonFraction name=\"x\"/>",
+    "<td colspan=\"4294967295\" rowspan=\"65535\">",
+    "<h1>",
+    "<pre>",
+    "<svg><style><p>",
+    "<select><option>",
+    "&amp;",
+    "&#x110000;",
+    "&#0;",
+    "&CounterClockwiseContourIntegral;",
+    "&notin",
+    "\u{0}",
+    "\r\n",
+];
+
+/// (open, close) pairs for nesting injection.
+const HTML_NESTS: &[(&str, &str)] = &[
+    ("<div>", "</div>"),
+    ("<table><tr><td>", "</td></tr></table>"),
+    ("<ul><li>", "</li></ul>"),
+    ("<span style=\"display:none\">", "</span>"),
+    ("<b>", ""),
+    ("<p>", ""),
+    ("<ix:nonNumeric name=\"dei:A\">", "</ix:nonNumeric>"),
+];
+
+fn html(rng: &mut Rng, input: &[u8], other: &[u8]) -> (Vec<u8>, &'static str) {
+    let mut v = input.to_vec();
+    let at = |rng: &mut Rng, v: &[u8]| rng.below(v.len() + 1);
+    let name = match rng.below(10) {
+        0 | 1 => {
+            let k = rng.range(1, 8);
+            for _ in 0..k {
+                let p = at(rng, &v);
+                let t = rng.pick(HTML).as_bytes().to_vec();
+                insert(&mut v, p, &t);
+            }
+            "html-snippet"
+        }
+        2 | 3 => {
+            let (open, close) = *rng.pick(HTML_NESTS);
+            let n = *rng.pick(&[10usize, 100, 1000, 10_000, 100_000, 1_000_000]);
+            let n = n.min(MAX_LEN / (open.len() + close.len()).max(1) / 2);
+            let mut t = open.repeat(n);
+            t.push_str(rng.pick(BUSINESS));
+            if rng.chance(2, 3) {
+                t.push_str(&close.repeat(n));
+            }
+            let p = at(rng, &v);
+            insert(&mut v, p, t.as_bytes());
+            "html-nest"
+        }
+        4 => {
+            // a token that never ends: a comment, a tag, an attribute value
+            let start = *rng.pick(&["<!--", "<p title=\"", "<p ", "<!DOCTYPE x \"", "<script>"]);
+            let n = rng.log_size(MAX_LEN - start.len());
+            let p = at(rng, &v);
+            let mut t = start.as_bytes().to_vec();
+            t.extend(std::iter::repeat_n(b'x', n));
+            insert(&mut v, p, &t);
+            "html-endless"
+        }
+        5 => {
+            // a flood of one element or reference
+            let t = *rng.pick(&[
+                "<p>x",
+                "<td>",
+                "<tr>",
+                "&amp;",
+                "<br>",
+                "<hr style=\"break-after:page\">x",
+                "<a>",
+            ]);
+            let k = rng.log_size(MAX_LEN / t.len() / 2);
+            let p = at(rng, &v);
+            insert(&mut v, p, t.repeat(k).as_bytes());
+            "html-flood"
+        }
+        6 => {
+            // swap the declared charset
+            let cs = *rng.pick(&[
+                "utf-16le",
+                "utf-8",
+                "iso-2022-jp",
+                "x-user-defined",
+                "bogus",
+                "gb18030",
+                "windows-1252",
+            ]);
+            let d = String::from_utf8_lossy(&v)
+                .replace("charset=", &format!("charset={cs};x="))
+                .into_bytes();
+            v = d;
+            "html-charset"
+        }
+        7 => {
+            // re-encode as UTF-16
+            let t = String::from_utf8_lossy(&v).into_owned();
+            let be = rng.chance(1, 2);
+            let mut out = if rng.chance(1, 2) {
+                vec![]
+            } else if be {
+                vec![0xFE, 0xFF]
+            } else {
+                vec![0xFF, 0xFE]
+            };
+            for u in t.encode_utf16() {
+                out.extend_from_slice(&if be { u.to_be_bytes() } else { u.to_le_bytes() });
+            }
+            v = out;
+            "html-utf16"
+        }
+        _ => bytes(rng, &mut v, HTML, other),
+    };
+    cap(&mut v);
+    (v, name)
 }
 
 #[cfg(test)]

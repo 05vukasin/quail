@@ -35,7 +35,7 @@ pub(crate) fn run(
     warn: &mut Notes,
     facts: &mut Facts,
 ) -> Result<Document> {
-    let mut pkg = Package::open(bytes, limits, out)?;
+    let mut pkg = Package::open(bytes, Format::Docx, limits, out)?;
     warn.append(&mut pkg.warnings);
     facts.push((keys::ZIP_ENTRIES, count(pkg.entry_count())));
     facts.push((keys::DUPLICATE_ENTRIES, count(pkg.duplicates)));

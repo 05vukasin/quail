@@ -199,8 +199,10 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 
 | feature | crate | steps |
 |---|---|---|
-| (always) | quail-engine, quail-hash | `engine.sniff@2`, `hash.identity@1` |
+| (always) | quail-engine, quail-hash | `engine.sniff@3`, `hash.identity@1` |
 | `docx` (default) | quail-docx | `docx.extract@1` |
+| `pptx` (default) | quail-pptx | `pptx.extract@1` |
+| `html` (default) | quail-html | `html.extract@1` (HTML and XHTML, inline XBRL included) |
 | `pdf` (default) | quail-pdf | `pdf.extract@3` (provides the `raster` artifact) |
 | `text` (default) | quail-text | `text.extract@1` (extractor for `Format::Text`: `.txt` and anything sniffed as text), `text.stats@3`, `text.lang@2` |
 | `signals` (default) | quail-signals | `signal.scan@5` |

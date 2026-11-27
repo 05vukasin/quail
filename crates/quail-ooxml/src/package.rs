@@ -11,17 +11,17 @@ use std::io::{self, Cursor, Read};
 use quail_core::{Emitter, Error, Format, Limits, Result};
 use zip::ZipArchive;
 
-/// Most zip entries accepted. Real DOCX files have tens to a few hundred.
-pub(crate) const MAX_ENTRIES: usize = 20_000;
+/// Most zip entries accepted. Real DOCX and PPTX files have tens to a few hundred.
+pub const MAX_ENTRIES: usize = 20_000;
 
 /// Message of the I/O error a part reader returns once the budget is spent.
-pub(crate) const BUDGET_MSG: &str = "decompression budget exceeded";
+pub const BUDGET_MSG: &str = "decompression budget exceeded";
 
 /// Magic of an OLE compound file: what an encrypted (password protected) OOXML file is.
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
-/// The zip of one DOCX file plus the decompression budget shared by all its parts.
-pub(crate) struct Package<'a> {
+/// The zip of one OOXML file plus the decompression budget shared by all its parts.
+pub struct Package<'a> {
     zip: ZipArchive<Cursor<&'a [u8]>>,
     /// Lowercased part name (no leading `/`) to entry index. OPC part names are
     /// case-insensitive.
@@ -38,8 +38,13 @@ pub(crate) struct Package<'a> {
 }
 
 impl<'a> Package<'a> {
-    /// Opens the archive and vets its directory.
-    pub fn open(bytes: &'a [u8], limits: &Limits, deadline: &Emitter) -> Result<Self> {
+    /// Opens the archive and vets its directory. `format` names the format in errors.
+    pub fn open(
+        bytes: &'a [u8],
+        format: Format,
+        limits: &Limits,
+        deadline: &Emitter,
+    ) -> Result<Self> {
         if bytes.starts_with(&CFB_MAGIC) {
             // Encrypted OOXML is an OLE container holding the encrypted package.
             return Err(Error::Encrypted);
@@ -55,7 +60,7 @@ impl<'a> Package<'a> {
             None => 0,
         };
         let zip = ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Malformed {
-            format: Format::Docx,
+            format,
             msg: format!("zip: {e}"),
         })?;
         if zip.len() > MAX_ENTRIES {
@@ -197,7 +202,7 @@ impl<'a> Package<'a> {
 }
 
 /// Reads one part, counting the bytes it really inflates to against the file's budget.
-pub(crate) struct PartReader<'p, 'a> {
+pub struct PartReader<'p, 'a> {
     file: zip::read::ZipFile<'p, Cursor<&'a [u8]>>,
     used: &'p mut u64,
     cap: u64,
@@ -290,7 +295,7 @@ fn normalize_key(name: &str) -> String {
 /// Resolves a relationship target against the folder of its source part, the way OPC does:
 /// `../media/a.png` from `word/document.xml` is `word/../media/a.png` → `media/a.png`.
 /// Returns `None` for targets that climb above the package root.
-pub(crate) fn resolve_target(source_part: &str, target: &str) -> Option<String> {
+pub fn resolve_target(source_part: &str, target: &str) -> Option<String> {
     let target = percent_decode(target);
     let mut parts: Vec<&str> = Vec::new();
     if !target.starts_with('/')

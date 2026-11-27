@@ -18,7 +18,7 @@
 
 ---
 
-quail reads business documents (PDF, DOCX and plain text), one file at a time, and writes one JSON record
+quail reads business documents (PDF, DOCX, PPTX, HTML and plain text), one file at a time, and writes one JSON record
 per file: the facts it found, each with a **confidence**, the **step** that produced it and the
 **evidence** (page, zone, text span, box on the page) where it was found. A person or an AI
 agent can check every fact against the page.
@@ -39,7 +39,7 @@ agent can check every fact against the page.
 | layer | facts | namespace |
 |---|---|---|
 | Identity | BLAKE3, XXH3-128, content-defined chunk hashes | `hash.*` |
-| Structure | format and MIME type; text encoding of plain-text files; PDF and DOCX properties (producer, author, dates, signatures, forms, JavaScript, macros, tracked changes, comments, hidden text); page text in reading order with blocks, zones and boxes; pages that need OCR | `engine.*` `pdf.*` `docx.*` |
+| Structure | format and MIME type; text encoding of plain-text and HTML files; PDF, DOCX and PPTX properties (producer, author, dates, signatures, forms, JavaScript, macros, tracked changes, comments, hidden text); slides with titles, tables and speaker notes; HTML headings, lists and tables, inline XBRL cover facts of SEC filings; page text in reading order with blocks, zones and boxes; pages that need OCR | `engine.*` `pdf.*` `docx.*` `pptx.*` `html.*` |
 | Text | characters, words, scripts, garbage ratio; document and page language | `text.*` |
 | Signals | IBAN, BIC, VAT, LEI, DUNS, EIN and national tax and registry numbers with check digits; dates with roles (signed, effective, expiry, invoice, due); amounts with currency and role; e-mail and web domains | `signal.*` |
 | References | own document number, title, instrument kind (contract, amendment, invoice, order, ...), cited documents with relation and date | `ref.*` |
