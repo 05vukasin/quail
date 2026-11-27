@@ -81,7 +81,12 @@ pub struct Lines {
 
 /// Reads at most `budget` bytes of page text into lines, skipping pages that still need OCR
 /// (their text is not usable). `stop` is asked once per page.
-pub fn read(doc: &Document, budget: usize, max_lines: usize, mut stop: impl FnMut() -> bool) -> Lines {
+pub fn read(
+    doc: &Document,
+    budget: usize,
+    max_lines: usize,
+    mut stop: impl FnMut() -> bool,
+) -> Lines {
     let mut out = Lines {
         lines: Vec::new(),
         cut_at: None,
@@ -153,7 +158,10 @@ pub fn match_at(toks: &[Tok], i: usize, phrase: &[&str]) -> Option<usize> {
     let mut j = i;
     for (n, w) in phrase.iter().enumerate() {
         if n > 0 {
-            while j < toks.len() && toks[j].kind == TokenKind::Punct && !word_matches(w, &toks[j].key) {
+            while j < toks.len()
+                && toks[j].kind == TokenKind::Punct
+                && !word_matches(w, &toks[j].key)
+            {
                 j += 1;
             }
         }
@@ -168,7 +176,11 @@ pub fn match_at(toks: &[Tok], i: usize, phrase: &[&str]) -> Option<usize> {
 
 /// The first phrase of `table` that starts at token `i`, the longest when several do:
 /// `(entry, end)`.
-pub fn longest_at<'t, T>(toks: &[Tok], i: usize, table: &'t [(&'t [&'t str], T)]) -> Option<(&'t T, usize)> {
+pub fn longest_at<'t, T>(
+    toks: &[Tok],
+    i: usize,
+    table: &'t [(&'t [&'t str], T)],
+) -> Option<(&'t T, usize)> {
     let mut best: Option<(&T, usize)> = None;
     for (phrase, v) in table {
         if let Some(end) = match_at(toks, i, phrase)

@@ -90,7 +90,10 @@ fn compare(name: &str, native: &FileRecord, scan: &FileRecord) -> Vec<String> {
             (Some((x, cx)), Some((y, cy))) => (x - y).abs() <= x.abs() * 0.005 && cx == cy,
             _ => false,
         };
-        eprintln!("{name} {key}: native {a:?} scan {b:?} {}", if ok { "ok" } else { "LOST" });
+        eprintln!(
+            "{name} {key}: native {a:?} scan {b:?} {}",
+            if ok { "ok" } else { "LOST" }
+        );
         if !ok {
             lost.push(key.to_owned());
         }
@@ -103,7 +106,10 @@ fn compare(name: &str, native: &FileRecord, scan: &FileRecord) -> Vec<String> {
     ] {
         let (a, b) = (text(native, key, field), text(scan, key, field));
         let ok = a == b;
-        eprintln!("{name} {key}: native {a:?} scan {b:?} {}", if ok { "ok" } else { "LOST" });
+        eprintln!(
+            "{name} {key}: native {a:?} scan {b:?} {}",
+            if ok { "ok" } else { "LOST" }
+        );
         if !ok {
             lost.push(key.to_owned());
         }
@@ -122,7 +128,10 @@ fn compare(name: &str, native: &FileRecord, scan: &FileRecord) -> Vec<String> {
         }
         _ => false,
     };
-    eprintln!("{name} payment.subject: native {a:?} scan {b:?} {}", if ok { "ok" } else { "LOST" });
+    eprintln!(
+        "{name} payment.subject: native {a:?} scan {b:?} {}",
+        if ok { "ok" } else { "LOST" }
+    );
     if !ok {
         lost.push("payment.subject".to_owned());
     }
@@ -141,7 +150,10 @@ fn compare(name: &str, native: &FileRecord, scan: &FileRecord) -> Vec<String> {
         lost.push("payment.lines".to_owned());
     }
     let highlights = scan.facts_for("payment.highlight").count();
-    eprintln!("{name} payment.highlight: native {} scan {highlights}", native.facts_for("payment.highlight").count());
+    eprintln!(
+        "{name} payment.highlight: native {} scan {highlights}",
+        native.facts_for("payment.highlight").count()
+    );
     lost
 }
 

@@ -79,7 +79,12 @@ fn ends_sentence(t: &Tok) -> bool {
 /// Reads subject text from token `from` of line `li`, wrapping over the next lines while the
 /// sentence has not ended and the next line goes on in lowercase. Returns the end line, the
 /// end byte and the folded word keys.
-fn read_text(doc: &Document, lines: &[Line], li: usize, from: usize) -> Option<(usize, u32, Vec<String>)> {
+fn read_text(
+    doc: &Document,
+    lines: &[Line],
+    li: usize,
+    from: usize,
+) -> Option<(usize, u32, Vec<String>)> {
     let mut keys = Vec::new();
     let mut end = None;
     let mut l = li;
@@ -154,10 +159,9 @@ pub fn scan(doc: &Document, lines: &[Line], li: usize, out: &mut Vec<Subject>) {
         let colon = toks
             .get(k)
             .is_some_and(|t| t.kind == TokenKind::Punct && matches!(t.key.as_str(), ":" | "-"));
-        while toks
-            .get(k)
-            .is_some_and(|t| t.kind == TokenKind::Punct && matches!(t.key.as_str(), ":" | "-" | ","))
-        {
+        while toks.get(k).is_some_and(|t| {
+            t.kind == TokenKind::Punct && matches!(t.key.as_str(), ":" | "-" | ",")
+        }) {
             k += 1;
         }
         let mut verb = false;
@@ -188,7 +192,13 @@ pub fn scan(doc: &Document, lines: &[Line], li: usize, out: &mut Vec<Subject>) {
                 && meaningful(&keys)
             {
                 let text = collapse(line.slice(doc, toks[k].start, e));
-                let conf = if needs_colon { 0.6 } else if verb { 0.85 } else { 0.8 };
+                let conf = if needs_colon {
+                    0.6
+                } else if verb {
+                    0.85
+                } else {
+                    0.8
+                };
                 out.push(Subject {
                     text,
                     source: Source::Clause,
@@ -233,9 +243,9 @@ pub fn title(doc: &Document, lines: &[Line]) -> Option<Subject> {
         let Some(w0) = words.first() else { continue };
         let opens = ["ugovor", "agreement", "contract", "ponuda", "offer"]
             .contains(&w0.key.as_str())
-            || words.get(1).is_some_and(|w| {
-                ["agreement", "contract"].contains(&w.key.as_str())
-            });
+            || words
+                .get(1)
+                .is_some_and(|w| ["agreement", "contract"].contains(&w.key.as_str()));
         if !opens || words.len() < 3 || words.len() > 16 {
             continue;
         }

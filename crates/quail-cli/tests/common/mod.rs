@@ -231,7 +231,7 @@ pub fn scanned(pdf: &[u8], pages: u32, dpi: f32) -> Vec<u8> {
     out
 }
 
-/// A Serbian service contract (Latin, written without diacritics, as Helvetica in WinAnsi
+/// A Serbian service contract (Latin, written without diacritics, as Helvetica in `WinAnsi`
 /// cannot draw `č ć đ`): subject clause, net, VAT and gross, a penalty that is not the price.
 pub const PAY_SR_CONTRACT: &[&str] = &[
     "UGOVOR O PRUZANJU USLUGA ODRZAVANJA SOFTVERA",

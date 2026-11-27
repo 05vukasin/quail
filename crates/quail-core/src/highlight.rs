@@ -364,10 +364,16 @@ mod tests {
         assert_eq!(ix.len(), 4);
         // "Title" is block 0, the blank paragraph takes no number.
         let l = ix.locate(&doc, 0, sp(0, 5)).unwrap();
-        assert_eq!((l.block, l.start, l.end, l.quote.as_str()), (0, 0, 5, "Title"));
+        assert_eq!(
+            (l.block, l.start, l.end, l.quote.as_str()),
+            (0, 0, 5, "Title")
+        );
         // Row 0 is "Naziv\tCena": the second cell starts at character 6.
         let l = ix.locate(&doc, 0, sp(15, 19)).unwrap();
-        assert_eq!((l.block, l.start, l.end, l.quote.as_str()), (1, 6, 10, "Cena"));
+        assert_eq!(
+            (l.block, l.start, l.end, l.quote.as_str()),
+            (1, 6, 10, "Cena")
+        );
         // Row 1 is "Usluga\t\t1.000,00": column 2 after two tabs.
         let l = ix.locate(&doc, 0, sp(28, 36)).unwrap();
         assert_eq!((l.block, l.start, l.end), (2, 8, 16));

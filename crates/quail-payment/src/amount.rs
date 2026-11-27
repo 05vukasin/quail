@@ -101,7 +101,10 @@ pub fn amount_at(doc: &Document, line: &Line, i: usize) -> Option<Amount> {
         currency = Some(currency_of(doc, line, &toks[i])?);
         n = i + 1;
         // `RSD: 1.000,00`, `EUR -`.
-        while toks.get(n).is_some_and(|t| t.kind == TokenKind::Punct && t.key == ":") {
+        while toks
+            .get(n)
+            .is_some_and(|t| t.kind == TokenKind::Punct && t.key == ":")
+        {
             n += 1;
         }
         if toks.get(n)?.kind != TokenKind::Number {
@@ -134,9 +137,7 @@ pub fn amount_at(doc: &Document, line: &Line, i: usize) -> Option<Amount> {
     let value = money::parse_amount(&num)?;
     // `1.000,- RSD`, `1.000,00 din.`
     let mut k = last + 1;
-    if toks.get(k).is_some_and(|t| t.key == ",")
-        && toks.get(k + 1).is_some_and(|t| t.key == "-")
-    {
+    if toks.get(k).is_some_and(|t| t.key == ",") && toks.get(k + 1).is_some_and(|t| t.key == "-") {
         k += 2;
     }
     if let Some(t) = toks.get(k) {
@@ -203,7 +204,8 @@ struct CueAt {
 
 /// Index of the first word token of the line, skipping numbering (`3.`, `a)`, `-`).
 fn first_word(toks: &[Tok]) -> Option<usize> {
-    toks.iter().position(|t| t.kind == TokenKind::Word)
+    toks.iter()
+        .position(|t| t.kind == TokenKind::Word)
         .filter(|&i| i <= 4)
 }
 
@@ -301,11 +303,18 @@ pub fn scan(doc: &Document, lines: &[Line], li: usize, out: &mut Vec<Cand>) {
                 continue;
             };
             k = a.last + 1;
-            if !money_like(doc, line, &a) || (cue.strength == Strength::Weak && a.currency.is_none()) {
+            if !money_like(doc, line, &a)
+                || (cue.strength == Strength::Weak && a.currency.is_none())
+            {
                 continue;
             }
             found += 1;
-            let after = mark_in(toks, a.last + 1, (a.last + 1 + MARK_AFTER).min(seg_end), false);
+            let after = mark_in(
+                toks,
+                a.last + 1,
+                (a.last + 1 + MARK_AFTER).min(seg_end),
+                false,
+            );
             let before = mark_in(toks, prev_end, a.first, true);
             let role = if cue.role == Role::Vat {
                 Role::Vat
@@ -353,11 +362,7 @@ pub fn scan(doc: &Document, lines: &[Line], li: usize, out: &mut Vec<Cand>) {
             && let Some(next) = lines.get(li + 1)
             && next.pos == line.pos
         {
-            let start = next
-                .toks
-                .iter()
-                .position(Tok::wordlike)
-                .filter(|&s| s <= 1);
+            let start = next.toks.iter().position(Tok::wordlike).filter(|&s| s <= 1);
             if let Some(s) = start
                 && let Some(a) = amount_at(doc, next, s)
                 && money_like(doc, next, &a)

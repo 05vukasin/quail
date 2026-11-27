@@ -70,7 +70,9 @@ impl Analyzer for PaymentExtract {
         let budget = usize::try_from(ctx.limits.max_text_bytes)
             .unwrap_or(usize::MAX)
             .min(MAX_SCAN_BYTES);
-        let read = lex::read(doc, budget, MAX_SCAN_LINES, || out.check_deadline().is_err());
+        let read = lex::read(doc, budget, MAX_SCAN_LINES, || {
+            out.check_deadline().is_err()
+        });
         if read.stopped {
             out.problem("payment.extract: deadline reached, later pages not read");
         }
@@ -168,7 +170,10 @@ fn best(cands: &[Cand], role: Role) -> Option<(&Cand, bool)> {
 /// table cells the text scan did not pair with a label.
 fn table_totals(facts: &[Fact], ocr_pages: &[u32]) -> Vec<Cand> {
     let mut out = Vec::new();
-    for f in facts.iter().filter(|f| f.key.as_str() == "item.table_total") {
+    for f in facts
+        .iter()
+        .filter(|f| f.key.as_str() == "item.table_total")
+    {
         let role = match f.value.field("kind").and_then(Value::as_text) {
             Some("net" | "subtotal") => Role::Net,
             Some("vat") => Role::Vat,
@@ -206,9 +211,10 @@ pub(crate) fn analyze(doc: &Document, lines: &[Line], facts: &[Fact], out: &mut 
     let mut outs: Vec<Out> = Vec::new();
     let mut highlights: Vec<(FactKey, u32, Span, f32)> = Vec::new();
 
-    let invoice = facts.iter().any(|f| {
-        f.key.as_str() == "ref.instrument_kind" && f.value.as_text() == Some("invoice")
-    }) || invoice_title(lines);
+    let invoice = facts
+        .iter()
+        .any(|f| f.key.as_str() == "ref.instrument_kind" && f.value.as_text() == Some("invoice"))
+        || invoice_title(lines);
 
     // Price candidates; rates (per hour, per unit) are never the price.
     let mut cands = Vec::new();
@@ -283,7 +289,8 @@ pub(crate) fn analyze(doc: &Document, lines: &[Line], facts: &[Fact], out: &mut 
             outs.push(subject_out(&text, Source::Lines, subject_conf, subject_at));
             for f in &items {
                 if let Some(d) = f.value.field("description").and_then(Value::as_text) {
-                    subject_keys.extend(tokens(d).map(|t| fold(t.text, &FoldOptions::KEY).into_owned()));
+                    subject_keys
+                        .extend(tokens(d).map(|t| fold(t.text, &FoldOptions::KEY).into_owned()));
                 }
             }
         }
@@ -294,19 +301,20 @@ pub(crate) fn analyze(doc: &Document, lines: &[Line], facts: &[Fact], out: &mut 
         subject_keys = s.keys;
     }
     if subject_conf > 0.0 {
-        let (cat, keyword, conf) = match category::categorize(subject_keys.iter().map(String::as_str)) {
-            Some(p) => {
-                let c = match p.score {
-                    0..=1 => 0.55,
-                    2 => 0.7,
-                    _ => 0.8,
-                };
-                let c = if p.tied { 0.45 } else { c };
-                let keyword = subject_keys.get(p.token).cloned().unwrap_or_default();
-                (p.category, keyword, c)
-            }
-            None => (category::other(), String::new(), 0.3),
-        };
+        let (cat, keyword, conf) =
+            match category::categorize(subject_keys.iter().map(String::as_str)) {
+                Some(p) => {
+                    let c = match p.score {
+                        0..=1 => 0.55,
+                        2 => 0.7,
+                        _ => 0.8,
+                    };
+                    let c = if p.tied { 0.45 } else { c };
+                    let keyword = subject_keys.get(p.token).cloned().unwrap_or_default();
+                    (p.category, keyword, c)
+                }
+                None => (category::other(), String::new(), 0.3),
+            };
         debug_assert!(CATEGORIES.iter().any(|c| c.code == cat.code));
         let mut fields = vec![
             ("code", Value::text(cat.code)),
@@ -383,13 +391,17 @@ fn invoice_title(lines: &[Line]) -> bool {
     let Some(first) = lines.first() else {
         return false;
     };
-    lines.iter().take(8).filter(|l| l.pos == first.pos).any(|l| {
-        let words: Vec<_> = l.toks.iter().filter(|t| t.wordlike()).collect();
-        words.len() <= 6
-            && words
-                .first()
-                .is_some_and(|w| cues::INVOICE_TITLE.contains(&w.key.as_str()))
-    })
+    lines
+        .iter()
+        .take(8)
+        .filter(|l| l.pos == first.pos)
+        .any(|l| {
+            let words: Vec<_> = l.toks.iter().filter(|t| t.wordlike()).collect();
+            words.len() <= 6
+                && words
+                    .first()
+                    .is_some_and(|w| cues::INVOICE_TITLE.contains(&w.key.as_str()))
+        })
 }
 
 /// The price facts: amount, basis, currency, net, VAT, gross, period.

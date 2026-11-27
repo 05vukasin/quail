@@ -372,7 +372,10 @@ mod tests {
         assert_eq!(code("odrzavanje softvera"), Some("it_software"));
         assert_eq!(code("odrzavanje lifta"), Some("maintenance_repair"));
         assert_eq!(code("zakup poslovnog prostora"), Some("rent_lease"));
-        assert_eq!(code("software maintenance and support"), Some("it_software"));
+        assert_eq!(
+            code("software maintenance and support"),
+            Some("it_software")
+        );
         assert_eq!(code("legal services"), Some("legal"));
         assert_eq!(code("isporuka dizel goriva"), Some("fuel_energy"));
         assert_eq!(code("nesto sasvim drugo"), None);

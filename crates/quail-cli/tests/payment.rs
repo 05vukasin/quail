@@ -126,7 +126,12 @@ fn serbian_invoice_pdf() {
 fn contract_without_a_price_pdf() {
     let t = tempfile::tempdir().unwrap();
     let r = scan(&pdf_file(t.path(), "saradnja.pdf", PAY_SR_NO_PRICE));
-    for k in ["payment.amount", "payment.net", "payment.gross", "payment.currency"] {
+    for k in [
+        "payment.amount",
+        "payment.net",
+        "payment.gross",
+        "payment.currency",
+    ] {
         assert!(r.facts_for(k).next().is_none(), "{k}: {:#?}", r.facts);
     }
     assert!(r.facts_for("payment.subject").next().is_some());

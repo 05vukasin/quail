@@ -348,7 +348,9 @@ fn amount_in_the_next_table_cell() {
 
 #[test]
 fn spaced_thousands_and_euro_sign() {
-    let f = run(lines("Ugovorena cena: 1 234 567,89 RSD\nCena usluge: €2.500,00"));
+    let f = run(lines(
+        "Ugovorena cena: 1 234 567,89 RSD\nCena usluge: €2.500,00",
+    ));
     close(money(&f, &keys::AMOUNT), 1_234_567.89, "RSD");
 }
 
