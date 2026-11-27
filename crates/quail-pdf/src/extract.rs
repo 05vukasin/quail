@@ -30,7 +30,7 @@ use crate::device::{
 use crate::open::{Caught, caught, open};
 use crate::quality::{Signals, judge};
 use crate::raster::PdfRaster;
-use crate::{keys, layout, meta, raw, zones};
+use crate::{keys, layout, meta, raw, xmp, zones};
 
 /// Decoded bytes after which the parsed document is dropped and re-opened, releasing hayro's
 /// per-page content caches.
@@ -38,13 +38,13 @@ pub(crate) const REOPEN_AFTER_BYTES: u64 = 64 << 20;
 /// Below this much budget left after a refused decode, the file is treated as spent.
 const BUDGET_SPENT: u64 = 1 << 20;
 
-/// The PDF extractor (`pdf.extract@3`). Stateless; one instance serves every thread.
+/// The PDF extractor (`pdf.extract@4`). Stateless; one instance serves every thread.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PdfExtractor;
 
 impl PdfExtractor {
     /// Its id.
-    pub const ID: AnalyzerId = AnalyzerId::new("pdf.extract", 3);
+    pub const ID: AnalyzerId = AnalyzerId::new("pdf.extract", 4);
 
     /// New extractor.
     pub fn new() -> Self {
@@ -181,7 +181,24 @@ fn document_facts(pdf: &Pdf, bytes: &[u8], out: &mut Emitter) {
     }
     let late = || out.check_deadline().is_err();
     let c = meta::catalog_facts(pdf, bytes, &late);
+    let mut notes = Vec::new();
+    let ids = if c.has_xmp {
+        xmp::catalog_ids(pdf, &late, &mut notes)
+    } else {
+        xmp::Ids::default()
+    };
+    for n in notes {
+        out.warn(n);
+    }
     out.fact(keys::HAS_XMP, Value::Bool(c.has_xmp));
+    for (k, v) in [
+        (keys::XMP_DOCUMENT_ID, ids.document_id),
+        (keys::XMP_ORIGINAL_DOCUMENT_ID, ids.original_document_id),
+    ] {
+        if let Some(v) = v {
+            out.fact(k, Value::text(v));
+        }
+    }
     out.fact(keys::FORM_FIELDS, int(c.form_fields));
     out.fact(keys::SIGNATURE_FIELDS, int(c.signature_fields));
     out.fact(keys::SIGNED, Value::Bool(c.signed_fields > 0));

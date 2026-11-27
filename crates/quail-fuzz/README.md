@@ -24,7 +24,7 @@ abort on allocation failure, a stack overflow, a hang or a memory blowup. So eve
 
 Every step is wrapped so it writes `QF-STEP <id>` to stderr before it runs. A finding's
 signature is `class@where`: the panic location for panics, and for deaths the step that was
-running (`stack-overflow@docx.extract@1`). The first input of each signature is saved under
+running (`stack-overflow@docx.extract@2`). The first input of each signature is saved under
 `<out>/crashes/` with a delta-debugged minimal copy (`-min`), a `.txt` with details and the
 stderr tail, and a line in `crashes/summary.tsv`.
 

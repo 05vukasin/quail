@@ -41,10 +41,10 @@ In registration order. *Profile* is the lowest profile the step runs in (`dedup`
 | `engine.sniff@3` | engine | any | fast | Format and MIME type from the bytes (magic numbers, ZIP directory). |
 | `engine.dedup@1` | engine | any | - | `scan --dedup` only: a file whose bytes were already analyzed in the run reuses that record (`engine.duplicate_of`). |
 | `hash.identity@1` | analyzer | any | fast | BLAKE3 and XXH3-128 of the whole file, FastCDC chunk hashes. |
-| `docx.extract@1` | extractor | docx | fast | Streaming OOXML reader: sections as logical pages, zones, properties, rsids. |
+| `docx.extract@2` | extractor | docx | fast | Streaming OOXML reader: sections as logical pages, zones, properties, rsids. |
 | `pptx.extract@1` | extractor | pptx | fast | Streaming OOXML reader: slides as logical pages in reading order, titles, tables, speaker notes. |
 | `html.extract@1` | extractor | html | fast | HTML5 tokenizer: declared charset, headings, lists and tables as blocks, hidden content and scripts dropped, CSS page breaks, inline XBRL. |
-| `pdf.extract@3` | extractor | pdf | fast | Pure-Rust PDF reader: positioned text in reading order, zones, images, OCR flags, raster. |
+| `pdf.extract@4` | extractor | pdf | fast | Pure-Rust PDF reader: positioned text in reading order, zones, images, OCR flags, raster. |
 | `text.extract@1` | extractor | text | fast | Plain text: encoding (BOM, UTF-8/16, chardetng legacy guess), LF line endings, form-feed pages, paragraphs and headings. |
 | `text.stats@3` | analyzer | any | fast | Characters, words, scripts and garbage ratio of the extracted text. |
 | `text.lang@2` | analyzer | any | fast | Document language with top candidates (lingua + sr/hr/bs layer). |
@@ -99,7 +99,7 @@ Declared by `quail-hash`. 4 keys.
 
 ## docx: DOCX extractor
 
-Declared by `quail-docx`. 55 keys.
+Declared by `quail-docx`. 56 keys.
 
 | key | documentation |
 |---|---|
@@ -130,6 +130,7 @@ Declared by `quail-docx`. 55 keys.
 | `docx.rsids` | Every `w:rsid` of `w:rsids`, in file order: the editing-session ids of the document's history. Documents that share session ids share an ancestor. List of U64. |
 | `docx.rsid_root` | `w:rsidRoot`: the session that created the document. U64. |
 | `docx.rsid_count` | Number of rsids. Int. |
+| `docx.w15_doc_id` | `w15:docId/@w15:val` (Word 2013+): a GUID naming the document, kept across saves and copies. As written, trimmed, braces kept. The `w15` prefix is the one the part binds to the Word 2012 namespace (`w14:docId` is a different id and is not read). Text. |
 | `docx.attached_template` | Target of `w:attachedTemplate` (often a path on the author's machine). Text. |
 | `docx.track_revisions` | `w:trackRevisions` is on. Bool. |
 | `docx.protection` | `w:documentProtection` edit mode when enforced (`readOnly`, `comments`, ...). Text. |
@@ -214,7 +215,7 @@ Declared by `quail-html`. 14 keys.
 
 ## pdf: PDF extractor
 
-Declared by `quail-pdf`. 26 keys.
+Declared by `quail-pdf`. 28 keys.
 
 | key | documentation |
 |---|---|
@@ -234,6 +235,8 @@ Declared by `quail-pdf`. 26 keys.
 | `pdf.incremental_updates` | Incremental updates appended after the first revision (`%%EOF` sections minus one, minus the extra section of a linearized file). Int. |
 | `pdf.linearized` | The file is linearized ("fast web view"). Bool. |
 | `pdf.has_xmp` | The catalog has an XMP metadata stream. Bool. |
+| `pdf.xmp_document_id` | XMP `xmpMM:DocumentID` of the catalog's metadata packet (attribute or element form, on a top-level `rdf:Description`): the id of the document, kept across saves. As written, trimmed, scheme prefix kept (`uuid:…`, `xmp.did:…`, `adobe:docid:…`). Text. |
+| `pdf.xmp_original_document_id` | XMP `xmpMM:OriginalDocumentID`: the id of the document this one was first saved from (it survives "save as"). Same form as `pdf.xmp_document_id`. Text. |
 | `pdf.signature_fields` | Signature form fields. Int. |
 | `pdf.signed` | At least one signature field carries a signature value. Bool. |
 | `pdf.form_fields` | Terminal `AcroForm` fields (signatures included). Int. |

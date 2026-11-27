@@ -54,6 +54,8 @@ pub struct Extras {
     pub embedded_file: bool,
     /// Add an XMP metadata stream.
     pub xmp: bool,
+    /// The XMP packet to use instead of the empty one (implies `xmp`).
+    pub xmp_packet: Option<String>,
     /// Compress content streams.
     pub compress: bool,
 }
@@ -189,11 +191,19 @@ pub fn document(pages: &[PageSpec], extras: &Extras) -> Document {
     if !names.is_empty() {
         catalog.set("Names", names);
     }
-    if extras.xmp {
-        let xmp = doc.add_object(Stream::new(
+    if extras.xmp || extras.xmp_packet.is_some() {
+        let packet = extras.xmp_packet.as_deref().map_or_else(
+            || b"<x:xmpmeta xmlns:x='adobe:ns:meta/'></x:xmpmeta>".to_vec(),
+            |p| p.as_bytes().to_vec(),
+        );
+        let mut stream = Stream::new(
             dictionary! { "Type" => "Metadata", "Subtype" => "XML" },
-            b"<x:xmpmeta xmlns:x='adobe:ns:meta/'></x:xmpmeta>".to_vec(),
-        ));
+            packet,
+        );
+        if extras.compress {
+            let _ = stream.compress();
+        }
+        let xmp = doc.add_object(stream);
         catalog.set("Metadata", xmp);
     }
     let catalog_id = doc.add_object(catalog);

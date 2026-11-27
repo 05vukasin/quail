@@ -1,6 +1,6 @@
 //! PDF extractor for quail.
 //!
-//! [`PdfExtractor`] (`pdf.extract@3`) turns a PDF into a [`Document`](quail_core::Document):
+//! [`PdfExtractor`] (`pdf.extract@4`) turns a PDF into a [`Document`](quail_core::Document):
 //! one physical [`Page`](quail_core::Page) per page with its size, its text in reading order
 //! and paragraph [`Block`](quail_core::Block)s carrying boxes (points, top-left origin) and
 //! zones (header/footer by geometry and repetition, body otherwise), and the images it draws.
@@ -27,6 +27,7 @@ mod open;
 mod quality;
 mod raster;
 mod raw;
+mod xmp;
 mod zones;
 
 pub use extract::PdfExtractor;
@@ -69,6 +70,13 @@ pub mod keys {
     pub const LINEARIZED: FactKey = FactKey::new("pdf.linearized");
     /// The catalog has an XMP metadata stream. Bool.
     pub const HAS_XMP: FactKey = FactKey::new("pdf.has_xmp");
+    /// XMP `xmpMM:DocumentID` of the catalog's metadata packet (attribute or element form, on
+    /// a top-level `rdf:Description`): the id of the document, kept across saves. As written,
+    /// trimmed, scheme prefix kept (`uuid:…`, `xmp.did:…`, `adobe:docid:…`). Text.
+    pub const XMP_DOCUMENT_ID: FactKey = FactKey::new("pdf.xmp_document_id");
+    /// XMP `xmpMM:OriginalDocumentID`: the id of the document this one was first saved from
+    /// (it survives "save as"). Same form as `pdf.xmp_document_id`. Text.
+    pub const XMP_ORIGINAL_DOCUMENT_ID: FactKey = FactKey::new("pdf.xmp_original_document_id");
     /// Signature form fields. Int.
     pub const SIGNATURE_FIELDS: FactKey = FactKey::new("pdf.signature_fields");
     /// At least one signature field carries a signature value. Bool.

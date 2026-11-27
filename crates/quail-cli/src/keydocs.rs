@@ -162,6 +162,10 @@ pub const DOCX: &[KeyDoc] = &[
         doc: "Number of rsids. Int.",
     },
     KeyDoc {
+        key: quail_docx::keys::W15_DOC_ID,
+        doc: "`w15:docId/@w15:val` (Word 2013+): a GUID naming the document, kept across saves and copies. As written, trimmed, braces kept. The `w15` prefix is the one the part binds to the Word 2012 namespace (`w14:docId` is a different id and is not read). Text.",
+    },
+    KeyDoc {
         key: quail_docx::keys::ATTACHED_TEMPLATE,
         doc: "Target of `w:attachedTemplate` (often a path on the author's machine). Text.",
     },
@@ -483,6 +487,14 @@ pub const PDF: &[KeyDoc] = &[
     KeyDoc {
         key: quail_pdf::keys::HAS_XMP,
         doc: "The catalog has an XMP metadata stream. Bool.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::XMP_DOCUMENT_ID,
+        doc: "XMP `xmpMM:DocumentID` of the catalog's metadata packet (attribute or element form, on a top-level `rdf:Description`): the id of the document, kept across saves. As written, trimmed, scheme prefix kept (`uuid:…`, `xmp.did:…`, `adobe:docid:…`). Text.",
+    },
+    KeyDoc {
+        key: quail_pdf::keys::XMP_ORIGINAL_DOCUMENT_ID,
+        doc: "XMP `xmpMM:OriginalDocumentID`: the id of the document this one was first saved from (it survives \"save as\"). Same form as `pdf.xmp_document_id`. Text.",
     },
     KeyDoc {
         key: quail_pdf::keys::SIGNATURE_FIELDS,

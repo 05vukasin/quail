@@ -19,6 +19,8 @@ hayro-interpret = "=0.9.0"
 hayro = "=0.9.0"
 # SIMD substring search (runtime CPU detection, scalar fallback) for the byte-level scans.
 memchr = "2.8.3"
+# Streaming XML reader for the XMP packet (document identity ids); same version as quail-ooxml.
+quick-xml = { version = "0.42.0", default-features = false }
 
 [dev-dependencies]
 # Streaming compression and RC4/MD5 for the hostile-input matrix (examples/hostile.rs).

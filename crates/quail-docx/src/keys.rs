@@ -65,6 +65,10 @@ pub const RSIDS: FactKey = FactKey::new("docx.rsids");
 pub const RSID_ROOT: FactKey = FactKey::new("docx.rsid_root");
 /// Number of rsids. Int.
 pub const RSID_COUNT: FactKey = FactKey::new("docx.rsid_count");
+/// `w15:docId/@w15:val` (Word 2013+): a GUID naming the document, kept across saves and
+/// copies. As written, trimmed, braces kept. The `w15` prefix is the one the part binds to
+/// the Word 2012 namespace (`w14:docId` is a different id and is not read). Text.
+pub const W15_DOC_ID: FactKey = FactKey::new("docx.w15_doc_id");
 /// Target of `w:attachedTemplate` (often a path on the author's machine). Text.
 pub const ATTACHED_TEMPLATE: FactKey = FactKey::new("docx.attached_template");
 /// `w:trackRevisions` is on. Bool.

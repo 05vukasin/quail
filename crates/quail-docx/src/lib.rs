@@ -1,6 +1,6 @@
 //! DOCX extractor: a streaming OOXML reader built on `zip` and `quick-xml` (no DOM).
 //!
-//! Namespace: `docx.*` (every key is in [`keys`]). Extractor id: [`ID`] (`docx.extract@1`).
+//! Namespace: `docx.*` (every key is in [`keys`]). Extractor id: [`ID`] (`docx.extract@2`).
 //!
 //! # Document model
 //!
@@ -52,7 +52,7 @@ use quail_ooxml::{package, rels, xml};
 use quail_core::{AnalyzerId, Blob, Document, Emitter, Extractor, Format, Limits, Result};
 
 /// Name and version of the extractor.
-pub const ID: AnalyzerId = AnalyzerId::new("docx.extract", 1);
+pub const ID: AnalyzerId = AnalyzerId::new("docx.extract", 2);
 
 /// The DOCX extractor. Stateless; share one instance between threads.
 #[derive(Clone, Copy, Debug, Default)]
