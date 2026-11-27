@@ -1,5 +1,7 @@
 //! `contract.facts@1` over contracts built in code: every fact with its highlight, Serbian
 //! Latin and Cyrillic and English, an amendment, OCR text, and negatives that must not match.
+// One test per document checks all of its facts in a row.
+#![allow(clippy::too_many_lines)]
 
 mod common;
 
@@ -15,7 +17,13 @@ fn facts(text: &str, ocr: bool) -> Vec<Fact> {
     let refs = RefAnalyzer::new();
     run(
         doc(text, ocr),
-        &[&SignalScan, &refs, &PartyCandidates, &ClauseTerms, &ContractFacts],
+        &[
+            &SignalScan,
+            &refs,
+            &PartyCandidates,
+            &ClauseTerms,
+            &ContractFacts,
+        ],
     )
 }
 
@@ -123,9 +131,11 @@ fn serbian_latin_contract_has_every_fact() {
             "{want:?} in {ids:?}"
         );
     }
-    assert!(all(&f, "contract.party_id")
-        .iter()
-        .all(|x| b(&x.value, "checked") == Some(true)));
+    assert!(
+        all(&f, "contract.party_id")
+            .iter()
+            .all(|x| b(&x.value, "checked") == Some(true))
+    );
     let addr = of_role(&f, "contract.address", "supplier");
     assert_eq!(s(addr[0], "text"), Some("Beogradu, ul. Knez Mihailova 10"));
     let rep = of_role(&f, "contract.representative", "customer");
@@ -140,24 +150,42 @@ fn serbian_latin_contract_has_every_fact() {
     );
     // Term.
     let term = one(&f, "contract.term");
-    assert_eq!((s(term, "iso"), i(term, "months")), (Some("P12M"), Some(12)));
+    assert_eq!(
+        (s(term, "iso"), i(term, "months")),
+        (Some("P12M"), Some(12))
+    );
     let ren = one(&f, "contract.renewal");
     assert_eq!(b(ren, "auto"), Some(true));
     assert_eq!(b(ren, "same_period"), Some(true));
     let notice = one(&f, "contract.notice");
-    assert_eq!((s(notice, "iso"), i(notice, "days")), (Some("P30D"), Some(30)));
+    assert_eq!(
+        (s(notice, "iso"), i(notice, "days")),
+        (Some("P30D"), Some(30))
+    );
     let kinds: Vec<&str> = all(&f, "contract.termination")
         .iter()
         .filter_map(|x| s(&x.value, "kind"))
         .collect();
-    assert!(kinds.contains(&"breach") && kinds.contains(&"notice"), "{kinds:?}");
+    assert!(
+        kinds.contains(&"breach") && kinds.contains(&"notice"),
+        "{kinds:?}"
+    );
     // Payment terms.
     let pd = one(&f, "contract.payment_days");
-    assert_eq!((i(pd, "days"), s(pd, "from")), (Some(15), Some("invoice_receipt")));
-    assert_eq!(one(&f, "contract.payment_method").as_text(), Some("bank_transfer"));
+    assert_eq!(
+        (i(pd, "days"), s(pd, "from")),
+        (Some(15), Some("invoice_receipt"))
+    );
+    assert_eq!(
+        one(&f, "contract.payment_method").as_text(),
+        Some("bank_transfer")
+    );
     assert_eq!(x(one(&f, "contract.advance"), "percent"), Some(30.0));
     assert_eq!(s(one(&f, "contract.indexation"), "basis"), Some("cpi"));
-    assert_eq!(b(one(&f, "contract.late_interest"), "statutory"), Some(true));
+    assert_eq!(
+        b(one(&f, "contract.late_interest"), "statutory"),
+        Some(true)
+    );
     // Obligations.
     let pen = &all(&f, "contract.penalty")[0].value;
     assert_eq!(
@@ -169,11 +197,20 @@ fn serbian_latin_contract_has_every_fact() {
         (s(g, "kind"), s(g, "purpose"), x(g, "percent")),
         (Some("bank_guarantee"), Some("performance"), Some(10.0))
     );
-    assert_eq!(s(one(&f, "contract.liability_cap"), "basis"), Some("contract_value"));
+    assert_eq!(
+        s(one(&f, "contract.liability_cap"), "basis"),
+        Some("contract_value")
+    );
     assert_eq!(s(one(&f, "contract.confidentiality"), "iso"), Some("P3Y"));
     let sla: Vec<&Value> = all(&f, "contract.sla").iter().map(|x| &x.value).collect();
-    assert!(sla.iter().any(|v| s(v, "metric") == Some("availability") && x(v, "percent") == Some(99.5)));
-    assert!(sla.iter().any(|v| s(v, "metric") == Some("response") && i(v, "hours") == Some(4)));
+    assert!(
+        sla.iter()
+            .any(|v| s(v, "metric") == Some("availability") && x(v, "percent") == Some(99.5))
+    );
+    assert!(
+        sla.iter()
+            .any(|v| s(v, "metric") == Some("response") && i(v, "hours") == Some(4))
+    );
     assert_eq!(i(&all(&f, "contract.deadline")[0].value, "days"), Some(10));
     assert_eq!(i(one(&f, "contract.warranty"), "months"), Some(12));
     // Law.
@@ -184,7 +221,10 @@ fn serbian_latin_contract_has_every_fact() {
         (Some("Privredni sud u Beogradu"), Some("Beograd"))
     );
     let lang = one(&f, "contract.language");
-    assert_eq!(lang.field("languages"), Some(&Value::List(vec![Value::text("sr")])));
+    assert_eq!(
+        lang.field("languages"),
+        Some(&Value::List(vec![Value::text("sr")]))
+    );
     // Document.
     let annexes: Vec<(&str, Option<&str>)> = all(&f, "contract.annex")
         .iter()
@@ -192,10 +232,16 @@ fn serbian_latin_contract_has_every_fact() {
         .collect();
     assert_eq!(
         annexes,
-        [("Prilog 1", Some("Tehnička specifikacija")), ("Prilog 2", Some("Cenovnik"))]
+        [
+            ("Prilog 1", Some("Tehnička specifikacija")),
+            ("Prilog 2", Some("Cenovnik"))
+        ]
     );
     // Highlights.
-    assert_eq!(quotes(&f, SR_LATIN, "contract.notice"), ["otkazni rok od 30 dana"]);
+    assert_eq!(
+        quotes(&f, SR_LATIN, "contract.notice"),
+        ["otkazni rok od 30 dana"]
+    );
     assert_eq!(
         quotes(&f, SR_LATIN, "contract.court"),
         ["Privredni sud u Beogradu"]
@@ -213,10 +259,15 @@ fn serbian_cyrillic_contract() {
     let sup = of_role(&f, "contract.party", "supplier");
     assert_eq!(s(sup[0], "label"), Some("Закуподавац"));
     assert_eq!(s(sup[0], "name"), Some("Гама Некретнине д.о.о."));
-    assert_eq!(s(of_role(&f, "contract.party", "customer")[0], "label"), Some("Закупац"));
-    assert!(of_role(&f, "contract.party_id", "customer")
-        .iter()
-        .any(|v| s(v, "kind") == Some("pib") && s(v, "value") == Some("100000032")));
+    assert_eq!(
+        s(of_role(&f, "contract.party", "customer")[0], "label"),
+        Some("Закупац")
+    );
+    assert!(
+        of_role(&f, "contract.party_id", "customer")
+            .iter()
+            .any(|v| s(v, "kind") == Some("pib") && s(v, "value") == Some("100000032"))
+    );
     let rep = of_role(&f, "contract.representative", "supplier");
     assert_eq!(s(rep[0], "name"), Some("Јован Јовановић"));
     assert_eq!(i(one(&f, "contract.term"), "months"), Some(24));
@@ -225,13 +276,22 @@ fn serbian_cyrillic_contract() {
     assert_eq!(i(one(&f, "contract.payment_days"), "days"), Some(8));
     let pen = &all(&f, "contract.penalty")[0].value;
     assert_eq!((x(pen, "percent"), s(pen, "per")), (Some(0.1), Some("day")));
-    assert_eq!(s(&all(&f, "contract.guarantee")[0].value, "kind"), Some("bill_of_exchange"));
+    assert_eq!(
+        s(&all(&f, "contract.guarantee")[0].value, "kind"),
+        Some("bill_of_exchange")
+    );
     assert_eq!(s(one(&f, "contract.governing_law"), "code"), Some("RS"));
     let court = one(&f, "contract.court");
     assert_eq!(s(court, "city"), Some("Niš"));
     assert_eq!(s(court, "court"), Some("Privredni sud u Nišu"));
-    assert_eq!(s(&all(&f, "contract.annex")[0].value, "label"), Some("Прилог 1"));
-    assert_eq!(quotes(&f, SR_CYRILLIC, "contract.notice"), ["отказни рок од 60 дана"]);
+    assert_eq!(
+        s(&all(&f, "contract.annex")[0].value, "label"),
+        Some("Прилог 1")
+    );
+    assert_eq!(
+        quotes(&f, SR_CYRILLIC, "contract.notice"),
+        ["отказни рок од 60 дана"]
+    );
 }
 
 #[test]
@@ -259,7 +319,10 @@ fn english_agreement_has_every_fact() {
         (s(sig[0], "name"), s(sig[0], "title")),
         (Some("Anna Weber"), Some("Managing Director"))
     );
-    assert_eq!(s(of_role(&f, "contract.signatory", "supplier")[0], "name"), Some("John Smith"));
+    assert_eq!(
+        s(of_role(&f, "contract.signatory", "supplier")[0], "name"),
+        Some("John Smith")
+    );
     assert_eq!(s(one(&f, "contract.term"), "iso"), Some("P2Y"));
     assert_eq!(b(one(&f, "contract.renewal"), "auto"), Some(true));
     assert_eq!(i(one(&f, "contract.notice"), "days"), Some(90));
@@ -271,22 +334,35 @@ fn english_agreement_has_every_fact() {
         assert!(kinds.contains(&k), "{k} in {kinds:?}");
     }
     let pd = one(&f, "contract.payment_days");
-    assert_eq!((i(pd, "days"), s(pd, "from")), (Some(30), Some("invoice_receipt")));
-    assert_eq!(one(&f, "contract.payment_method").as_text(), Some("bank_transfer"));
+    assert_eq!(
+        (i(pd, "days"), s(pd, "from")),
+        (Some(30), Some("invoice_receipt"))
+    );
+    assert_eq!(
+        one(&f, "contract.payment_method").as_text(),
+        Some("bank_transfer")
+    );
     assert_eq!(x(one(&f, "contract.advance"), "percent"), Some(20.0));
     assert_eq!(s(one(&f, "contract.indexation"), "basis"), Some("fixed"));
     let cap = one(&f, "contract.liability_cap");
-    assert_eq!((s(cap, "basis"), i(cap, "months")), (Some("fees_paid"), Some(12)));
+    assert_eq!(
+        (s(cap, "basis"), i(cap, "months")),
+        (Some("fees_paid"), Some(12))
+    );
     let pen = &all(&f, "contract.penalty")[0].value;
     assert_eq!(
         (x(pen, "percent"), s(pen, "per"), x(pen, "cap_percent")),
         (Some(1.0), Some("week"), Some(10.0))
     );
-    assert_eq!(s(&all(&f, "contract.guarantee")[0].value, "kind"), Some("performance_bond"));
+    assert_eq!(
+        s(&all(&f, "contract.guarantee")[0].value, "kind"),
+        Some("performance_bond")
+    );
     let sla: Vec<&Value> = all(&f, "contract.sla").iter().map(|x| &x.value).collect();
     for (m, h) in [("response", 2), ("resolution", 8)] {
         assert!(
-            sla.iter().any(|v| s(v, "metric") == Some(m) && i(v, "hours") == Some(h)),
+            sla.iter()
+                .any(|v| s(v, "metric") == Some(m) && i(v, "hours") == Some(h)),
             "{m}: {sla:?}"
         );
     }
@@ -295,7 +371,10 @@ fn english_agreement_has_every_fact() {
     assert_eq!(s(one(&f, "contract.governing_law"), "code"), Some("GB-EAW"));
     assert_eq!(s(one(&f, "contract.court"), "city"), Some("London"));
     let arb = one(&f, "contract.arbitration");
-    assert_eq!((s(arb, "rules"), s(arb, "seat")), (Some("ICC"), Some("London")));
+    assert_eq!(
+        (s(arb, "rules"), s(arb, "seat")),
+        (Some("ICC"), Some("London"))
+    );
     assert_eq!(s(one(&f, "contract.language"), "prevails"), Some("en"));
     let annexes: Vec<&str> = all(&f, "contract.annex")
         .iter()
@@ -315,7 +394,13 @@ fn amendment_says_what_it_changes() {
         .iter()
         .map(|x| (s(&x.value, "action"), s(&x.value, "article")))
         .collect();
-    assert_eq!(a, [(Some("change"), Some("član 2")), (Some("delete"), Some("član 7"))]);
+    assert_eq!(
+        a,
+        [
+            (Some("change"), Some("član 2")),
+            (Some("delete"), Some("član 7"))
+        ]
+    );
     quotes(&f, SR_AMENDMENT, "contract.amendment");
 }
 
@@ -380,11 +465,39 @@ fn negatives_do_not_match() {
 
 #[test]
 fn empty_and_tiny_inputs() {
-    for text in ["", " ", ".", "PIB", "Naručilac:", "(u daljem tekstu: Kupac)", "Za Naručioca"] {
+    for text in [
+        "",
+        " ",
+        ".",
+        "PIB",
+        "Naručilac:",
+        "(u daljem tekstu: Kupac)",
+        "Za Naručioca",
+    ] {
         let f = facts(text, false);
         assert!(
             f.iter().all(|x| x.key.namespace() != "contract"),
             "{text}: {f:#?}"
         );
+    }
+}
+
+#[test]
+fn overlapping_and_cut_off_cues_do_not_panic() {
+    for text in [
+        "A d.o.o. (u daljem tekstu: Kupac), represented by John Smith (the Seller) (the Buyer)",
+        "dalje Kupac, koga zastupa dalje Prodavac koga zastupa",
+        "(the \"Supplier\"), represented by",
+        "PIB PIB PIB 1 MB",
+        "Za Naručioca\nZa Izvođača\nName:\nTitle:",
+        "Prilozi:\n1.\n2. -",
+        "u roku od 999999999999 dana od dana prijema fakture",
+        "Ugovorna kazna 0,5% najviše",
+        "nadležan je sud u",
+        "arbitraža pri",
+        "Član\nČlan 1.\n1.\ni\nand",
+    ] {
+        let _ = facts(text, false);
+        let _ = facts(text, true);
     }
 }

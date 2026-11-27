@@ -3048,6 +3048,8 @@ version = "0.1.0"
 dependencies = [
  "lopdf",
  "miniz_oxide 0.8.9",
+ "quail-card",
+ "quail-contract",
  "quail-core",
  "quail-docx",
  "quail-engine",

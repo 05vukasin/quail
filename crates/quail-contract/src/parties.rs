@@ -105,8 +105,21 @@ const DEFINE: &[(&[&str], ())] = &[
 fn define_skip(t: &Tok) -> bool {
     matches!(
         t.key.as_str(),
-        ":" | "\"" | "„" | "“" | "”" | "'" | "‘" | "’" | "«" | "»" | "the" | "as" | "kao" | "called"
-            | "-" | ","
+        ":" | "\""
+            | "„"
+            | "“"
+            | "”"
+            | "'"
+            | "‘"
+            | "’"
+            | "«"
+            | "»"
+            | "the"
+            | "as"
+            | "kao"
+            | "called"
+            | "-"
+            | ","
     )
 }
 
@@ -236,22 +249,106 @@ const REP: &[(&[&str], ())] = &[
 
 /// Words of a title (`direktor`, `Managing Director`, `CEO`).
 const TITLE: &[&str] = &[
-    "direktor*", "direktork*", "generaln*", "izvrsn*", "predsednik*", "zastupnik*", "prokurist*",
-    "vlasnik*", "osnivac*", "ovlascen*", "upravnik*", "rukovodilac", "lice", "managing",
-    "director*", "ceo", "cfo", "coo", "cto", "president", "chairman", "partner", "officer",
-    "general", "manager", "owner", "authorised", "authorized", "signatory", "chief",
-    "executive", "financial", "operating", "head", "vice", "clan", "member", "board",
+    "direktor*",
+    "direktork*",
+    "generaln*",
+    "izvrsn*",
+    "predsednik*",
+    "zastupnik*",
+    "prokurist*",
+    "vlasnik*",
+    "osnivac*",
+    "ovlascen*",
+    "upravnik*",
+    "rukovodilac",
+    "lice",
+    "managing",
+    "director*",
+    "ceo",
+    "cfo",
+    "coo",
+    "cto",
+    "president",
+    "chairman",
+    "partner",
+    "officer",
+    "general",
+    "manager",
+    "owner",
+    "authorised",
+    "authorized",
+    "signatory",
+    "chief",
+    "executive",
+    "financial",
+    "operating",
+    "head",
+    "vice",
+    "clan",
+    "member",
+    "board",
 ];
 
 /// Words that are never part of a person's name.
 const NOT_NAME: &[&str] = &[
-    "direktor*", "generaln*", "predsednik*", "zastupnik*", "prokurist*", "managing", "director*",
-    "ceo", "cfo", "president", "chairman", "manager", "owner", "chief", "executive", "ugovor*",
-    "agreement", "contract", "republik*", "beograd*", "novi", "sad*", "pib", "mb", "the",
-    "naruci*", "izvodj*", "dobavlj*", "kupac", "kupc*", "supplier", "customer", "client",
-    "potpis*", "signature", "datum", "date", "name", "title", "ime", "funkcija", "pecat",
-    "doo", "llc", "ltd", "inc", "gmbh", "plc", "srbij*", "serbia", "zakupac", "zakupodavac",
-    "seller", "buyer", "landlord", "tenant", "lessor", "lessee",
+    "direktor*",
+    "generaln*",
+    "predsednik*",
+    "zastupnik*",
+    "prokurist*",
+    "managing",
+    "director*",
+    "ceo",
+    "cfo",
+    "president",
+    "chairman",
+    "manager",
+    "owner",
+    "chief",
+    "executive",
+    "ugovor*",
+    "agreement",
+    "contract",
+    "republik*",
+    "beograd*",
+    "novi",
+    "sad*",
+    "pib",
+    "mb",
+    "the",
+    "naruci*",
+    "izvodj*",
+    "dobavlj*",
+    "kupac",
+    "kupc*",
+    "supplier",
+    "customer",
+    "client",
+    "potpis*",
+    "signature",
+    "datum",
+    "date",
+    "name",
+    "title",
+    "ime",
+    "funkcija",
+    "pecat",
+    "doo",
+    "llc",
+    "ltd",
+    "inc",
+    "gmbh",
+    "plc",
+    "srbij*",
+    "serbia",
+    "zakupac",
+    "zakupodavac",
+    "seller",
+    "buyer",
+    "landlord",
+    "tenant",
+    "lessor",
+    "lessee",
 ];
 
 fn is_title(t: &Tok) -> bool {
@@ -260,10 +357,42 @@ fn is_title(t: &Tok) -> bool {
 
 /// Lines that start a party's detail (kept in a label-style party block).
 const DETAIL_START: &[&str] = &[
-    "pib", "mb", "mbr", "maticni", "adresa", "sediste", "ul", "ulica", "zastupnik", "zastupa",
-    "koga", "direktor", "tekuci", "ziro", "racun", "iban", "swift", "bic", "vat", "reg",
-    "registration", "address", "represented", "company", "account", "tel", "telefon", "e",
-    "email", "mail", "phone", "registered", "poreski", "sifra", "delatnost", "kontakt",
+    "pib",
+    "mb",
+    "mbr",
+    "maticni",
+    "adresa",
+    "sediste",
+    "ul",
+    "ulica",
+    "zastupnik",
+    "zastupa",
+    "koga",
+    "direktor",
+    "tekuci",
+    "ziro",
+    "racun",
+    "iban",
+    "swift",
+    "bic",
+    "vat",
+    "reg",
+    "registration",
+    "address",
+    "represented",
+    "company",
+    "account",
+    "tel",
+    "telefon",
+    "e",
+    "email",
+    "mail",
+    "phone",
+    "registered",
+    "poreski",
+    "sifra",
+    "delatnost",
+    "kontakt",
 ];
 
 /// A role mark: the side, the token range of the role word, where the party's segment ends
@@ -388,7 +517,12 @@ fn checked(inp: &Input<'_>, kind: IdKind, value: &str) -> Option<String> {
             // `160-0000000123456-78` and `160-123456-78` are one account.
             let parts: Vec<&str> = s.split('-').collect();
             if parts.len() == 3 {
-                return format!("{}-{}-{}", parts[0], parts[1].trim_start_matches('0'), parts[2]);
+                return format!(
+                    "{}-{}-{}",
+                    parts[0],
+                    parts[1].trim_start_matches('0'),
+                    parts[2]
+                );
             }
         }
         s.chars()
@@ -406,7 +540,13 @@ fn checked(inp: &Input<'_>, kind: IdKind, value: &str) -> Option<String> {
 }
 
 /// The identifier value after its label at token `i`: compact, and whether its shape fits.
-fn id_value(inp: &Input<'_>, seg: &Line, kind: IdKind, i: usize, b: usize) -> Option<(String, usize)> {
+fn id_value(
+    inp: &Input<'_>,
+    seg: &Line,
+    kind: IdKind,
+    i: usize,
+    b: usize,
+) -> Option<(String, usize)> {
     let mut k = i;
     let mut skipped = 0;
     while k < b && skipped < 4 && id_skip(&seg.toks[k]) {
@@ -434,13 +574,13 @@ fn id_value(inp: &Input<'_>, seg: &Line, kind: IdKind, i: usize, b: usize) -> Op
         }
         IdKind::Vat => {
             let b = compact.as_bytes();
-            (8..=14).contains(&b.len())
-                && b.iter().all(u8::is_ascii_alphanumeric)
-                && digits >= 6
+            (8..=14).contains(&b.len()) && b.iter().all(u8::is_ascii_alphanumeric) && digits >= 6
         }
         IdKind::Bic => {
             (compact.len() == 8 || compact.len() == 11)
-                && compact.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                && compact
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
                 && compact.chars().take(4).all(|c| c.is_ascii_uppercase())
         }
         IdKind::Reg => {
@@ -502,7 +642,12 @@ fn representative(
 ) -> Option<(Option<String>, Option<String>, usize)> {
     let doc = inp.doc;
     let mut k = end;
-    while k < b && matches!(seg.toks[k].key.as_str(), ":" | "its" | "njegov" | "njen" | "the") {
+    while k < b
+        && matches!(
+            seg.toks[k].key.as_str(),
+            ":" | "its" | "njegov" | "njen" | "the"
+        )
+    {
         k += 1;
     }
     let title_run = |k: usize| -> Option<usize> {
@@ -547,8 +692,16 @@ fn representative(
 }
 
 /// Facts of one party segment.
-fn segment(inp: &Input<'_>, s: &Segment<'_>, fallback: Option<&(String, Span)>, out: &mut Vec<Found>) {
+fn segment(
+    inp: &Input<'_>,
+    s: &Segment<'_>,
+    fallback: Option<&(String, Span)>,
+    out: &mut Vec<Found>,
+) {
     let seg = s.seg;
+    if s.a >= s.b {
+        return;
+    }
     let role = s.side.as_str();
     let company = company_in(inp, s);
     let party_name = company
@@ -688,7 +841,9 @@ fn label_fallback(inp: &Input<'_>, l: &Line, from: usize) -> Option<(String, Spa
     if last - from >= 12 || !upper_start(raw(inp.doc, l, &l.toks[from])) {
         return None;
     }
-    let words = (from..=last).filter(|&k| l.toks[k].kind == TokenKind::Word).count();
+    let words = (from..=last)
+        .filter(|&k| l.toks[k].kind == TokenKind::Word)
+        .count();
     if words == 0 || words > 8 {
         return None;
     }
@@ -713,7 +868,9 @@ fn sig_line(doc: &quail_core::Document, l: &Line) -> Option<(Side, usize)> {
     if !upper_start(raw(doc, l, first)) {
         return None;
     }
-    let h = find(&l.toks[..l.toks.len().min(7)], SIG).into_iter().next()?;
+    let h = find(&l.toks[..l.toks.len().min(7)], SIG)
+        .into_iter()
+        .next()?;
     if h.start != 0 {
         return None;
     }
@@ -730,7 +887,10 @@ fn sig_line(doc: &quail_core::Document, l: &Line) -> Option<(Side, usize)> {
 /// Lines in a signature block that carry no name (`Potpis`, `M.P.`, `______`, `Datum:`).
 fn sig_noise(l: &Line) -> bool {
     l.toks.iter().any(|t| {
-        matches!(t.key.as_str(), "potpis" | "signature" | "m.p" | "mp" | "datum" | "date" | "pecat")
+        matches!(
+            t.key.as_str(),
+            "potpis" | "signature" | "m.p" | "mp" | "datum" | "date" | "pecat"
+        )
     })
 }
 
@@ -742,7 +902,9 @@ fn signatories(inp: &Input<'_>, out: &mut Vec<Found>) {
     let doc = inp.doc;
     let lines = inp.lines;
     for (li, l) in lines.iter().enumerate() {
-        let Some((sd, r)) = sig_line(doc, l) else { continue };
+        let Some((sd, r)) = sig_line(doc, l) else {
+            continue;
+        };
         let label = text_of(doc, l, 0, r);
         let mut name: Option<String> = None;
         let mut title: Option<String> = None;
@@ -874,7 +1036,7 @@ pub(crate) fn scan(inp: &Input<'_>, out: &mut Vec<Found>) {
             if company.is_some() || has_detail(&full) {
                 segment(inp, &full, None, out);
             }
-            from = m.tail_end;
+            from = from.max(m.tail_end);
         }
     }
     // Label lines and the detail lines under them.
@@ -923,6 +1085,9 @@ pub(crate) fn scan(inp: &Input<'_>, out: &mut Vec<Found>) {
 
 /// Whether a segment holds an identifier, address or representative cue.
 fn has_detail(s: &Segment<'_>) -> bool {
+    if s.a >= s.b {
+        return false;
+    }
     let w = &s.seg.toks[s.a..s.b];
     !find(w, IDS).is_empty() || !find(w, REP).is_empty() || !find(w, ADDRESS).is_empty()
 }

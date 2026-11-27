@@ -19,15 +19,24 @@ pub const MAX_SENT_TOKENS: usize = 160;
 
 /// Tokens before a `.` that do not end a sentence.
 const ABBREV: &[&str] = &[
-    "br", "st", "cl", "tj", "npr", "sl", "ul", "bb", "no", "nr", "inc", "ltd", "co", "corp",
-    "art", "str", "tel", "mr", "dr", "sv", "itd", "odn", "vs", "approx", "d.o.o", "a.d", "o.d",
-    "k.d", "j.p", "s.a", "e.g", "i.e", "mat", "reg", "ziro", "tek", "posl", "ing", "dipl", "prof",
+    "br", "st", "cl", "tj", "npr", "sl", "ul", "bb", "no", "nr", "inc", "ltd", "co", "corp", "art",
+    "str", "tel", "mr", "dr", "sv", "itd", "odn", "vs", "approx", "d.o.o", "a.d", "o.d", "k.d",
+    "j.p", "s.a", "e.g", "i.e", "mat", "reg", "ziro", "tek", "posl", "ing", "dipl", "prof",
 ];
 
 /// First words of a line that start a new sentence.
 const HEADING_START: &[&str] = &[
-    "clan", "article", "section", "prilog", "prilozi", "annex", "schedule", "exhibit",
-    "appendix", "attachment", "aneks",
+    "clan",
+    "article",
+    "section",
+    "prilog",
+    "prilozi",
+    "annex",
+    "schedule",
+    "exhibit",
+    "appendix",
+    "attachment",
+    "aneks",
 ];
 
 /// Whether token `i` of `line` (a `.`, `!` or `?`) ends a sentence.
@@ -78,7 +87,11 @@ fn title_line(doc: &Document, l: &Line) -> bool {
             words += 1;
         }
     }
-    words >= 2 && !l.toks.last().is_some_and(|t| matches!(t.key.as_str(), "." | ","))
+    words >= 2
+        && !l
+            .toks
+            .last()
+            .is_some_and(|t| matches!(t.key.as_str(), "." | ","))
 }
 
 /// Whether a line starts with an enumeration (`2.`, `b)`).
@@ -122,7 +135,7 @@ fn breaks(doc: &Document, prev: &Line, next: &Line) -> bool {
     if HEADING_START.contains(&p0.key.as_str())
         && upper_start(raw(doc, prev, p0))
         && prev.toks.len() <= 10
-        && !prev.toks.last().is_some_and(|t| t.key == ",")
+        && prev.toks.last().is_none_or(|t| t.key != ",")
     {
         return true;
     }

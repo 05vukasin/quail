@@ -115,7 +115,7 @@ The weather was fine and the agenda was short.";
 /// A document of one page: one paragraph block per line.
 pub fn doc(text: &str, ocr: bool) -> Document {
     let mut page = Page::new(0, PageKind::Logical);
-    page.text = text.to_owned();
+    text.clone_into(&mut page.text);
     let mut off = 0u32;
     for line in text.split('\n') {
         let len = u32::try_from(line.len()).unwrap();
@@ -132,7 +132,11 @@ pub fn doc(text: &str, ocr: bool) -> Document {
         }
         off += len + 1;
     }
-    page.text_source = if ocr { TextSource::Ocr } else { TextSource::Native };
+    page.text_source = if ocr {
+        TextSource::Ocr
+    } else {
+        TextSource::Native
+    };
     Document { pages: vec![page] }
 }
 

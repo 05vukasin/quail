@@ -28,12 +28,24 @@ const PLACES: &[(&[&str], (&str, &str))] = &[
     (&["republike", "srbije"], ("RS", "Serbia")),
     (&["srbije"], ("RS", "Serbia")),
     (&["srpsko"], ("RS", "Serbia")),
-    (&["zakona", "o", "obligacionim", "odnosima"], ("RS", "Serbia")),
-    (&["zakon", "o", "obligacionim", "odnosima"], ("RS", "Serbia")),
-    (&["zakonom", "o", "obligacionim", "odnosima"], ("RS", "Serbia")),
+    (
+        &["zakona", "o", "obligacionim", "odnosima"],
+        ("RS", "Serbia"),
+    ),
+    (
+        &["zakon", "o", "obligacionim", "odnosima"],
+        ("RS", "Serbia"),
+    ),
+    (
+        &["zakonom", "o", "obligacionim", "odnosima"],
+        ("RS", "Serbia"),
+    ),
     (&["republike", "crne", "gore"], ("ME", "Montenegro")),
     (&["crne", "gore"], ("ME", "Montenegro")),
-    (&["bosne", "i", "hercegovine"], ("BA", "Bosnia and Herzegovina")),
+    (
+        &["bosne", "i", "hercegovine"],
+        ("BA", "Bosnia and Herzegovina"),
+    ),
     (&["republike", "hrvatske"], ("HR", "Croatia")),
     (&["hrvatske"], ("HR", "Croatia")),
     (&["republike", "slovenije"], ("SI", "Slovenia")),
@@ -67,7 +79,11 @@ fn governing(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         return;
     };
     let (code, name) = *p.what;
-    let base = if word_matches("merodavn*", &toks[cue.start].key) { 0.85 } else { 0.75 };
+    let base = if word_matches("merodavn*", &toks[cue.start].key) {
+        0.85
+    } else {
+        0.75
+    };
     out.push(found(
         keys::GOVERNING_LAW,
         rec(vec![
@@ -158,7 +174,17 @@ fn caps(inp: &Input<'_>, s: &Line, k: usize, n: usize) -> Option<usize> {
 
 fn court(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     let toks = &s.toks;
-    if !has(toks, &["nadlez*", "jurisdiction", "spor*", "disput*", "venue", "competent"]) {
+    if !has(
+        toks,
+        &[
+            "nadlez*",
+            "jurisdiction",
+            "spor*",
+            "disput*",
+            "venue",
+            "competent",
+        ],
+    ) {
         return;
     }
     let Some(k) = toks.iter().position(|t| {
@@ -202,7 +228,12 @@ fn court(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
             name.push_str(&text_of(doc, s, k + 1, e));
         } else {
             // One script for the normalised name: `Privredni sud u Nišu`.
-            name.push_str(&quail_text::translit::cyrillic_to_latin(&text_of(doc, s, k + 1, e)));
+            name.push_str(&quail_text::translit::cyrillic_to_latin(&text_of(
+                doc,
+                s,
+                k + 1,
+                e,
+            )));
         }
         city = Some(
             CITIES
@@ -245,10 +276,7 @@ const RULES: &[(&[&str], &str)] = &[
 
 fn arbitration(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     let toks = &s.toks;
-    let Some(k) = toks
-        .iter()
-        .position(|t| t.key.starts_with("arbitra"))
-    else {
+    let Some(k) = toks.iter().position(|t| t.key.starts_with("arbitra")) else {
         return;
     };
     // `neće se rešavati arbitražom`, `not be referred to arbitration`.
@@ -277,9 +305,8 @@ fn arbitration(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         .iter()
         .find_map(|w| toks.iter().position(|t| t.key == *w))
         .and_then(|i| {
-            let j = (i + 1..(i + 6).min(toks.len())).find(|&j| {
-                upper_start(raw(doc, s, &toks[j])) && toks[j].kind == TokenKind::Word
-            })?;
+            let j = (i + 1..(i + 6).min(toks.len()))
+                .find(|&j| upper_start(raw(doc, s, &toks[j])) && toks[j].kind == TokenKind::Word)?;
             Some(text_of(doc, s, j, caps(inp, s, j, 3)?))
         });
     out.push(found(
@@ -339,9 +366,16 @@ fn language(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         let Some(c) = lang_of(&tk.key) else { continue };
         // Next to `jezik` / `language` / `verzija` / `version` / `tekst` (or `i` and another).
         let near = toks[i + 1..(i + 4).min(toks.len())].iter().any(|t| {
-            ["jezik*", "language*", "verzij*", "version*", "tekst*", "text"]
-                .iter()
-                .any(|w| word_matches(w, &t.key))
+            [
+                "jezik*",
+                "language*",
+                "verzij*",
+                "version*",
+                "tekst*",
+                "text",
+            ]
+            .iter()
+            .any(|w| word_matches(w, &t.key))
         });
         if !near {
             continue;
@@ -353,21 +387,42 @@ fn language(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         last = i;
         if let Some(p) = prevail_at
             && i.abs_diff(p) <= 8
-            && toks[i + 1..(i + 3).min(toks.len())]
-                .iter()
-                .any(|t| word_matches("verzij*", &t.key) || word_matches("version*", &t.key) || word_matches("tekst*", &t.key) || t.key == "text")
+            && toks[i + 1..(i + 3).min(toks.len())].iter().any(|t| {
+                word_matches("verzij*", &t.key)
+                    || word_matches("version*", &t.key)
+                    || word_matches("tekst*", &t.key)
+                    || t.key == "text"
+            })
         {
             prevails.get_or_insert(c);
         }
     }
     let Some(first) = first else { return };
-    if prevails.is_none() && langs.len() == 1 && !has(toks, &["sacinjen*", "zakljucen*", "napisan*", "drawn", "executed", "written", "made", "prepared"]) {
+    if prevails.is_none()
+        && langs.len() == 1
+        && !has(
+            toks,
+            &[
+                "sacinjen*",
+                "zakljucen*",
+                "napisan*",
+                "drawn",
+                "executed",
+                "written",
+                "made",
+                "prepared",
+            ],
+        )
+    {
         return;
     }
     out.push(found(
         keys::LANGUAGE,
         rec(vec![
-            ("languages", Some(Value::List(langs.iter().map(|c| Value::text(*c)).collect()))),
+            (
+                "languages",
+                Some(Value::List(langs.iter().map(|c| Value::text(*c)).collect())),
+            ),
             ("prevails", prevails.and_then(t)),
             ("text", t(clip(inp.doc, s, MAX_TEXT))),
         ]),

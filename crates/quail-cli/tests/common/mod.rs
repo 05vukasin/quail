@@ -284,3 +284,51 @@ pub const PAY_SR_NO_PRICE: &[&str] = &[
     "Ugovor stupa na snagu danom potpisivanja i vazi 2 godine.",
     "Rok za odgovor je 30 dana od 15.01.2026.",
 ];
+
+/// A Serbian contract with every key fact (Latin without diacritics, as Helvetica in
+/// `WinAnsi` cannot draw `č ć đ`); clauses wrap over lines as on a printed page.
+pub const KEY_SR_CONTRACT: &[&str] = &[
+    "UGOVOR O ODRZAVANJU SOFTVERA",
+    "Broj ugovora: 114/2026",
+    "Zakljucen dana 15.01.2026. godine izmedju:",
+    "1. Alfa Soft d.o.o., sa sedistem u Beogradu, ul. Knez Mihailova 10,",
+    "PIB 100000024, MB 07000012, koga zastupa direktor Petar Petrovic",
+    "(u daljem tekstu: Izvodjac)",
+    "i",
+    "2. Beta Trgovina d.o.o., sa sedistem u Novom Sadu, PIB 100000032,",
+    "MB 07000020 (u daljem tekstu: Narucilac)",
+    "Clan 1. Predmet ugovora",
+    "Predmet ovog ugovora je odrzavanje poslovnog softvera Narucioca.",
+    "Ukupna vrednost ugovora iznosi 1.200.000,00 RSD bez PDV-a.",
+    "Narucilac placa fakturu u roku od 15 dana od dana prijema fakture.",
+    "Ugovor se zakljucuje na period od 12 meseci.",
+    "Ugovor se automatski produzava za isti period.",
+    "Svaka strana moze otkazati ugovor uz otkazni rok od 30 dana.",
+    "Ugovorna kazna iznosi 0,5% za svaki dan kasnjenja.",
+    "Izvodjac predaje bankarsku garanciju za dobro izvrsenje posla.",
+    "Garantni rok je 12 meseci.",
+    "Na ovaj ugovor primenjuje se pravo Republike Srbije.",
+    "Za sve sporove nadlezan je Privredni sud u Beogradu.",
+    "Prilog 1: Tehnicka specifikacija",
+    "Za Izvodjaca",
+    "Petar Petrovic, direktor",
+];
+
+/// An English agreement with the key facts.
+pub const KEY_EN_CONTRACT: &[&str] = &[
+    "SERVICES AGREEMENT",
+    "Agreement No. SA-2026-07",
+    "This Agreement is made on March 1, 2026 between Alpha Widgets LLC",
+    "(the \"Supplier\") and Beta Components GmbH, VAT No. DE136695976",
+    "(the \"Customer\").",
+    "This Agreement shall remain in force for a period of two (2) years.",
+    "Either party may terminate this Agreement for convenience upon",
+    "ninety (90) days' prior written notice.",
+    "The Customer shall pay each invoice within thirty (30) days of",
+    "receipt of the invoice. Total fee: EUR 24,000.00 excluding VAT.",
+    "Liquidated damages of 1% per week of delay apply.",
+    "The Supplier shall keep all information confidential for five (5) years.",
+    "This Agreement is governed by the laws of England and Wales.",
+    "The courts of London shall have exclusive jurisdiction.",
+    "Annex A - Pricing",
+];

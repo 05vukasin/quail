@@ -12,7 +12,12 @@ use crate::text::{clip, find, has, has_phrase, raw, span_of, text_of, upper_star
 
 /// Annex words in the nominative, as a line or a list item starts with them.
 const ANNEX: &[&str] = &[
-    "prilog", "annex", "schedule", "exhibit", "appendix", "attachment",
+    "prilog",
+    "annex",
+    "schedule",
+    "exhibit",
+    "appendix",
+    "attachment",
 ];
 
 /// Headings over a list of annexes (`Prilozi:`, `Annexes:`).
@@ -29,7 +34,10 @@ const ANNEX_LIST: &[&[&str]] = &[
 /// An annex id after the annex word: a number, a capital letter or a roman numeral.
 fn annex_id(doc: &quail_core::Document, l: &Line, k: usize) -> Option<usize> {
     let mut k = k;
-    if l.toks.get(k).is_some_and(|t| matches!(t.key.as_str(), "br" | "no" | "broj" | "number")) {
+    if l.toks
+        .get(k)
+        .is_some_and(|t| matches!(t.key.as_str(), "br" | "no" | "broj" | "number"))
+    {
         k += 1;
         while l.toks.get(k).is_some_and(|t| t.key == ".") {
             k += 1;
@@ -110,8 +118,13 @@ fn annexes(inp: &Input<'_>, out: &mut Vec<Found>) {
                 list_label = None;
             }
         }
-        if ANNEX_LIST.iter().any(|p| match_at(&l.toks, 0, p).is_some_and(|e| l.toks.get(e).is_some_and(|t| t.key == ":") || e == l.toks.len())) {
-            let word = if first.key.starts_with("prilo") { "Prilog" } else {
+        if ANNEX_LIST.iter().any(|p| {
+            match_at(&l.toks, 0, p)
+                .is_some_and(|e| l.toks.get(e).is_some_and(|t| t.key == ":") || e == l.toks.len())
+        }) {
+            let word = if first.key.starts_with("prilo") {
+                "Prilog"
+            } else {
                 match first.key.as_str() {
                     "schedules" => "Schedule",
                     "exhibits" => "Exhibit",
@@ -120,14 +133,20 @@ fn annexes(inp: &Input<'_>, out: &mut Vec<Found>) {
                     _ => "Annex",
                 }
             };
-            list_label = Some((word.to_owned(), u32::try_from(l.pos).unwrap_or(u32::MAX), li));
+            list_label = Some((
+                word.to_owned(),
+                u32::try_from(l.pos).unwrap_or(u32::MAX),
+                li,
+            ));
             continue;
         }
         // `Prilog 1: Tehnička specifikacija`, `Annex A – Pricing`, `PRILOG 2`.
         if !ANNEX.contains(&first.key.as_str()) || !upper_start(raw(doc, l, first)) {
             continue;
         }
-        let Some(id) = annex_id(doc, l, 1) else { continue };
+        let Some(id) = annex_id(doc, l, 1) else {
+            continue;
+        };
         let word = raw(doc, l, first);
         let mut w: String = word.chars().take(1).collect();
         w.extend(word.chars().skip(1).flat_map(char::to_lowercase));
@@ -136,7 +155,10 @@ fn annexes(inp: &Input<'_>, out: &mut Vec<Found>) {
         let last = title.as_ref().map_or(id, |x| x.1);
         out.push(Found {
             key: keys::ANNEX,
-            value: rec(vec![("label", t(label)), ("title", title.map(|x| Value::text(x.0)))]),
+            value: rec(vec![
+                ("label", t(label)),
+                ("title", title.map(|x| Value::text(x.0))),
+            ]),
             conf: conf(l, 0.75),
             page: l.page,
             span: span_of(l, 0, last),
@@ -182,10 +204,15 @@ fn amendments(inp: &Input<'_>, out: &mut Vec<Found>) {
     let doc = inp.doc;
     let amendment_doc = inp.facts.iter().any(|f| {
         f.key.as_str() == "ref.instrument_kind"
-            && matches!(f.value.as_text(), Some("amendment" | "amended_restated" | "change_order"))
+            && matches!(
+                f.value.as_text(),
+                Some("amendment" | "amended_restated" | "change_order")
+            )
     }) || inp.lines.iter().take(6).any(|l| {
-        matches!(l.toks[0].key.as_str(), "aneks" | "amendment" | "addendum" | "izmena")
-            && upper_start(raw(doc, l, &l.toks[0]))
+        matches!(
+            l.toks[0].key.as_str(),
+            "aneks" | "amendment" | "addendum" | "izmena"
+        ) && upper_start(raw(doc, l, &l.toks[0]))
     });
     for s in inp.sents {
         let toks = &s.toks;
@@ -209,12 +236,17 @@ fn amendments(inp: &Input<'_>, out: &mut Vec<Found>) {
             let n = toks.get(j)?;
             matches!(n.kind, TokenKind::Number | TokenKind::Alnum).then_some((i, j))
         });
-        let (a, b) = art.map_or((h.start, h.end - 1), |(i, j)| (i.min(h.start), j.max(h.end - 1)));
+        let (a, b) = art.map_or((h.start, h.end - 1), |(i, j)| {
+            (i.min(h.start), j.max(h.end - 1))
+        });
         out.push(Found {
             key: keys::AMENDMENT,
             value: rec(vec![
                 ("action", t(*h.what)),
-                ("article", art.map(|(i, j)| Value::text(text_of(doc, s, i, j)))),
+                (
+                    "article",
+                    art.map(|(i, j)| Value::text(text_of(doc, s, i, j))),
+                ),
                 ("text", t(clip(doc, s, MAX_TEXT))),
             ]),
             conf: conf(s, if art.is_some() { 0.8 } else { 0.6 }),

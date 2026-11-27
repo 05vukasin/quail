@@ -80,7 +80,9 @@ fn penalty(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     };
     let doc = inp.doc;
     let cap = find(toks, CAP).into_iter().find(|c| c.start > h.start);
-    let cap_pct = cap.as_ref().and_then(|c| first_percent(doc, s, c.end, c.end + 4));
+    let cap_pct = cap
+        .as_ref()
+        .and_then(|c| first_percent(doc, s, c.end, c.end + 4));
     let rate_end = cap.as_ref().map_or(toks.len(), |c| c.start);
     let pct = first_percent(doc, s, 0, rate_end);
     let amount = first_money(doc, s, h.end, rate_end);
@@ -91,20 +93,33 @@ fn penalty(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     } else {
         None
     };
-    let obliges = crate::text::has(toks, &["plat*", "duzan", "duzna", "obavez*", "pay*", "shall", "zarac*"]);
+    let obliges = crate::text::has(
+        toks,
+        &[
+            "plat*", "duzan", "duzna", "obavez*", "pay*", "shall", "zarac*",
+        ],
+    );
     if pct.is_none() && amount.is_none() && !obliges {
         return;
     }
     let mut end = h.end - 1;
     let mut start = h.start;
-    for (a, b) in [pct.map(|p| (p.1, p.2)), cap_pct.map(|p| (p.1, p.2)), amount.map(|a| (a.first, a.last))]
-        .into_iter()
-        .flatten()
+    for (a, b) in [
+        pct.map(|p| (p.1, p.2)),
+        cap_pct.map(|p| (p.1, p.2)),
+        amount.map(|a| (a.first, a.last)),
+    ]
+    .into_iter()
+    .flatten()
     {
         start = start.min(a);
         end = end.max(b);
     }
-    let base = if pct.is_some() || amount.is_some() { 0.8 } else { 0.55 };
+    let base = if pct.is_some() || amount.is_some() {
+        0.8
+    } else {
+        0.55
+    };
     out.push(found(
         keys::PENALTY,
         rec(vec![
@@ -170,7 +185,10 @@ fn guarantee(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         let pct = first_percent(doc, s, h.end, toks.len());
         let amount = first_money(doc, s, h.end, toks.len());
         let mut end = h.end - 1;
-        for b in [pct.map(|p| p.2), amount.map(|a| a.last)].into_iter().flatten() {
+        for b in [pct.map(|p| p.2), amount.map(|a| a.last)]
+            .into_iter()
+            .flatten()
+        {
             end = end.max(b);
         }
         out.push(found(
@@ -285,8 +303,19 @@ fn confidentiality(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     if !has(
         toks,
         &[
-            "obavez*", "duzn*", "cuva*", "shall", "must", "agree*", "undertak*", "keep", "sme",
-            "smeju", "otkri*", "disclose*", "cuvati",
+            "obavez*",
+            "duzn*",
+            "cuva*",
+            "shall",
+            "must",
+            "agree*",
+            "undertak*",
+            "keep",
+            "sme",
+            "smeju",
+            "otkri*",
+            "disclose*",
+            "cuvati",
         ],
     ) {
         return;
@@ -363,15 +392,22 @@ fn sla(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         ));
     }
     for h in find(toks, RESPONSE) {
-        let Some(d) = first_duration(toks, h.end, h.end + 10, &[Unit::Minute, Unit::Hour, Unit::Day])
-        else {
+        let Some(d) = first_duration(
+            toks,
+            h.end,
+            h.end + 10,
+            &[Unit::Minute, Unit::Hour, Unit::Day],
+        ) else {
             continue;
         };
         // A single verb cue needs `within` / `u roku` before the duration.
         if h.end - h.start == 1
-            && !toks[h.end..d.first]
-                .iter()
-                .any(|t| matches!(t.key.as_str(), "within" | "roku" | "in" | "je" | "is" | "od"))
+            && !toks[h.end..d.first].iter().any(|t| {
+                matches!(
+                    t.key.as_str(),
+                    "within" | "roku" | "in" | "je" | "is" | "od"
+                )
+            })
         {
             continue;
         }
@@ -430,7 +466,22 @@ fn date_in(inp: &Input<'_>, s: &Line, from: usize) -> Option<(Date, usize)> {
 fn deadline(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     let toks = &s.toks;
     if toks.len() < 4
-        || has(toks, &["plac*", "plat*", "uplat*", "pay*", "faktur*", "invoice*", "otkaz*", "notice", "garantn*", "warrant*", "reklamac*"])
+        || has(
+            toks,
+            &[
+                "plac*",
+                "plat*",
+                "uplat*",
+                "pay*",
+                "faktur*",
+                "invoice*",
+                "otkaz*",
+                "notice",
+                "garantn*",
+                "warrant*",
+                "reklamac*",
+            ],
+        )
     {
         return;
     }
@@ -438,7 +489,12 @@ fn deadline(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         return;
     };
     let doc = inp.doc;
-    let d = first_duration(toks, h.end, (h.end + 12).min(toks.len()), &[Unit::Day, Unit::Week, Unit::Month]);
+    let d = first_duration(
+        toks,
+        h.end,
+        (h.end + 12).min(toks.len()),
+        &[Unit::Day, Unit::Week, Unit::Month],
+    );
     let date = date_in(inp, s, h.end);
     if d.is_none() && date.is_none() {
         return;
@@ -481,8 +537,12 @@ fn warranty(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     let Some(h) = find(toks, WARRANTY).into_iter().next() else {
         return;
     };
-    let Some(d) = first_duration(toks, h.end, (h.end + 10).min(toks.len()), &[Unit::Month, Unit::Year, Unit::Day])
-    else {
+    let Some(d) = first_duration(
+        toks,
+        h.end,
+        (h.end + 10).min(toks.len()),
+        &[Unit::Month, Unit::Year, Unit::Day],
+    ) else {
         return;
     };
     out.push(found(

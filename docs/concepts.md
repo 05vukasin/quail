@@ -217,7 +217,7 @@ it runs in; steps above the chosen profile are left out of the plan.
 
 | profile | what runs |
 |---|---|
-| `fast` | rules and statistics: extraction, hashes, text statistics, document language, identifiers, dates and amounts, references, parties, clauses, price lines, payment facts, most sketches, the card and summary |
+| `fast` | rules and statistics: extraction, hashes, text statistics, document language, identifiers, dates and amounts, references, parties, clauses, price lines, payment facts, key contract facts and the key-facts card, most sketches, the card and summary |
 | `standard` (default) | `fast`, plus per-page languages, CPV categories for price lines, the MinHash of the compatibility mode with an existing deployment (`sketch.minhash_compat`) and the page pHash of scanned pages |
 | `deep` | `standard`, plus OCR (`ocr.pages`) of the pages that need it, in a `quail` built with `--features ocr`. Programs that build their own engine can also add the LLM summary (`summary.llm`). In the default build, `deep` runs the same steps as `standard` |
 

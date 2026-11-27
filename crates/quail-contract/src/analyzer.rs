@@ -166,15 +166,16 @@ fn same(a: &Found, b: &Found) -> bool {
         }
         "contract.annex" => {
             let k = |v: &Value| {
-                v.field("label")
-                    .and_then(Value::as_text)
-                    .map(|s| quail_text::fold::fold(s, &quail_text::fold::FoldOptions::KEY).into_owned())
+                v.field("label").and_then(Value::as_text).map(|s| {
+                    quail_text::fold::fold(s, &quail_text::fold::FoldOptions::KEY).into_owned()
+                })
             };
             k(&a.value) == k(&b.value)
         }
-        "contract.party" | "contract.representative" | "contract.signatory" | "contract.address" => {
-            f(&a.value, "role") == f(&b.value, "role")
-        }
+        "contract.party"
+        | "contract.representative"
+        | "contract.signatory"
+        | "contract.address" => f(&a.value, "role") == f(&b.value, "role"),
         "contract.party_id" => {
             f(&a.value, "kind") == f(&b.value, "kind")
                 && f(&a.value, "value") == f(&b.value, "value")

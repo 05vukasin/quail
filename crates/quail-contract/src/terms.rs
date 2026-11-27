@@ -18,14 +18,38 @@ pub(crate) const MAX_TEXT: usize = 300;
 
 /// Words that put a sentence about the contract itself.
 const CONTRACT_WORDS: &[&str] = &[
-    "ugovor*", "agreement", "contract", "term", "sporazum*", "zakup*", "lease",
+    "ugovor*",
+    "agreement",
+    "contract",
+    "term",
+    "sporazum*",
+    "zakup*",
+    "lease",
 ];
 
 /// Words of sentences whose durations are not the contract's term.
 const NOT_TERM: &[&str] = &[
-    "garanc*", "garantn*", "warrant*", "poverljiv*", "confidential*", "otkaz*", "notice",
-    "surviv*", "zastarel*", "plac*", "uplat*", "pay*", "faktur*", "invoice*", "isporuk*",
-    "deliver*", "kazn*", "penal*", "reklamac*", "odziv*", "response",
+    "garanc*",
+    "garantn*",
+    "warrant*",
+    "poverljiv*",
+    "confidential*",
+    "otkaz*",
+    "notice",
+    "surviv*",
+    "zastarel*",
+    "plac*",
+    "uplat*",
+    "pay*",
+    "faktur*",
+    "invoice*",
+    "isporuk*",
+    "deliver*",
+    "kazn*",
+    "penal*",
+    "reklamac*",
+    "odziv*",
+    "response",
 ];
 
 const TERM_CUES: &[(&[&str], ())] = &[
@@ -50,7 +74,10 @@ const TERM_CUES: &[(&[&str], ())] = &[
     (&["initial", "term", "of"], ()),
     (&["term", "of"], ()),
     (&["remain", "in", "force", "for"], ()),
-    (&["remain", "in", "full", "force", "and", "effect", "for"], ()),
+    (
+        &["remain", "in", "full", "force", "and", "effect", "for"],
+        (),
+    ),
     (&["remain", "in", "effect", "for"], ()),
 ];
 
@@ -137,7 +164,13 @@ fn term(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         };
         let mut f = dur_fields(&d);
         f.push(("text", t(text.as_str())));
-        out.push(found(keys::TERM, rec(f), s, base, span_of(s, h.start, d.last)));
+        out.push(found(
+            keys::TERM,
+            rec(f),
+            s,
+            base,
+            span_of(s, h.start, d.last),
+        ));
         return;
     }
 }
@@ -181,7 +214,10 @@ fn renewal(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         if let Some(e) = RENEW_NO.iter().find_map(|p| match_at(toks, i, p)) {
             out.push(found(
                 keys::RENEWAL,
-                rec(vec![("auto", Some(Value::Bool(false))), ("text", t(text.as_str()))]),
+                rec(vec![
+                    ("auto", Some(Value::Bool(false))),
+                    ("text", t(text.as_str())),
+                ]),
                 s,
                 0.75,
                 span_of(s, i, e - 1),
@@ -249,7 +285,13 @@ fn notice(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         };
         let mut f = dur_fields(&d);
         f.push(("text", t(text.as_str())));
-        out.push(found(keys::NOTICE, rec(f), s, 0.8, span_of(s, h.start, d.last)));
+        out.push(found(
+            keys::NOTICE,
+            rec(f),
+            s,
+            0.8,
+            span_of(s, h.start, d.last),
+        ));
         return;
     }
     // English `thirty (30) days' prior written notice`.
@@ -273,7 +315,13 @@ fn notice(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
 }
 
 const END_WORDS: &[&str] = &[
-    "raskid*", "raskin*", "otkaz*", "terminat*", "prestanak", "prestaje", "prestati",
+    "raskid*",
+    "raskin*",
+    "otkaz*",
+    "terminat*",
+    "prestanak",
+    "prestaje",
+    "prestati",
 ];
 
 const TERMINATION: &[(&[&str], &str)] = &[
@@ -367,7 +415,10 @@ const PAY_FROM: &[(&[&str], &str)] = &[
     (&["prijema", "ispravnog", "racuna"], "invoice_receipt"),
     (&["receipt", "of", "invoice"], "invoice_receipt"),
     (&["receipt", "of", "the", "invoice"], "invoice_receipt"),
-    (&["receipt", "of", "a", "valid", "invoice"], "invoice_receipt"),
+    (
+        &["receipt", "of", "a", "valid", "invoice"],
+        "invoice_receipt",
+    ),
     (&["receipt", "of", "an", "invoice"], "invoice_receipt"),
     (&["receipt", "of", "each", "invoice"], "invoice_receipt"),
     (&["izdavanja", "fakture"], "invoice_date"),
@@ -387,7 +438,17 @@ const PAY_FROM: &[(&[&str], &str)] = &[
 fn payment_days(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     let toks = &s.toks;
     if !has(toks, PAY_WORDS)
-        || has(toks, &["otkaz*", "notice", "reklamac*", "prigovor*", "complaint*", "dispute*"])
+        || has(
+            toks,
+            &[
+                "otkaz*",
+                "notice",
+                "reklamac*",
+                "prigovor*",
+                "complaint*",
+                "dispute*",
+            ],
+        )
     {
         return;
     }
@@ -510,12 +571,19 @@ fn advance(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     if let Some(a) = &amount {
         end = end.max(a.last);
     }
-    let base = if pct.is_some() || amount.is_some() { 0.75 } else { 0.55 };
+    let base = if pct.is_some() || amount.is_some() {
+        0.75
+    } else {
+        0.55
+    };
     out.push(found(
         keys::ADVANCE,
         rec(vec![
             ("percent", pct.and_then(|p| float(p.0))),
-            ("amount", amount.map(|a| Value::Money(a.value.money(a.currency)))),
+            (
+                "amount",
+                amount.map(|a| Value::Money(a.value.money(a.currency))),
+            ),
             ("text", t(clip(inp.doc, s, MAX_TEXT))),
         ]),
         s,
@@ -551,7 +619,10 @@ const INDEX: &[(&[&str], &str)] = &[
 
 fn indexation(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     let toks = &s.toks;
-    if !has(toks, &["cen*", "price*", "fee*", "naknad*", "zakupnin*", "rent"]) {
+    if !has(
+        toks,
+        &["cen*", "price*", "fee*", "naknad*", "zakupnin*", "rent"],
+    ) {
         return;
     }
     let hits = find(toks, INDEX);
@@ -611,7 +682,10 @@ fn late_interest(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
 fn from_clauses(inp: &Input<'_>, out: &mut Vec<Found>) {
     let has_key = |out: &Vec<Found>, k: &quail_core::FactKey| out.iter().any(|f| &f.key == k);
     let ocr_line = |page: u32| inp.lines.iter().find(|l| l.page == page);
-    let add = |out: &mut Vec<Found>, key: quail_core::FactKey, src: &str, value: &dyn Fn(&Value) -> Option<Value>| {
+    let add = |out: &mut Vec<Found>,
+               key: quail_core::FactKey,
+               src: &str,
+               value: &dyn Fn(&Value) -> Option<Value>| {
         if has_key(out, &key) {
             return;
         }
@@ -660,13 +734,22 @@ fn from_clauses(inp: &Input<'_>, out: &mut Vec<Found>) {
         .filter_map(|f| f.value.field("kind").cloned())
         .collect();
     for (f, page, span) in inp.located("clause.termination") {
-        let Some(kind) = f.value.field("kind") else { continue };
-        if kinds.contains(kind) || out.iter().any(|o| o.key == keys::TERMINATION && o.value.field("kind") == Some(kind)) {
+        let Some(kind) = f.value.field("kind") else {
+            continue;
+        };
+        if kinds.contains(kind)
+            || out
+                .iter()
+                .any(|o| o.key == keys::TERMINATION && o.value.field("kind") == Some(kind))
+        {
             continue;
         }
         out.push(Found {
             key: keys::TERMINATION,
-            value: rec(vec![("kind", Some(kind.clone())), ("text", f.value.field("raw").cloned())]),
+            value: rec(vec![
+                ("kind", Some(kind.clone())),
+                ("text", f.value.field("raw").cloned()),
+            ]),
             conf: (f.conf * 100.0).round() / 100.0,
             page,
             span,

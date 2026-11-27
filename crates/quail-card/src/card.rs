@@ -70,6 +70,12 @@ impl Analyzer for KeyFactsCard {
     }
 }
 
+/// A confidence stored as `Float` (in [0, 1]) as `f32`.
+#[allow(clippy::cast_possible_truncation)]
+fn to_f32(x: f64) -> f32 {
+    x.clamp(0.0, 1.0) as f32
+}
+
 fn round(c: f32) -> f32 {
     (c.clamp(0.0, 1.0) * 100.0).round() / 100.0
 }
@@ -178,7 +184,10 @@ impl Card<'_> {
         let name = if let Some(p) = top {
             sources.extend(at(p));
             conf = p.conf;
-            p.value.field("name").and_then(Value::as_text).map(str::to_owned)
+            p.value
+                .field("name")
+                .and_then(Value::as_text)
+                .map(str::to_owned)
         } else {
             // `party.company` mentions with this role, weighted by the role's confidence.
             let mut best: Option<(&Fact, f32)> = None;
@@ -190,7 +199,7 @@ impl Card<'_> {
                 };
                 for (r, c) in roles.iter().zip(rc) {
                     let c = match c {
-                        Value::Float(x) => *x as f32,
+                        Value::Float(x) => to_f32(*x),
                         _ => continue,
                     };
                     if r.as_text() == Some(role) && best.is_none_or(|b| c > b.1) {
@@ -201,7 +210,10 @@ impl Card<'_> {
             best.and_then(|(f, c)| {
                 sources.extend(at(f));
                 conf = c.clamp(0.0, 1.0);
-                f.value.field("surface").and_then(Value::as_text).map(str::to_owned)
+                f.value
+                    .field("surface")
+                    .and_then(Value::as_text)
+                    .map(str::to_owned)
             })
         };
         let Some(name) = name else { return };
@@ -240,7 +252,12 @@ impl Card<'_> {
         }
         self.out.push(Entry {
             key,
-            value: Value::Record(fields.into_iter().map(|(k, v)| (k.into_boxed_str(), v)).collect()),
+            value: Value::Record(
+                fields
+                    .into_iter()
+                    .map(|(k, v)| (k.into_boxed_str(), v))
+                    .collect(),
+            ),
             conf,
             sources,
         });
@@ -283,7 +300,9 @@ fn build(facts: &[Fact]) -> Vec<Entry> {
     c.one(keys::SUBJECT, "payment.subject", field("text"));
     c.one(keys::CATEGORY, "payment.category", field("code"));
     c.list(keys::ACCOUNTS, &["signal.iban", "signal.rs_account"], text);
-    c.one(keys::ADVANCE, "contract.advance", |v| pick(v, &["percent", "amount"]));
+    c.one(keys::ADVANCE, "contract.advance", |v| {
+        pick(v, &["percent", "amount"])
+    });
     c.one(keys::INDEXATION, "contract.indexation", field("basis"));
     c.one(keys::PENALTY, "contract.penalty", |v| {
         pick(v, &["percent", "per", "amount", "cap_percent"])
@@ -415,7 +434,11 @@ fn show(v: &Value, out: &mut String) {
 fn card_text(entries: &[Entry]) -> String {
     let mut out = String::new();
     for e in entries {
-        let name = e.key.as_str().strip_prefix("card.").unwrap_or(e.key.as_str());
+        let name = e
+            .key
+            .as_str()
+            .strip_prefix("card.")
+            .unwrap_or(e.key.as_str());
         let _ = write!(out, "{name}: ");
         show(&e.value, &mut out);
         out.push('\n');
@@ -431,7 +454,14 @@ mod tests {
     #[test]
     fn text_form_is_normalised() {
         let mut s = String::new();
-        show(&Value::Date(Date { y: 2026, m: 1, d: 5 }), &mut s);
+        show(
+            &Value::Date(Date {
+                y: 2026,
+                m: 1,
+                d: 5,
+            }),
+            &mut s,
+        );
         s.push('|');
         show(
             &Value::Money(Money {
@@ -442,7 +472,10 @@ mod tests {
             &mut s,
         );
         s.push('|');
-        show(&Value::record([("iso", Value::text("P12M")), ("months", Value::Int(12))]), &mut s);
+        show(
+            &Value::record([("iso", Value::text("P12M")), ("months", Value::Int(12))]),
+            &mut s,
+        );
         assert_eq!(s, "2026-01-05|1481481.47 RSD|iso=P12M; months=12");
     }
 

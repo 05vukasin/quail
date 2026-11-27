@@ -168,7 +168,10 @@ pub fn duration_at(toks: &[Tok], i: usize) -> Option<Dur> {
     if let Some(u) = toks.get(i).and_then(|t| Unit::of(&t.key))
         && matches!(u, Unit::Year | Unit::Month)
         && toks.get(i + 1).is_some_and(|t| t.key == "dana")
-        && matches!(toks[i].key.as_str(), "godinu" | "godina" | "mesec" | "mjesec")
+        && matches!(
+            toks[i].key.as_str(),
+            "godinu" | "godina" | "mesec" | "mjesec"
+        )
     {
         return Some(Dur {
             n: 1,
