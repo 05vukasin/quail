@@ -549,7 +549,7 @@ fn inspect_pretty_prints_facts_and_text() {
         s.contains("docx.title") && s.contains("\"Service Agreement\""),
         "{s}"
     );
-    assert!(s.contains("src docx.extract@1"), "{s}");
+    assert!(s.contains("src docx.extract@2"), "{s}");
     assert!(s.contains("--- page 1"), "{s}");
     assert!(
         s.contains("/h1] Service Agreement") || s.contains("Service Agreement"),
@@ -582,7 +582,7 @@ fn keys_and_version() {
         "engine.format",
         "hash.blake3",
         "docx.title",
-        "docx.extract@1",
+        "docx.extract@2",
         "hash.identity@1",
     ] {
         assert!(s.contains(k), "{k} missing");
@@ -609,9 +609,9 @@ fn keys_and_version() {
     // registration order.
     let mut expected = vec!["engine.sniff@3"];
     if cfg!(feature = "pdf") {
-        expected.push("pdf.extract@3");
+        expected.push("pdf.extract@4");
     }
-    expected.push("docx.extract@1");
+    expected.push("docx.extract@2");
     if cfg!(feature = "pptx") {
         expected.push("pptx.extract@1");
     }

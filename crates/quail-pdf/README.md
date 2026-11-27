@@ -12,7 +12,7 @@ inside the decoders. See [`vendor/README.md`](../../vendor/README.md).
 
 ## Extractor
 
-`PdfExtractor` has the id `pdf.extract@3` and handles `Format::Pdf`. It produces:
+`PdfExtractor` has the id `pdf.extract@4` and handles `Format::Pdf`. It produces:
 
 - `Document`: one `Page` (`PageKind::Physical`) per page up to `limits.max_pages`. Each page has:
   - `size` in points, after rotation.
@@ -48,6 +48,7 @@ inside the decoders. See [`vendor/README.md`](../../vendor/README.md).
 | `pdf.incremental_updates` | Int |
 | `pdf.linearized` | Bool |
 | `pdf.has_xmp` | Bool |
+| `pdf.xmp_document_id`, `pdf.xmp_original_document_id` | Text: XMP `xmpMM:DocumentID` / `xmpMM:OriginalDocumentID` of the catalog packet, as written, trimmed (`uuid:…`, `xmp.did:…` kept) |
 | `pdf.signature_fields` | Int |
 | `pdf.signed` | Bool |
 | `pdf.form_fields` | Int |

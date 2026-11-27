@@ -377,6 +377,20 @@ pub fn docx_seeds() -> Vec<Vec<u8>> {
             )
             .build(),
     );
+    // settings with rsids and the w15/w14 document ids (identity facts)
+    v.push(
+        Docx::new(&business_body())
+            .related(
+                "rId31",
+                "settings",
+                "settings.xml",
+                "settings",
+                &format!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="{W}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:trackRevisions/><w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/><w:rsid w:val="0012AB34"/></w:rsids><w14:docId w14:val="1A2B3C4D"/><w15:docId w15:val="{{4B1C2D3E-0000-4000-8000-00000000ABCD}}"/></w:settings>"#
+                ),
+            )
+            .build(),
+    );
     // many small paragraphs (amplification target for mutators)
     let mut body = String::new();
     for i in 0..300 {
@@ -558,6 +572,33 @@ pub fn pdf_seeds() -> Vec<Vec<u8>> {
         FONT,
         vec![],
     ));
+    // an XMP packet with identity ids (attribute and element form, a nested pantry id)
+    {
+        let xmp = br#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmpMM:DocumentID="xmp.did:0a1b2c3d-0000-4000-8000-000000000001" xmpMM:InstanceID="xmp.iid:1"><xmpMM:OriginalDocumentID>uuid:5D20892493BFDB11914A8590D31508C8</xmpMM:OriginalDocumentID><xmpMM:Pantry><rdf:Bag><rdf:li><rdf:Description xmpMM:DocumentID="uuid:nested"/></rdf:li></rdf:Bag></xmpMM:Pantry></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#;
+        let objs = vec![
+            (
+                1,
+                b"<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R >>".to_vec(),
+            ),
+            (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+            (
+                3,
+                [
+                    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << "
+                        .as_slice(),
+                    FONT,
+                    b" >> /Contents 4 0 R >>",
+                ]
+                .concat(),
+            ),
+            (
+                4,
+                stream(b"BT /F1 12 Tf 72 700 Td (xmp page) Tj ET", b"", true),
+            ),
+            (5, stream(xmp, b"/Type /Metadata /Subtype /XML", false)),
+        ];
+        v.push(pdfgen::build(&objs, 1, true));
+    }
     v.retain(|b| !b.is_empty());
     v
 }

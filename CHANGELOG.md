@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Document identity ids (#123)
+
+- `pdf.extract@4`: `pdf.xmp_document_id` and `pdf.xmp_original_document_id` (Text), the
+  `xmpMM:DocumentID` and `xmpMM:OriginalDocumentID` of the catalog's XMP packet (attribute or
+  element form, on a top-level `rdf:Description`; ids nested in `xmpMM:DerivedFrom`,
+  `xmpMM:Pantry` or `xmpMM:Ingredients` are other documents' and are not read). As written,
+  trimmed, scheme prefix kept. `xmpMM:InstanceID` is not read. The packet is decoded under the
+  file's decode budget and refused above 4 MiB; the XML walk caps nesting at 64, never expands
+  a DOCTYPE and checks the deadline. A malformed packet is a warning, and ids read before the
+  fault are kept.
+- `docx.extract@2`: `docx.w15_doc_id` (Text), the `w15:docId/@w15:val` of
+  `word/settings.xml`, as written, trimmed (braces kept). `w14:docId` is not read.
+
 ### PPTX and HTML (#120)
 
 - New extractors `pptx.extract@1` (`quail-pptx`) and `html.extract@1` (`quail-html`), in

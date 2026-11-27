@@ -478,7 +478,7 @@ mod tests {
     fn report_round_trips() {
         let r = Report {
             status: "partial".into(),
-            deadline: Some("docx.extract@1".into()),
+            deadline: Some("docx.extract@2".into()),
             panics: vec!["a.rs:1".into(), "b.rs:2".into()],
             peak_kb: 12,
             ms: 3,
