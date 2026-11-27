@@ -660,8 +660,8 @@ fn costly_forms_in_a_fanout_are_cut_by_the_form_data_cap() {
     // fan-out with one costly form deep inside. hayro re-parses a form on every `Do`, so a
     // 2.8 MB junk dictionary, or a stream that fails to inflate, drawn thousands of times took
     // the whole file deadline while the nesting cap was still far.
-    for (heavy, junk) in [(26, 2 * MIB), (13, 0)] {
-        let bytes = heavy_fanout_pdf(40, heavy, junk);
+    for (levels, heavy, junk) in [(30, 26, 2 * MIB), (27, 14, 0)] {
+        let bytes = heavy_fanout_pdf(levels, heavy, junk);
         let t = Instant::now();
         let r = run(bytes, &Limits::default());
         assert!(t.elapsed() < Duration::from_secs(5), "{heavy}: {:?}", t.elapsed());
