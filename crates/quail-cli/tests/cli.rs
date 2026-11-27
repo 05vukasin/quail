@@ -658,6 +658,12 @@ fn keys_and_version() {
     if cfg!(feature = "payment") {
         expected.push("payment.extract@1");
     }
+    if cfg!(feature = "contract") {
+        expected.push("contract.facts@1");
+    }
+    if cfg!(feature = "card") {
+        expected.push("card.facts@1");
+    }
     if cfg!(feature = "summary") {
         expected.extend([
             // Plan order: the card and the topic map run after the keywords they read.
@@ -677,6 +683,8 @@ fn keys_and_version() {
         .collect();
     assert_eq!(features.contains(&"clauses"), cfg!(feature = "clauses"));
     assert_eq!(features.contains(&"payment"), cfg!(feature = "payment"));
+    assert_eq!(features.contains(&"contract"), cfg!(feature = "contract"));
+    assert_eq!(features.contains(&"card"), cfg!(feature = "card"));
     // Deterministic.
     let again: Json = serde_json::from_slice(&run(&["version", "--json"]).stdout).unwrap();
     assert_eq!(again["fingerprint"], v["fingerprint"]);

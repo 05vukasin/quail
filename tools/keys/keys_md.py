@@ -30,6 +30,8 @@ TITLES = {
     "clause": "clause: contract clauses",
     "item": "item: price lines",
     "payment": "payment: what is paid for and how much",
+    "contract": "contract: key contract and invoice facts",
+    "card": "card: the normalised key-facts card",
     "sketch": "sketch: similarity sketches",
     "summary": "summary: file card and summaries",
     "ocr": "ocr: OCR",
@@ -80,7 +82,8 @@ def render(quail):
     w("## Highlights")
     w("")
     w("A step that highlights its facts emits, beside each fact, a `<namespace>.highlight` Record")
-    w("(`payment.highlight` today) with one shared shape, `quail_core::highlight::Highlight`:")
+    w("(`payment.highlight`, `contract.highlight`, `card.highlight`) with one shared shape,")
+    w("`quail_core::highlight::Highlight`:")
     w("")
     w("| field | meaning |")
     w("|---|---|")

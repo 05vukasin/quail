@@ -222,6 +222,20 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "What is paid for and how much (finalizer): subject, category, price with net/VAT/gross, currency, period, lines, highlights.",
     },
+    #[cfg(feature = "contract")]
+    StepDoc {
+        id: quail_contract::ContractFacts::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Key contract facts with highlights (finalizer): parties and identifiers, term, payment terms, obligations, law and disputes, annexes.",
+    },
+    #[cfg(feature = "card")]
+    StepDoc {
+        id: quail_card::KeyFactsCard::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "Normalised key-facts card (finalizer): one canonical value per field from the other steps' facts, with highlights.",
+    },
     #[cfg(feature = "summary")]
     StepDoc {
         id: quail_summary::SummaryCard::ID,
@@ -375,6 +389,11 @@ pub fn builder_with(profile: Profile, limits: Limits, ocr: Option<&OcrSettings>)
     // Finalizers: the engine runs them after every other step, in this order.
     #[cfg(feature = "payment")]
     let b = b.analyzer(Box::new(quail_payment::PaymentExtract));
+    #[cfg(feature = "contract")]
+    let b = b.analyzer(Box::new(quail_contract::ContractFacts));
+    // After the payment and contract facts it reads.
+    #[cfg(feature = "card")]
+    let b = b.analyzer(Box::new(quail_card::KeyFactsCard));
     #[cfg(feature = "summary")]
     let b = b
         .analyzer(Box::new(quail_summary::SummaryCard::new()))
@@ -416,6 +435,10 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     v.push(("quail-items", keydocs::ITEMS));
     #[cfg(feature = "payment")]
     v.push(("quail-payment", keydocs::PAYMENT));
+    #[cfg(feature = "contract")]
+    v.push(("quail-contract", keydocs::CONTRACT));
+    #[cfg(feature = "card")]
+    v.push(("quail-card", keydocs::CARD));
     #[cfg(feature = "summary")]
     v.push(("quail-summary", keydocs::SUMMARY));
     #[cfg(feature = "ocr")]
@@ -593,6 +616,10 @@ mod tests {
             ("quail-items", "quail-items/src/lib.rs"),
             #[cfg(feature = "payment")]
             ("quail-payment", "quail-payment/src/lib.rs"),
+            #[cfg(feature = "contract")]
+            ("quail-contract", "quail-contract/src/lib.rs"),
+            #[cfg(feature = "card")]
+            ("quail-card", "quail-card/src/lib.rs"),
             #[cfg(feature = "summary")]
             ("quail-summary", "quail-summary/src/lib.rs"),
             #[cfg(feature = "ocr")]

@@ -12,7 +12,7 @@ name = "quail"
 path = "src/main.rs"
 
 [features]
-default = ["docx", "pptx", "html", "pdf", "text", "signals", "refs", "parties", "clauses", "sketch", "items", "payment", "summary"]
+default = ["docx", "pptx", "html", "pdf", "text", "signals", "refs", "parties", "clauses", "sketch", "items", "payment", "contract", "card", "summary"]
 # Extractors and analyzers wired in by `registry.rs`, one feature per crate.
 docx = ["dep:quail-docx"]
 pptx = ["dep:quail-pptx"]
@@ -27,6 +27,10 @@ sketch = ["dep:quail-sketch"]
 items = ["dep:quail-items"]
 # Reads the `item.line` facts for `payment.lines`, so it pulls `items` in.
 payment = ["items", "dep:quail-payment"]
+# Key contract facts with highlights (`contract.*`); reads the facts of the other steps.
+contract = ["dep:quail-contract"]
+# The normalised key-facts card (`card.*`), built from the other steps' facts.
+card = ["dep:quail-card"]
 summary = ["dep:quail-summary"]
 # OCR of pages that need it (`ocr.pages@2`, under `--profile deep`) and `quail models`.
 # Pulls ONNX Runtime (prebuilt native binaries downloaded by the `ort` build script) and an
@@ -58,6 +62,8 @@ quail-parties = { path = "../quail-parties", optional = true }
 quail-clauses = { path = "../quail-clauses", optional = true }
 quail-items = { path = "../quail-items", optional = true }
 quail-payment = { path = "../quail-payment", optional = true }
+quail-contract = { path = "../quail-contract", optional = true }
+quail-card = { path = "../quail-card", optional = true }
 quail-summary = { path = "../quail-summary", optional = true }
 quail-sketch = { path = "../quail-sketch", optional = true }
 quail-ocr = { path = "../quail-ocr", optional = true }

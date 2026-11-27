@@ -942,6 +942,276 @@ pub const PAYMENT: &[KeyDoc] = &[
     },
 ];
 
+/// Keys of `quail_contract::keys`.
+#[cfg(feature = "contract")]
+pub const CONTRACT: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_contract::keys::PARTY,
+        doc: "A contracting party and its role (Record: `role` = `supplier` or `customer`, `label` = the role word as written, `name`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::PARTY_ID,
+        doc: "An identifier of a party (Record: `role`, `party`?, `kind` = `pib`, `mb`, `vat`, `reg`, `iban`, `account` or `bic`, `value` compact, `checked` = confirmed by the check-digit scan of `quail-signals`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::ADDRESS,
+        doc: "The address of a party (Record: `role`, `party`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::REPRESENTATIVE,
+        doc: "Who represents a party (Record: `role`, `party`?, `name`?, `title`?).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::SIGNATORY,
+        doc: "A signature block (Record: `role`, `label`, `name`?, `title`?).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::TERM,
+        doc: "The duration of the contract (Record: `iso`?, `months`?, `days`?, `indefinite`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::RENEWAL,
+        doc: "Whether the contract renews by itself (Record: `auto` Bool, `iso`?, `same_period`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::NOTICE,
+        doc: "The notice period (Record: `iso`, `days`?, `months`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::TERMINATION,
+        doc: "A termination right (Record: `kind` = `breach`, `convenience`, `insolvency`, `mutual`, `force_majeure`, `notice` or `change_of_control`, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::PAYMENT_DAYS,
+        doc: "Days to pay (Record: `days` Int, `business`?, `from`? = `invoice_receipt`, `invoice_date`, `delivery` or `signing`, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::PAYMENT_METHOD,
+        doc: "How payment is made (Text: `bank_transfer`, `cash`, `card`, `compensation`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::ADVANCE,
+        doc: "An advance payment (Record: `percent`? Float, `amount`? Money, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::INDEXATION,
+        doc: "How the price may change (Record: `basis` = `cpi`, `inflation`, `exchange_rate`, `fixed` or `other`, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::LATE_INTEREST,
+        doc: "Interest on late payment (Record: `statutory` Bool, `percent`? Float, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::PENALTY,
+        doc: "A contractual penalty or liquidated damages (Record: `percent`? Float, `per`? = `day` or `week`, `amount`? Money, `cap_percent`? Float, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::GUARANTEE,
+        doc: "A guarantee or security (Record: `kind` = `bank_guarantee`, `bill_of_exchange`, `performance_bond`, `letter_of_credit`, `parent_guarantee` or `deposit`, `purpose`? = `performance`, `advance`, `warranty` or `bid`, `percent`?, `amount`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::LIABILITY_CAP,
+        doc: "A limit of liability (Record: `amount`? Money, `percent`? Float, `basis`? = `contract_value` or `fees_paid`, `months`? Int, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::CONFIDENTIALITY,
+        doc: "A confidentiality obligation (Record: `iso`? = how long it lasts, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::SLA,
+        doc: "A service level (Record: `metric` = `availability`, `response` or `resolution`, `percent`? Float, `iso`?, `hours`? Int, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::DEADLINE,
+        doc: "A delivery or completion deadline (Record: `iso`?, `days`? Int, `date`? Date, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::WARRANTY,
+        doc: "The warranty period (Record: `iso`, `months`?, `days`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::GOVERNING_LAW,
+        doc: "The governing law (Record: `code` ISO 3166, `jurisdiction`, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::COURT,
+        doc: "The court for disputes (Record: `court`, `city`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::ARBITRATION,
+        doc: "Arbitration of disputes (Record: `institution`?, `rules`?, `seat`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::LANGUAGE,
+        doc: "The contract's languages (Record: `languages` List of ISO 639-1 codes, `prevails`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::ANNEX,
+        doc: "An annex that is part of the document (Record: `label`, `title`?).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::AMENDMENT,
+        doc: "What an amendment changes (Record: `action` = `change`, `delete` or `add`, `article`?, `text`).",
+    },
+    KeyDoc {
+        key: quail_contract::keys::HIGHLIGHT,
+        doc: "Where a contract fact sits in the text, one per fact (Record: `key`, `page`, `block`, `start`, `end`, `quote`; see `quail_core::highlight`).",
+    },
+];
+
+/// Keys of `quail_card::keys`.
+#[cfg(feature = "card")]
+pub const CARD: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_card::keys::KIND,
+        doc: "The instrument kind (Text, from `ref.instrument_kind`: `contract`, `invoice`, ...).",
+    },
+    KeyDoc {
+        key: quail_card::keys::NUMBER,
+        doc: "The document's own number as written (Text, from `ref.doc_number`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::SUPPLIER,
+        doc: "The supplier (Record: `name`, `pib`?, `mb`?, `vat`?, `reg`?, `account`?, `address`?, `representative`?).",
+    },
+    KeyDoc {
+        key: quail_card::keys::CUSTOMER,
+        doc: "The customer (Record: same fields as `card.supplier`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::SIGNED,
+        doc: "Signing date (Date).",
+    },
+    KeyDoc {
+        key: quail_card::keys::START,
+        doc: "Start or effective date (Date).",
+    },
+    KeyDoc {
+        key: quail_card::keys::END,
+        doc: "End or expiry date (Date).",
+    },
+    KeyDoc {
+        key: quail_card::keys::ISSUED,
+        doc: "Invoice issue date (Date).",
+    },
+    KeyDoc {
+        key: quail_card::keys::DUE,
+        doc: "Payment due date (Date).",
+    },
+    KeyDoc {
+        key: quail_card::keys::TERM,
+        doc: "Duration of the contract (Record: `iso`?, `months`?, `days`?, `indefinite`?).",
+    },
+    KeyDoc {
+        key: quail_card::keys::AUTO_RENEWAL,
+        doc: "Whether the contract renews by itself (Bool).",
+    },
+    KeyDoc {
+        key: quail_card::keys::NOTICE,
+        doc: "Notice period (Record: `iso`, `months`?, `days`?).",
+    },
+    KeyDoc {
+        key: quail_card::keys::PAYMENT_DAYS,
+        doc: "Days to pay (Int).",
+    },
+    KeyDoc {
+        key: quail_card::keys::PAYMENT_METHOD,
+        doc: "Payment method (Text: `bank_transfer`, `cash`, `card`, `compensation`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::AMOUNT,
+        doc: "The price (Money, from `payment.amount`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::AMOUNT_BASIS,
+        doc: "What the price is: `gross`, `net` or `unstated` (Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::CURRENCY,
+        doc: "ISO 4217 code of the price (Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::PERIOD,
+        doc: "How often the price is paid (Text: `one_off`, `monthly`, `quarterly`, `yearly`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::SUBJECT,
+        doc: "What is paid for (Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::CATEGORY,
+        doc: "Category code of what is paid for (Text, see `payment.category`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::ACCOUNTS,
+        doc: "Bank accounts and IBANs the document names (List of Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::ADVANCE,
+        doc: "Advance payment (Record: `percent`?, `amount`?).",
+    },
+    KeyDoc {
+        key: quail_card::keys::INDEXATION,
+        doc: "How the price may change (Text: `cpi`, `inflation`, `exchange_rate`, `fixed`, `other`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::PENALTY,
+        doc: "Contractual penalty (Record: `percent`?, `per`?, `amount`?, `cap_percent`?).",
+    },
+    KeyDoc {
+        key: quail_card::keys::GUARANTEES,
+        doc: "Guarantee kinds (List of Text, see `contract.guarantee`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::LIABILITY_CAP,
+        doc: "Limit of liability (Record: `amount`?, `percent`?, `basis`?, `months`?).",
+    },
+    KeyDoc {
+        key: quail_card::keys::CONFIDENTIALITY,
+        doc: "Whether the document binds to confidentiality (Bool).",
+    },
+    KeyDoc {
+        key: quail_card::keys::SLA,
+        doc: "Service levels (Record: `availability`? percent, `response_hours`?, `resolution_hours`?).",
+    },
+    KeyDoc {
+        key: quail_card::keys::WARRANTY,
+        doc: "Warranty period (Record: `iso`, `months`?, `days`?).",
+    },
+    KeyDoc {
+        key: quail_card::keys::GOVERNING_LAW,
+        doc: "Governing law, ISO 3166 code (Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::COURT,
+        doc: "The court for disputes (Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::ARBITRATION,
+        doc: "Arbitration: the institution, else the rules, else `arbitration` (Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::LANGUAGES,
+        doc: "The document's languages, ISO 639-1 (List of Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::ANNEXES,
+        doc: "Annex labels (List of Text).",
+    },
+    KeyDoc {
+        key: quail_card::keys::AMENDS,
+        doc: "The number of the document an amendment amends (Text, from `ref.cites`).",
+    },
+    KeyDoc {
+        key: quail_card::keys::TEXT,
+        doc: "The card as `field: value` lines (Text), for a prompt or a search index.",
+    },
+    KeyDoc {
+        key: quail_card::keys::HIGHLIGHT,
+        doc: "Where a card field's source fact sits in the text, one per source fact (Record: `key`, `page`, `block`, `start`, `end`, `quote`; see `quail_core::highlight`).",
+    },
+];
+
 /// Keys of `quail_summary::keys`.
 #[cfg(feature = "summary")]
 pub const SUMMARY: &[KeyDoc] = &[
