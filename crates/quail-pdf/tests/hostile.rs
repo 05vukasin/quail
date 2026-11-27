@@ -706,6 +706,27 @@ fn unclosed_dictionaries_repair_in_linear_time() {
 }
 
 #[test]
+fn inline_image_end_search_is_bounded() {
+    // Fuzz finding (quail #131, `slow@pdf.extract@4`): an inline image followed by one string
+    // that never closes, with 20 000 `EI`s inside it. hayro tried every `EI` as the image's end
+    // by parsing the rest of the stream as content, and every parse ran to the end of the
+    // unclosed string: 20 s for a 3 KB file.
+    let mut c = b"q 10 0 0 10 100 100 cm BI /W 4 /H 4 /CS /G /BPC 8 ID ".to_vec();
+    c.extend_from_slice(&[0x80; 16]);
+    c.extend_from_slice(b" EI Q BT /F1 12 Tf 72 700 Td (inlin");
+    for _ in 0..20_000 {
+        c.extend_from_slice(&[0x80; 10]);
+        c.extend_from_slice(b" EI Q BT /F1 12 Tf 72 700 Td (inlin");
+    }
+    c.extend_from_slice(b"(inline image page) Tj ET");
+    let bytes = page_pdf(&c, FONT, vec![]);
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    assert!(r.doc.is_ok());
+}
+
+#[test]
 fn type3_recursion_is_bounded() {
     // A Type3 glyph whose procedure shows the same glyph twice: recursion through fonts.
     let charproc = stream_flate("", b"1000 0 0 0 1000 1000 d1 BT /T3 1 Tf (a) Tj (a) Tj ET");

@@ -91,6 +91,10 @@ The crate using them (`quail-pdf`) cannot do that from outside.
   repeated 80 000 times made every header skip the following objects as nested garbage, up
   to the nesting cap: quadratic, 10 s for 4 MB.
 - **`object/stream.rs`:** `Stream::encoded_len`, the stored data length without a copy.
+- **`content/mod.rs`:** an inline image's end is probed (`starts_with_content` on the content
+  after a candidate `EI`) at most `MAX_CONTENT_PROBES` (64) times; then the candidate is taken
+  as the end. 20 000 candidates inside one unclosed 900 KB string each parsed to the end of the
+  stream: quadratic, 20 s.
 - **`filter/lzw_flate.rs` (predictors):** row lengths are computed in checked `usize` (the `u8`
   product wrapped). `/Colors 0` or `/Columns 0` is refused (it divided by zero), and a row
   longer than the data decodes nothing instead of sizing a gigabyte zero row.
