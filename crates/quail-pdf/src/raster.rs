@@ -41,6 +41,8 @@ pub struct PdfRaster {
     state: Mutex<State>,
     /// Pages known to hold no single embedded scan (see [`PdfRaster::with_no_scan`]).
     no_scan: Vec<bool>,
+    /// Pages the extractor stopped at the per-page draw cap (see [`PdfRaster::over_cap`]).
+    over_cap: Vec<bool>,
     /// The file's deadline: every call ends by it, whatever `limits.timeout` says, so
     /// extraction, page hashing and OCR of one file share one time budget.
     file_deadline: Option<Instant>,
@@ -96,7 +98,28 @@ impl PdfRaster {
                 decoded_since_open: 0,
             }),
             no_scan,
+            over_cap: Vec::new(),
         }
+    }
+
+    /// Pages whose interpretation the extractor stopped at a per-page draw cap (draw calls,
+    /// nested clips and groups, or form data): `over_cap[i]` makes [`PageRaster::render`] and the scan lookups refuse page `i` at
+    /// once (`LimitExceeded`), instead of interpreting it up to the same cap twice more (the
+    /// scan lookup, then the render's dry run) only to refuse it then. A 2^n form fan-out page
+    /// thus costs one capped interpretation per file, not three per caller.
+    #[must_use]
+    pub(crate) fn over_cap(mut self, over_cap: Vec<bool>) -> Self {
+        self.over_cap = over_cap;
+        self
+    }
+
+    /// Did the extractor stop page `page` at the draw cap?
+    fn is_over_cap(&self, page: u32) -> bool {
+        usize::try_from(page)
+            .ok()
+            .and_then(|i| self.over_cap.get(i))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Runs `f` on page `page` of the parsed document under a fresh budget for `limits`.
@@ -224,6 +247,9 @@ impl PageRaster for PdfRaster {
         if !(dpi.is_finite() && dpi > 0.0 && dpi <= MAX_DPI) {
             return Err(Error::Other(format!("dpi {dpi} outside (0, {MAX_DPI}]")));
         }
+        if self.is_over_cap(page) {
+            return Err(Error::LimitExceeded("draw operations per page"));
+        }
         let deadline = self.call_deadline(limits)?;
         self.with_page(page, limits, |p, budget| {
             let (w, h) = p.render_dimensions();
@@ -324,6 +350,9 @@ impl PdfRaster {
         {
             return None;
         }
+        if self.is_over_cap(page) {
+            return Some(Err(Error::LimitExceeded("draw operations per page")));
+        }
         let deadline = match self.call_deadline(limits) {
             Ok(d) => d,
             Err(e) => return Some(Err(e)),
@@ -394,6 +423,10 @@ struct ScanDevice<'e> {
 impl<'a> Device<'a> for ScanDevice<'_> {
     fn on_operator(&mut self) {
         self.watchdog.op();
+    }
+
+    fn on_x_object(&mut self, bytes: usize) {
+        self.watchdog.x_object(bytes);
     }
 
     fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {

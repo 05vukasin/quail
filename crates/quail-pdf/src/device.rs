@@ -29,6 +29,12 @@ pub(crate) const MAX_CALLS_PER_PAGE: u64 = 4_000_000;
 /// form fan-out early (hayro re-parses a form's content on each use, ~6 µs per call), while
 /// plain drawing keeps the larger [`MAX_CALLS_PER_PAGE`] budget.
 pub(crate) const MAX_NESTINGS_PER_PAGE: u64 = 250_000;
+/// Bytes of `XObject` dictionaries and stored stream data a page may re-parse: hayro parses a
+/// form's dictionary and content again on every `Do`. A form fan-out is cut by
+/// [`MAX_NESTINGS_PER_PAGE`] when its forms are small, but one form of a few MB (a 2.8 MB
+/// dictionary of junk, a broken stream that fails to inflate every time) drawn thousands of
+/// times took the whole file deadline. A page drawing a 1 MB form 64 times still fits.
+pub(crate) const MAX_XOBJECT_BYTES_PER_PAGE: u64 = 64 << 20;
 /// The deadline is checked every this many callbacks.
 const DEADLINE_EVERY: u64 = 1024;
 /// Image placements remembered per page (the count keeps going).
@@ -42,7 +48,8 @@ pub(crate) const MAX_GLYPH_CHARS: usize = 32;
 pub(crate) enum Abort {
     /// The file's time budget ran out.
     Deadline,
-    /// More than [`MAX_CALLS_PER_PAGE`] draw calls.
+    /// More than [`MAX_CALLS_PER_PAGE`] draw calls, [`MAX_NESTINGS_PER_PAGE`] clips and
+    /// groups, or [`MAX_XOBJECT_BYTES_PER_PAGE`] of `XObject` data.
     TooManyCalls,
 }
 
@@ -51,6 +58,7 @@ pub(crate) struct Watchdog<'e> {
     calls: u64,
     nestings: u64,
     ops: u64,
+    xobject_bytes: u64,
     clock: Clock<'e>,
 }
 
@@ -68,6 +76,7 @@ impl<'e> Watchdog<'e> {
             calls: 0,
             nestings: 0,
             ops: 0,
+            xobject_bytes: 0,
             clock,
         }
     }
@@ -108,6 +117,19 @@ impl<'e> Watchdog<'e> {
         if self.ops.is_multiple_of(DEADLINE_EVERY) {
             self.check_deadline();
         }
+    }
+
+    /// An `XObject` about to be drawn, with the bytes hayro re-parses for it: counted against
+    /// [`MAX_XOBJECT_BYTES_PER_PAGE`]. One such draw can cost milliseconds, so the deadline
+    /// is checked on every one.
+    pub(crate) fn x_object(&mut self, bytes: usize) {
+        self.xobject_bytes = self
+            .xobject_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        if self.xobject_bytes > MAX_XOBJECT_BYTES_PER_PAGE {
+            resume_unwind(Box::new(Abort::TooManyCalls));
+        }
+        self.check_deadline();
     }
 
     /// A clip or a transparency group: also counted against [`MAX_NESTINGS_PER_PAGE`].
@@ -260,6 +282,10 @@ impl<'a> Device<'a> for PageCapture<'_> {
         self.watchdog.op();
     }
 
+    fn on_x_object(&mut self, bytes: usize) {
+        self.watchdog.x_object(bytes);
+    }
+
     fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {
         self.watchdog.tick();
         self.paths = self.paths.saturating_add(1);
@@ -378,6 +404,10 @@ pub(crate) struct DryRun<'e>(pub Watchdog<'e>);
 impl<'a> Device<'a> for DryRun<'_> {
     fn on_operator(&mut self) {
         self.0.op();
+    }
+
+    fn on_x_object(&mut self, bytes: usize) {
+        self.0.x_object(bytes);
     }
 
     fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {

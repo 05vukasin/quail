@@ -24,7 +24,8 @@ use quail_core::{
 };
 
 use crate::device::{
-    Abort, Captured, Clock, MAX_CALLS_PER_PAGE, MAX_NESTINGS_PER_PAGE, PageCapture, Watchdog,
+    Abort, Captured, Clock, MAX_CALLS_PER_PAGE, MAX_NESTINGS_PER_PAGE, MAX_XOBJECT_BYTES_PER_PAGE,
+    PageCapture, Watchdog,
 };
 use crate::open::{Caught, caught, open};
 use crate::quality::{Signals, judge};
@@ -136,10 +137,12 @@ fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> 
         );
     }
 
-    let (doc, no_scan) = pages(pdf, blob, &budget, limits, out);
+    let (doc, no_scan, over_cap) = pages(pdf, blob, &budget, limits, out);
     // Later steps (OCR) get pixels through the core trait and never depend on this crate.
     out.provide(Raster(Arc::new(
-        PdfRaster::with_no_scan(blob.clone(), no_scan).until(file_deadline),
+        PdfRaster::with_no_scan(blob.clone(), no_scan)
+            .over_cap(over_cap)
+            .until(file_deadline),
     )));
     Ok(doc)
 }
@@ -224,6 +227,8 @@ struct Walk<'o> {
     /// Per page: interpreted completely (no abort, no refused decode) and drew a number of
     /// images other than one, so it holds no single embedded scan.
     no_scan: Vec<bool>,
+    /// Per page: interpretation stopped at a per-page draw cap (calls, nestings, form data).
+    over_cap: Vec<bool>,
 }
 
 /// Whether to go on with the next page.
@@ -239,7 +244,7 @@ fn pages(
     budget: &Arc<DecodeBudget>,
     limits: &Limits,
     out: &mut Emitter,
-) -> (Document, Vec<bool>) {
+) -> (Document, Vec<bool>, Vec<bool>) {
     let total = first.pages().len();
     out.fact(keys::PAGE_COUNT, int(total));
     let max = usize::try_from(limits.max_pages).unwrap_or(usize::MAX);
@@ -266,6 +271,7 @@ fn pages(
         image_only_pages: 0,
         scanned_pages: 0,
         no_scan: Vec::new(),
+        over_cap: Vec::new(),
     };
     let settings = InterpreterSettings::default();
     let mut next = 0usize;
@@ -317,20 +323,11 @@ fn pages(
         image_only_pages,
         scanned_pages,
         no_scan,
+        over_cap,
         ..
     } = walk;
 
-    // Zones need every page: repetition is a cross-page signal.
-    if out.check_deadline().is_ok() {
-        assign_zones(&mut pending);
-    } else {
-        out.problem("timeout: zones not assigned");
-        for p in &mut pending {
-            for b in &mut p.page.blocks {
-                b.zone = Zone::Body;
-            }
-        }
-    }
+    zone_pages(&mut pending, out);
     let doc = Document {
         pages: pending.into_iter().map(|p| p.page).collect(),
     };
@@ -345,7 +342,7 @@ fn pages(
         keys::PAGES_NEEDING_OCR,
         int(doc.pages.iter().filter(|p| p.needs_ocr).count()),
     );
-    (doc, no_scan)
+    (doc, no_scan, over_cap)
 }
 
 /// `pdf.scanned_pages`, and `pdf.is_scanned` when a page was extracted.
@@ -353,6 +350,20 @@ fn scan_facts(scanned: usize, pages: usize, out: &mut Emitter) {
     out.fact(keys::SCANNED_PAGES, int(scanned));
     if pages > 0 {
         out.fact(keys::IS_SCANNED, Value::Bool(scanned * 2 > pages));
+    }
+}
+
+/// Zones need every page: repetition is a cross-page signal. Out of time, every block is body.
+fn zone_pages(pending: &mut [Pending], out: &mut Emitter) {
+    if out.check_deadline().is_ok() {
+        assign_zones(pending);
+    } else {
+        out.problem("timeout: zones not assigned");
+        for p in pending {
+            for b in &mut p.page.blocks {
+                b.zone = Zone::Body;
+            }
+        }
     }
 }
 
@@ -386,11 +397,7 @@ fn assign_zones(pending: &mut [Pending]) {
 
 impl Walk<'_> {
     fn mark_no_scan(&mut self, index: u32, no_scan: bool) {
-        // `index` is below `max_pages` and the page count: the vector stays page-sized.
-        if let (true, Ok(i)) = (no_scan, usize::try_from(index)) {
-            self.no_scan.resize(self.no_scan.len().max(i + 1), false);
-            self.no_scan[i] = true;
-        }
+        mark(&mut self.no_scan, index, no_scan);
     }
 
     fn failed_page(&mut self, index: u32, size: (f32, f32), needs_ocr: bool) {
@@ -448,8 +455,10 @@ impl Walk<'_> {
                         (Flow::Stop, true)
                     }
                     Caught::Abort(Abort::TooManyCalls) => {
+                        mark(&mut self.over_cap, index, true);
                         self.out.problem(format!(
-                            "page {index}: more than {MAX_CALLS_PER_PAGE} draw operations or {MAX_NESTINGS_PER_PAGE} nested forms/clips, skipped"
+                            "page {index}: more than {MAX_CALLS_PER_PAGE} draw operations, {MAX_NESTINGS_PER_PAGE} nested forms/clips or {} MiB of form data, skipped",
+                            MAX_XOBJECT_BYTES_PER_PAGE >> 20
                         ));
                         self.failed_page(index, (w, h), true);
                         (Flow::Continue, true)
@@ -598,6 +607,15 @@ impl Walk<'_> {
         self.image_only_pages += usize::from(verdict.image_only);
         self.scanned_pages += usize::from(verdict.scanned);
         (flow, false)
+    }
+}
+
+/// Sets `flags[index]`, growing the vector. `index` is below `max_pages` and the page count,
+/// so the vector stays page-sized.
+fn mark(flags: &mut Vec<bool>, index: u32, on: bool) {
+    if let (true, Ok(i)) = (on, usize::try_from(index)) {
+        flags.resize(flags.len().max(i + 1), false);
+        flags[i] = true;
     }
 }
 

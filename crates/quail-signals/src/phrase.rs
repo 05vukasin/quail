@@ -12,6 +12,11 @@ use crate::page::PageText;
 /// Most punctuation tokens allowed between two words of a phrase.
 const MAX_PUNCT: usize = 2;
 
+/// Most punctuation and symbol tokens a search walks over between a value and its phrase
+/// (dot leaders: `PIB: .......... 123`). Searches count words, not punctuation, so without
+/// this a line of 300 000 `(` made every value on it walk the whole run: quadratic.
+pub(crate) const MAX_SKIPPED: usize = 64;
+
 /// Does `phrase` end at token `j`? Returns the index of its first token.
 pub(crate) fn ends_at(p: &PageText, j: usize, phrase: &[&str]) -> Option<usize> {
     ends_at_within(p, j, phrase, 0)
@@ -100,6 +105,7 @@ pub(crate) fn find_before<C: Copy>(
 ) -> Option<(C, usize)> {
     let line = p.line(i);
     let mut words = 0;
+    let mut skipped = 0;
     let mut j = i;
     while j > 0 {
         j -= 1;
@@ -110,6 +116,10 @@ pub(crate) fn find_before<C: Copy>(
             return None;
         }
         if !p.wordlike(j) {
+            skipped += 1;
+            if skipped > MAX_SKIPPED {
+                return None;
+            }
             continue;
         }
         for (phrase, c) in table {
@@ -138,6 +148,7 @@ pub(crate) fn find_before_wrapped<C: Copy>(
 ) -> Option<(C, usize)> {
     let line = p.line(i);
     let mut words = 0;
+    let mut skipped = 0;
     let mut j = i;
     while j > 0 {
         j -= 1;
@@ -145,6 +156,10 @@ pub(crate) fn find_before_wrapped<C: Copy>(
             return None;
         }
         if !p.wordlike(j) {
+            skipped += 1;
+            if skipped > MAX_SKIPPED {
+                return None;
+            }
             continue;
         }
         for (phrase, c) in table {
@@ -172,6 +187,7 @@ pub(crate) fn find_after<C: Copy>(
 ) -> Option<(C, usize)> {
     let line = p.line(i);
     let mut words = 0;
+    let mut skipped = 0;
     let mut j = i + 1;
     while j < p.len() {
         if p.line(j) - line > reach.lines {
@@ -188,6 +204,11 @@ pub(crate) fn find_after<C: Copy>(
             }
             words += 1;
             if words > reach.words {
+                return None;
+            }
+        } else {
+            skipped += 1;
+            if skipped > MAX_SKIPPED {
                 return None;
             }
         }

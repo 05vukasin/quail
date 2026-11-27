@@ -114,6 +114,10 @@ impl<'a, T: Device<'a>> Device<'a> for Type3ShapeGlyphDevice<'a, '_, T> {
         self.inner.on_operator();
     }
 
+    fn on_x_object(&mut self, bytes: usize) {
+        self.inner.on_x_object(bytes);
+    }
+
     fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
         let props = DrawProps {
             paint: self.paint.clone(),

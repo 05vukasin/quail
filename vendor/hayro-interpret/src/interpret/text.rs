@@ -15,9 +15,16 @@ pub(crate) fn show_text_string<'a>(
     text: &object::String<'_>,
 ) {
     begin_glyph_run(ctx);
-    append_text_string(ctx, resources, text);
+    append_text_string(ctx, device, resources, text);
     show_glyph_run(ctx, device);
 }
+
+/// quail: glyphs collected into one run before it is handed to the device. One `Tj` of a
+/// few MB (a flate stream inflates to that from KBs) collected millions of glyphs at ~180
+/// bytes each, and the allocation failure aborted the process. Longer runs go to the device
+/// in pieces of this size; the text state advances exactly as before, and clip-mode outlines
+/// still accumulate in the text state, so nothing drawn or clipped changes.
+pub(crate) const MAX_RUN_GLYPHS: usize = 16_384;
 
 pub(crate) fn begin_glyph_run(ctx: &mut Context<'_>) {
     ctx.glyph_scratch.clear();
@@ -25,6 +32,7 @@ pub(crate) fn begin_glyph_run(ctx: &mut Context<'_>) {
 
 pub(crate) fn append_text_string<'a>(
     ctx: &mut Context<'a>,
+    device: &mut impl Device<'a>,
     resources: &Resources<'a>,
     text: &object::String<'_>,
 ) {
@@ -55,6 +63,10 @@ pub(crate) fn append_text_string<'a>(
             let glyph = get_glyph(&font, glyph_id, code, ctx, resources);
 
             ctx.glyph_scratch.push(PositionedGlyph { glyph, transform });
+            // quail: hand a full run to the device before collecting more.
+            if ctx.glyph_scratch.len() >= MAX_RUN_GLYPHS {
+                show_glyph_run(ctx, device);
+            }
         }
 
         ctx.text_state_mut().apply_code_advance(code, adv);

@@ -52,6 +52,11 @@ pub trait Device<'a> {
     /// quail: called before every content-stream operator, so a device can enforce a deadline
     /// between operators (some, like `sh`, cost far more than a draw callback). Default: no-op.
     fn on_operator(&mut self) {}
+    /// quail: called before an XObject is drawn (`Do`) with the bytes hayro parses for it again
+    /// on every use: its dictionary and its stored stream data. A form drawn 2^n times, or a
+    /// small form with a dictionary of megabytes, costs that much per draw, so a device can
+    /// bound the page's work by it. Default: no-op.
+    fn on_x_object(&mut self, _bytes: usize) {}
 }
 
 /// A device that discards all drawing operations.

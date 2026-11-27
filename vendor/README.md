@@ -86,6 +86,15 @@ The crate using them (`quail-pdf`) cannot do that from outside.
   the pixel cap, and dropping rows sets the limit flag.
 - **`xref.rs`:** the budget is threaded through xref-stream parsing and through object-stream
   decoding in the repair path.
+- **`xref.rs` (repair scan):** an object header is validated, and a dictionary probed, only up
+  to the next `endobj` (`EndobjCursor`, found walking forward once). An unclosed dictionary
+  repeated 80 000 times made every header skip the following objects as nested garbage, up
+  to the nesting cap: quadratic, 10 s for 4 MB.
+- **`object/stream.rs`:** `Stream::encoded_len`, the stored data length without a copy.
+- **`content/mod.rs`:** an inline image's end is probed (`starts_with_content` on the content
+  after a candidate `EI`) at most `MAX_CONTENT_PROBES` (64) times; then the candidate is taken
+  as the end. 20 000 candidates inside one unclosed 900 KB string each parsed to the end of the
+  stream: quadratic, 20 s.
 - **`filter/lzw_flate.rs` (predictors):** row lengths are computed in checked `usize` (the `u8`
   product wrapped). `/Colors 0` or `/Columns 0` is refused (it divided by zero), and a row
   longer than the data decodes nothing instead of sizing a gigabyte zero row.
@@ -107,6 +116,13 @@ The crate using them (`quail-pdf`) cannot do that from outside.
 - **`device.rs`, `interpret/mod.rs`, `font/type3.rs`, `pattern.rs`:** `Device::on_operator`, a
   default no-op hook called before every content-stream operator (forwarded by wrapper
   devices), so a device can check a deadline between operators.
+- **`interpret/text.rs`, `interpret/mod.rs`:** a glyph run reaches the device in pieces of at
+  most `MAX_RUN_GLYPHS` (16 384). One `Tj` of 8 M characters collected 8 M positioned glyphs
+  (~180 bytes each) first: 1.4 GiB, an allocation-failure abort. The text state advances as
+  before and clip-mode outlines still accumulate in it, so what is drawn does not change.
+- **`device.rs`, `interpret/mod.rs`, `font/type3.rs`, `pattern.rs`:** `Device::on_x_object`,
+  a default no-op hook called before every `Do` with the bytes hayro parses again for it (the
+  XObject's dictionary and stored data), so a device can bound a page's form work.
 - **`x_object/image.rs`, `interpret/mod.rs`, `x_object/decode/image.rs`:** an image carries the
   file's budget. Inline images (and soft masks) get it from the interpreter context, since
   their streams have none, so they obey `max_render_pixels` too.

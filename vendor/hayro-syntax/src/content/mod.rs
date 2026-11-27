@@ -225,6 +225,8 @@ fn read_inline_image<'a>(r: &mut Reader<'a>, stack: &mut Stack<'a>) -> Option<()
 
     let stream_data = r.tail()?;
     let start_offset = r.offset();
+    // quail: content probes made for this image (see `MAX_CONTENT_PROBES`).
+    let mut probes = 0usize;
 
     'outer: while let Some(pos) = find_needle(r.tail()?, b"EI") {
         r.read_bytes(pos)?;
@@ -289,7 +291,11 @@ fn read_inline_image<'a>(r: &mut Reader<'a>, stack: &mut Stack<'a>) -> Option<()
                     // stream that follows the inline image. Therefore,
                     // it should be valid to interpret `tail` as a content
                     // stream.
-                    if !*is_content.get_or_insert_with(|| starts_with_content(tail)) {
+                    // quail: past `MAX_CONTENT_PROBES`, this `EI` is taken as the end.
+                    if !*is_content.get_or_insert_with(|| {
+                        probes += 1;
+                        probes > MAX_CONTENT_PROBES || starts_with_content(tail)
+                    }) {
                         // Seems like the data in-between is not a valid content
                         // stream, so we are likely still within the image data.
                         r.read_bytes(2)?;
@@ -322,6 +328,13 @@ fn read_inline_image<'a>(r: &mut Reader<'a>, stack: &mut Stack<'a>) -> Option<()
 
     Some(())
 }
+
+/// quail: `starts_with_content` calls allowed per inline image. Each parses the rest of the
+/// content stream from a candidate `EI`, and a string that never closes makes that parse run
+/// to the end of the stream: 20 000 candidate `EI`s inside one unclosed string of 900 KB took
+/// 20 s. Real images rarely have more than a few ASCII-only candidates; past the cap, the
+/// candidate is taken as the end of the image data.
+const MAX_CONTENT_PROBES: usize = 64;
 
 fn starts_with_content(data: &[u8]) -> bool {
     let mut iter = TypedIter::new(data);

@@ -710,6 +710,42 @@ fn cap_and_limits_make_problems() {
 }
 
 #[test]
+fn one_long_line_of_dates_scans_in_linear_time() {
+    // Fuzz finding (quail #131): a 3 MB text of one line, `15.03.2024. ` over and over. Every
+    // date on the first page's head lines asked whether it stands alone on its line by
+    // walking back to the line's start: quadratic, minutes of CPU.
+    let line = "15.03.2024. ".repeat(250_000);
+    let t = std::time::Instant::now();
+    let (f, _) = run_doc(doc(&[&line]), &Limits::default());
+    assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+    assert_eq!(values(&f, &keys::DATE), [date(2024, 3, 15)]);
+    // Still a head date when it is alone on its line, after a place.
+    let f = run("Beograd, 15.03.2024.\nUGOVOR");
+    assert_eq!(values(&f, &keys::DATE_SIGNED), [date(2024, 3, 15)]);
+}
+
+#[test]
+fn long_punctuation_runs_scan_in_linear_time() {
+    // Fuzz finding (quail #131, a DOCX): one paragraph of 300 000 `(` and 38 000 `)`. The
+    // label and role searches count words, not punctuation, so every candidate on the line
+    // walked the whole run.
+    let mut text = "UGOVOR O KUPOPRODAJI br. 12/2024\n".repeat(2_000);
+    text.push_str(&"(".repeat(300_000));
+    text.push_str(&")".repeat(38_000));
+    text.push_str(" PIB 101 RSD 15.03.2024. +381 11 123 4567 with note");
+    let t = std::time::Instant::now();
+    let _ = run(&text);
+    assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+    // Dot leaders between a label and its value still count.
+    let p = pib();
+    let f = run(&format!("PIB: {}{p}", ". ".repeat(20)));
+    assert_eq!(texts(&f, &keys::RS_PIB), std::slice::from_ref(&p));
+    // The label is the one that decides: an unlabelled 9-digit number needs it.
+    let f = run(&format!("PIB: {}{p}", ". ".repeat(80)));
+    assert!(conf_of(&f, &keys::RS_PIB) < 0.95);
+}
+
+#[test]
 fn hostile_text_is_fast_and_does_not_panic() {
     let mut s = String::new();
     for _ in 0..20_000 {

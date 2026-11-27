@@ -143,6 +143,12 @@ impl<'a> Stream<'a> {
         }
     }
 
+    /// quail: length of the stream's data as stored in the file (before decryption and
+    /// filters), without copying it.
+    pub fn encoded_len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Return the raw, underlying dictionary of the stream.
     pub fn dict(&self) -> &Dict<'a> {
         &self.dict
