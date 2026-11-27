@@ -295,9 +295,15 @@ fn arbitration(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
     let mut last = k;
     if let Some(p) = toks.get(k + 1)
         && matches!(p.key.as_str(), "pri" | "of" | "kod")
-        && let Some(e) = caps(inp, s, k + 2, 5)
     {
-        last = e;
+        // `pri Privrednoj komori Srbije`: words to the last capitalised one.
+        let mut j = k + 2;
+        while j < toks.len() && j < k + 8 && toks[j].kind == TokenKind::Word {
+            if upper_start(raw(doc, s, &toks[j])) {
+                last = j;
+            }
+            j += 1;
+        }
     }
     let institution = (last > k || first < k).then(|| text_of(doc, s, first, last));
     let rules = find(toks, RULES).into_iter().next().map(|h| *h.what);
@@ -387,12 +393,14 @@ fn language(inp: &Input<'_>, s: &Line, out: &mut Vec<Found>) {
         last = i;
         if let Some(p) = prevail_at
             && i.abs_diff(p) <= 8
-            && toks[i + 1..(i + 3).min(toks.len())].iter().any(|t| {
-                word_matches("verzij*", &t.key)
-                    || word_matches("version*", &t.key)
-                    || word_matches("tekst*", &t.key)
-                    || t.key == "text"
-            })
+            && toks[i.saturating_sub(3)..(i + 3).min(toks.len())]
+                .iter()
+                .any(|t| {
+                    word_matches("verzij*", &t.key)
+                        || word_matches("version*", &t.key)
+                        || word_matches("tekst*", &t.key)
+                        || t.key == "text"
+                })
         {
             prevails.get_or_insert(c);
         }

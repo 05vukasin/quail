@@ -501,3 +501,64 @@ fn overlapping_and_cut_off_cues_do_not_panic() {
         let _ = facts(text, true);
     }
 }
+
+#[test]
+fn more_forms() {
+    let text = "UGOVOR O SARADNJI
+Ugovor se zaključuje na neodređeno vreme.
+Ugovor se ne produžava automatski.
+Sporove rešava Spoljnotrgovinska arbitraža pri Privrednoj komori Srbije.
+Ugovor je sačinjen na srpskom i engleskom jeziku, a u slučaju razlike merodavna je verzija na srpskom jeziku.
+Payment terms: Net 30.
+Prilozi:
+1. Cenovnik
+2. Plan isporuke";
+    let f = facts(text, false);
+    assert_eq!(b(one(&f, "contract.term"), "indefinite"), Some(true));
+    assert_eq!(b(one(&f, "contract.renewal"), "auto"), Some(false));
+    assert_eq!(
+        s(one(&f, "contract.arbitration"), "institution"),
+        Some("Spoljnotrgovinska arbitraža pri Privrednoj komori Srbije")
+    );
+    let lang = one(&f, "contract.language");
+    assert_eq!(
+        lang.field("languages"),
+        Some(&Value::List(vec![Value::text("sr"), Value::text("en")]))
+    );
+    assert_eq!(s(lang, "prevails"), Some("sr"));
+    assert_eq!(i(one(&f, "contract.payment_days"), "days"), Some(30));
+    let annexes: Vec<(&str, Option<&str>)> = all(&f, "contract.annex")
+        .iter()
+        .map(|x| (s(&x.value, "label").unwrap(), s(&x.value, "title")))
+        .collect();
+    assert_eq!(
+        annexes,
+        [
+            ("Prilog 1", Some("Cenovnik")),
+            ("Prilog 2", Some("Plan isporuke"))
+        ]
+    );
+    quotes(&f, text, "contract.annex");
+}
+
+/// A long document (the Latin contract many times over, about 1.5 MB): the scan stays
+/// linear and every key keeps its cap.
+#[test]
+fn long_document_is_bounded() {
+    let text = vec![SR_LATIN; 400].join("\n");
+    let t0 = std::time::Instant::now();
+    let f = run(doc(&text, false), &[&ContractFacts]);
+    let took = t0.elapsed();
+    eprintln!("{} bytes, {} facts in {took:?}", text.len(), f.len());
+    assert!(took.as_secs() < 60, "{took:?}");
+    let mut keys: Vec<&str> = f.iter().map(|x| x.key.as_str()).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    for k in keys {
+        if k != "contract.highlight" {
+            assert!(
+                f.iter().filter(|x| x.key.as_str() == k).count() <= quail_contract::MAX_PER_KEY
+            );
+        }
+    }
+}

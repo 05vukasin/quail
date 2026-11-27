@@ -195,9 +195,11 @@ const RENEW_YES: &[(&[&str], ())] = &[
 
 const RENEW_NO: &[&[&str]] = &[
     &["ne", "produzava", "se", "automatski"],
+    &["ne", "produzava", "automatski"],
+    &["ne", "produzava", "se", "precutno"],
+    &["ne", "produzava", "precutno"],
     &["nece", "se", "automatski"],
     &["ne", "moze", "se", "precutno"],
-    &["ne", "produzava", "se", "precutno"],
     &["not", "be", "automatically"],
     &["not", "automatically"],
     &["shall", "not", "renew"],
