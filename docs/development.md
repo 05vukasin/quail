@@ -164,7 +164,7 @@ $B minimize FILE OUT
 $B seeds DIR                                               # write the generated seeds
 ```
 
-- Each new crash signature (`class@where`, e.g. `stack-overflow@docx.extract@1`) is saved under
+- Each new crash signature (`class@where`, e.g. `stack-overflow@docx.extract@2`) is saved under
   `<out>/crashes/` with a minimized copy and a line in `crashes/summary.tsv`.
 - A fix comes with a regression test that builds the minimized input in code (the
   `tests/hostile.rs` suites of `quail-pdf`, `quail-docx`, `quail-pptx` and `quail-html`), not

@@ -66,7 +66,7 @@ fn boolean(r: &Run, k: &FactKey) -> bool {
 #[test]
 fn ids() {
     let e = PdfExtractor::new();
-    assert_eq!(e.id().to_string(), "pdf.extract@3");
+    assert_eq!(e.id().to_string(), "pdf.extract@4");
     assert_eq!(e.formats(), &[Format::Pdf]);
     assert_eq!(e.provides(), &["raster"]);
 }
@@ -404,6 +404,118 @@ fn document_features() {
     assert!(!boolean(&plain, &keys::SIGNED));
     assert!(!boolean(&plain, &keys::HAS_JAVASCRIPT));
     assert!(!boolean(&plain, &keys::HAS_XMP));
+}
+
+fn xmp_packet(description: &str) -> String {
+    format!(
+        r#"<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{description}</rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>"#
+    )
+}
+
+fn text_fact(r: &Run, k: &FactKey) -> Option<String> {
+    match fact(r, k) {
+        Some(Value::Text(s)) => Some(s.to_string()),
+        None => None,
+        other => panic!("{k}: {other:?}"),
+    }
+}
+
+#[test]
+fn xmp_identity_ids() {
+    // Attribute form, compressed packet; the InstanceID is not reported.
+    let attrs = xmp_packet(
+        r#"<rdf:Description rdf:about="" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmpMM:DocumentID="  xmp.did:0a1b2c3d-0000-4000-8000-000000000001 " xmpMM:InstanceID="xmp.iid:ffff" xmpMM:OriginalDocumentID="uuid:5D20892493BFDB11914A8590D31508C8"/>"#,
+    );
+    let r = run(pdf(
+        &[text_page(1, 2)],
+        &Extras {
+            xmp_packet: Some(attrs),
+            compress: true,
+            ..Extras::default()
+        },
+    ));
+    assert!(r.doc.is_ok());
+    assert!(boolean(&r, &keys::HAS_XMP));
+    assert_eq!(
+        text_fact(&r, &keys::XMP_DOCUMENT_ID).as_deref(),
+        Some("xmp.did:0a1b2c3d-0000-4000-8000-000000000001")
+    );
+    assert_eq!(
+        text_fact(&r, &keys::XMP_ORIGINAL_DOCUMENT_ID).as_deref(),
+        Some("uuid:5D20892493BFDB11914A8590D31508C8")
+    );
+    assert!(!r.facts.iter().any(|f| f.key.as_str().contains("instance")));
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+
+    // Element form, another prefix; the ids of a derived-from reference are not the file's.
+    let elems = xmp_packet(
+        r#"<rdf:Description rdf:about="" xmlns:mm="http://ns.adobe.com/xap/1.0/mm/" xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#">
+<mm:DerivedFrom rdf:parseType="Resource"><stRef:documentID>xmp.did:parent</stRef:documentID><stRef:originalDocumentID>xmp.did:grandparent</stRef:originalDocumentID></mm:DerivedFrom>
+<mm:DocumentID>adobe:docid:indd:0a1b</mm:DocumentID>
+</rdf:Description>"#,
+    );
+    let r = run(pdf(
+        &[text_page(1, 2)],
+        &Extras {
+            xmp_packet: Some(elems),
+            ..Extras::default()
+        },
+    ));
+    assert_eq!(
+        text_fact(&r, &keys::XMP_DOCUMENT_ID).as_deref(),
+        Some("adobe:docid:indd:0a1b")
+    );
+    assert_eq!(text_fact(&r, &keys::XMP_ORIGINAL_DOCUMENT_ID), None);
+
+    // No XMP: no ids.
+    let plain = run(pdf(&[text_page(1, 2)], &Extras::default()));
+    assert_eq!(text_fact(&plain, &keys::XMP_DOCUMENT_ID), None);
+}
+
+#[test]
+fn malformed_xmp_is_a_warning() {
+    let broken = xmp_packet(
+        r#"<rdf:Description xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmpMM:DocumentID="uuid:kept"><a><b></a>"#,
+    );
+    let deep = format!("{}{}", "<x>".repeat(50_000), "</x>".repeat(50_000));
+    for packet in [broken, deep, "\u{FEFF}\u{0}<<<".to_owned()] {
+        let r = run(pdf(
+            &[text_page(1, 1)],
+            &Extras {
+                xmp_packet: Some(packet),
+                ..Extras::default()
+            },
+        ));
+        assert!(r.doc.is_ok());
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert!(
+            r.warnings.iter().any(|w| w.contains("XMP")),
+            "{:?}",
+            r.warnings
+        );
+    }
+    // Over the packet cap: refused before parsing.
+    let huge = xmp_packet(&format!(
+        r#"<rdf:Description xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmpMM:DocumentID="uuid:x"/>{}"#,
+        " ".repeat(5 << 20)
+    ));
+    let r = run(pdf(
+        &[text_page(1, 1)],
+        &Extras {
+            xmp_packet: Some(huge),
+            compress: true,
+            ..Extras::default()
+        },
+    ));
+    assert!(r.doc.is_ok());
+    assert_eq!(text_fact(&r, &keys::XMP_DOCUMENT_ID), None);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("larger than")),
+        "{:?}",
+        r.warnings
+    );
 }
 
 #[test]

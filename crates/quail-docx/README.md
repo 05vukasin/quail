@@ -4,7 +4,7 @@ DOCX extractor for quail: a streaming OOXML reader on `zip` (inflate only) and `
 (event reader, no DOM). The package reader, the XML walk and the relationships are in
 `quail-ooxml`, shared with `quail-pptx`. Pure Rust, no `unsafe`.
 
-- Extractor id: `docx.extract@1` (`quail_docx::ID`), formats `[Format::Docx]`.
+- Extractor id: `docx.extract@2` (`quail_docx::ID`), formats `[Format::Docx]`.
 - Public API: `DocxExtractor` (implements `quail_core::Extractor`), `ID`, `keys::*`.
 
 ## Document model
@@ -30,7 +30,7 @@ DOCX extractor for quail: a streaming OOXML reader on `zip` (inflate only) and `
 | `docProps/core.xml` | `title`, `subject`, `creator`, `last_modified_by`, `revision`, `created`, `modified`, `last_printed` (Dates), `keywords`, `category`, `description` |
 | `docProps/app.xml` | `application`, `app_version`, `company`, `manager`, `template`, `total_time`, `pages`, `words`, `characters`, `app_paragraphs` |
 | `docProps/custom.xml` | `custom_property_count`, `custom_property_names`, `custom_properties` (`name=value`) |
-| `word/settings.xml` | `rsids` (List of U64, file order), `rsid_root` (U64), `rsid_count`, `attached_template`, `track_revisions`, `protection` |
+| `word/settings.xml` | `rsids` (List of U64, file order), `rsid_root` (U64), `rsid_count`, `w15_doc_id` (Text, `w15:docId` as written), `attached_template`, `track_revisions`, `protection` |
 | revisions, comments | `tracked_insertions`, `tracked_deletions`, `tracked_format_changes`, `revision_authors`, `deleted_text_chars`, `hidden_text_chars`, `comments`, `comment_authors` |
 | package | `has_macros`, `main_content_type`, `images`, `embedded_objects`, `hyperlink_domains`, `zip_entries`, `duplicate_entries` |
 | structure | `sections`, `paragraphs`, `tables`, `nested_tables`, `footnotes`, `endnotes`, `headers`, `footers` |

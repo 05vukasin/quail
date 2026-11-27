@@ -689,7 +689,7 @@ fn deadline_in_the_past_gives_partial() {
 
 #[test]
 fn ids_and_formats() {
-    assert_eq!(DocxExtractor.id().to_string(), "docx.extract@1");
+    assert_eq!(DocxExtractor.id().to_string(), "docx.extract@2");
     assert_eq!(DocxExtractor.formats(), &[quail_core::Format::Docx]);
 }
 
@@ -724,5 +724,83 @@ fn mutated_inputs_never_panic() {
         }
         let mut out = Emitter::new(quail_docx::ID);
         let _ = DocxExtractor.extract(&Blob::from(b), &Limits::default(), &mut out);
+    }
+}
+
+/// `word/settings.xml` with the `w14`/`w15` namespaces bound to `p14`/`p15` (any prefix works).
+fn settings_with(p15: &str, inner: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="{W}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:{p15}="http://schemas.microsoft.com/office/word/2012/wordml">{inner}</w:settings>"#
+    )
+}
+
+#[test]
+fn w15_doc_id() {
+    let id = "{4B1C2D3E-0000-4000-8000-00000000ABCD}";
+    // Word's form; the w14:docId (another id) is ignored.
+    let settings = settings_with(
+        "w15",
+        &format!(
+            r#"<w:rsids><w:rsidRoot w:val="00A1B2C3"/></w:rsids><w14:docId w14:val="1A2B3C4D"/><w15:docId w15:val=" {id} "/>"#
+        ),
+    );
+    let bytes = Docx::new(&p("x"))
+        .related("rId9", "settings", "settings.xml", &settings)
+        .build();
+    let (_, out) = extract(bytes);
+    assert_eq!(fact(&out, "docx.w15_doc_id"), Some(&Value::text(id)));
+    assert!(warnings(out).is_empty());
+
+    // Another prefix bound to the w15 namespace; `w15:` itself is then unbound.
+    let settings = settings_with(
+        "x15",
+        r#"<w15:docId w15:val="{wrong}"/><x15:docId x15:val="{11111111-2222-3333-4444-555555555555}"/>"#,
+    );
+    let bytes = Docx::new(&p("x"))
+        .related("rId9", "settings", "settings.xml", &settings)
+        .build();
+    let (_, out) = extract(bytes);
+    assert_eq!(
+        fact(&out, "docx.w15_doc_id"),
+        Some(&Value::text("{11111111-2222-3333-4444-555555555555}"))
+    );
+
+    // No docId, an empty one, and an over-long one.
+    for (inner, warns) in [
+        ("", false),
+        (r#"<w15:docId w15:val="  "/>"#, false),
+        (
+            &*format!(r#"<w15:docId w15:val="{}"/>"#, "A".repeat(300)),
+            true,
+        ),
+    ] {
+        let bytes = Docx::new(&p("x"))
+            .related(
+                "rId9",
+                "settings",
+                "settings.xml",
+                &settings_with("w15", inner),
+            )
+            .build();
+        let (_, out) = extract(bytes);
+        assert_eq!(fact(&out, "docx.w15_doc_id"), None);
+        assert_eq!(warnings(out).iter().any(|w| w.contains("w15:docId")), warns);
+    }
+}
+
+#[test]
+fn w15_doc_id_with_doctype_is_not_expanded() {
+    let settings = format!(
+        r#"<?xml version="1.0"?><!DOCTYPE w:settings [<!ENTITY a "AAAAAAAAAAAAAAAA"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">]><w:settings xmlns:w="{W}" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:docId w15:val="{{ID}}&b;"/></w:settings>"#
+    );
+    let bytes = Docx::new(&p("x"))
+        .related("rId9", "settings", "settings.xml", &settings)
+        .build();
+    let (_, out) = extract(bytes);
+    // The value with the unknown entity is refused, never expanded.
+    match fact(&out, "docx.w15_doc_id") {
+        None => {}
+        Some(Value::Text(t)) => assert!(!t.contains('A'), "{t}"),
+        other => panic!("{other:?}"),
     }
 }

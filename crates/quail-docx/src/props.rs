@@ -184,7 +184,50 @@ pub(crate) fn parse_rsid(v: &str) -> Option<u64> {
         .flatten()
 }
 
-/// `word/settings.xml`: rsids, attached template, revision tracking, protection.
+/// Namespace of the Word 2012 extensions (`w15:docId`).
+const NS_W15: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+/// Longest `w15:docId` kept, in bytes (a braced GUID is 38).
+const MAX_DOC_ID: usize = 256;
+
+/// `w15:docId` of `word/settings.xml`, matched by the prefix the root binds to [`NS_W15`]
+/// (`w15` when the root binds none): `w14:docId` shares the local name but is another id.
+#[derive(Default)]
+struct DocId {
+    /// The prefix, once the root element was seen.
+    prefix: Option<String>,
+    value: Option<String>,
+    bad: bool,
+}
+
+impl DocId {
+    /// Looks at a start tag; `true` when it was the root or the `docId` element.
+    fn element(&mut self, e: &quick_xml::events::BytesStart<'_>) -> bool {
+        let Some(p) = self.prefix.as_deref() else {
+            let bound = e.attributes().with_checks(false).flatten().find_map(|a| {
+                let p = a.key.as_ref().strip_prefix("xmlns:")?;
+                (&*a.value == NS_W15).then(|| p.to_owned())
+            });
+            self.prefix = Some(bound.unwrap_or_else(|| "w15".to_owned()));
+            return true;
+        };
+        if e.name().as_ref().strip_prefix(p) != Some(":docId") {
+            return false;
+        }
+        if self.value.is_none()
+            && let Some(v) = attr_exact(e, &format!("{p}:val"))
+        {
+            let v = v.trim();
+            if v.len() > MAX_DOC_ID || v.chars().any(char::is_control) {
+                self.bad = true;
+            } else if !v.is_empty() {
+                self.value = Some(v.to_owned());
+            }
+        }
+        true
+    }
+}
+
+/// `word/settings.xml`: rsids, document id, attached template, revision tracking, protection.
 pub(crate) fn settings(
     pkg: &mut Package<'_>,
     part: &str,
@@ -203,8 +246,10 @@ pub(crate) fn settings(
     let mut template_rid: Option<String> = None;
     let mut track = false;
     let mut protection: Option<String> = None;
+    let mut doc_id = DocId::default();
     let r = walk(reader, out, |ev| {
         match ev {
+            Ev::Start(e) | Ev::Empty(e) if doc_id.element(e) => {}
             Ev::Start(e) | Ev::Empty(e) => match name(e) {
                 "rsids" => in_rsids = matches!(ev, Ev::Start(_)),
                 "rsidRoot" if in_rsids => match val(e).as_deref().and_then(parse_rsid) {
@@ -251,6 +296,14 @@ pub(crate) fn settings(
         warn.push(format!(
             "{part}: {bad} rsid values not 8 hex digits, ignored"
         ));
+    }
+    if doc_id.bad {
+        warn.push(format!(
+            "{part}: w15:docId longer than {MAX_DOC_ID} bytes or with control characters, ignored"
+        ));
+    }
+    if let Some(v) = doc_id.value {
+        facts.push((keys::W15_DOC_ID, Value::text(v)));
     }
     if let Some(v) = root {
         facts.push((keys::RSID_ROOT, Value::U64(v)));
