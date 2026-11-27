@@ -8,6 +8,8 @@
 //! - [`Document`]: what an [`Extractor`] makes of a file: pages, text in reading order and
 //!   blocks that point into that text, with zones and boxes.
 //! - [`Fact`]: one piece of metadata with its confidence, its source and its evidence.
+//! - [`highlight`]: where a fact sits in the block model consumers show (block index,
+//!   character range, quote), shared by every step that highlights its facts.
 //! - [`Analyzer`]: turns what is known about a file into more facts and artifacts.
 //! - [`Artifacts`]: typed, read-only intermediate results shared between analyzers.
 //! - [`Source`] / [`RecordSink`]: where files come from and where [`FileRecord`]s go.
@@ -28,6 +30,7 @@ mod error;
 mod extractor;
 mod fact;
 mod format;
+pub mod highlight;
 mod limits;
 mod raster;
 mod record;
