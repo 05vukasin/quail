@@ -17,8 +17,9 @@ llm = ["dep:llama-cpp-2", "dep:sha2"]
 # `ApiSummarizer`: `summary.llm@5` through an HTTP API (OpenAI Chat Completions and compatible
 # servers such as vLLM, Ollama, OpenRouter, Groq and llama-server; Anthropic Messages; AWS
 # Bedrock Converse). Pure Rust (`ureq` with rustls), blocking, no async runtime. Sends document
-# text to the configured provider, so it is never in the default build.
-api = ["dep:ureq"]
+# text to the configured provider, so it is never in the default build. `sha2` signs Bedrock
+# requests with IAM credentials (SigV4).
+api = ["dep:ureq", "dep:sha2"]
 # `fetch_models`: downloads the GGUF files of the manifest, checking SHA-256.
 fetch = ["dep:ureq", "dep:sha2"]
 

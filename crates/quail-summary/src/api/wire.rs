@@ -1,10 +1,11 @@
-//! Request bodies and response parsing of the three wire protocols. Pure: no I/O.
+//! Request bodies and response parsing of the three wire protocols. Pure: no I/O ([`request`]
+//! reads the clock for a `SigV4` signature; [`request_at`] takes the time).
 //!
 //! | protocol | request | text | usage |
 //! |---|---|---|---|
 //! | `OpenAI` Chat Completions | `model`, `messages` (system, user), `max_tokens` (`max_completion_tokens` on api.openai.com), `temperature`, `response_format = json_object`, the preset's thinking switch | `choices[0].message.content` | `usage.prompt_tokens`, `usage.completion_tokens` |
 //! | Anthropic Messages | `model`, `max_tokens`, `system`, `messages` (user), `output_config.effort = low` (no `thinking` field); headers `x-api-key`, `anthropic-version` | the `text` blocks of `content` | `usage.input_tokens`, `usage.output_tokens` |
-//! | Bedrock Converse | `messages` (user), `system`, `inferenceConfig` (`maxTokens`, `temperature`); header `Authorization: Bearer` | the `text` blocks of `output.message.content` | `usage.inputTokens`, `usage.outputTokens` |
+//! | Bedrock Converse | `messages` (user), `system`, `inferenceConfig` (`maxTokens`, `temperature`); header `Authorization: Bearer`, or `SigV4` (`Authorization: AWS4-HMAC-SHA256 ...`, `x-amz-date`, `x-amz-security-token`, `host`) | the `text` blocks of `output.message.content` | `usage.inputTokens`, `usage.outputTokens` |
 //!
 //! The *optional* fields (temperature, JSON mode, thinking switches, effort) are left out of a
 //! `plain` request: a gateway that rejects one of them with 400/422 gets the request again
@@ -12,7 +13,10 @@
 
 use serde_json::{Map, Value as Json, json};
 
+use std::time::SystemTime;
+
 use super::endpoint::{Endpoint, Kind};
+use super::sigv4;
 use crate::summarizer::Usage;
 
 /// The `anthropic-version` header.
@@ -55,6 +59,18 @@ impl std::fmt::Debug for Request {
 
 /// The request for `system` + `user` to `ep`; `plain` leaves the optional fields out.
 pub fn request(ep: &Endpoint, system: &str, user: &str, d: &Decoding, plain: bool) -> Request {
+    request_at(ep, system, user, d, plain, SystemTime::now())
+}
+
+/// [`request`] signed at `now` (Bedrock with IAM credentials; other requests ignore it).
+pub fn request_at(
+    ep: &Endpoint,
+    system: &str,
+    user: &str,
+    d: &Decoding,
+    plain: bool,
+    now: SystemTime,
+) -> Request {
     let mut headers: Vec<(&'static str, String)> = Vec::new();
     let mut body = Map::new();
     match ep.kind {
@@ -131,10 +147,15 @@ pub fn request(ep: &Endpoint, system: &str, user: &str, d: &Decoding, plain: boo
             body.insert("inferenceConfig".into(), Json::Object(inference));
         }
     }
-    Request {
-        headers,
-        body: Json::Object(body).to_string(),
+    let body = Json::Object(body).to_string();
+    if ep.kind == Kind::Bedrock
+        && ep.key.is_none()
+        && let Some(c) = &ep.aws
+    {
+        let region = ep.region.as_deref().unwrap_or_default();
+        headers.extend(sigv4::bedrock_headers(c, region, &ep.url(), &body, now));
     }
+    Request { headers, body }
 }
 
 /// Whether `d` has anything a `plain` request leaves out for `ep`.
@@ -364,6 +385,42 @@ mod tests {
         assert_eq!(b["inferenceConfig"]["maxTokens"], 512);
         assert_eq!(b["inferenceConfig"]["temperature"], 0.0);
         assert_eq!(b["messages"][0]["content"][0]["text"], "U");
+    }
+
+    #[test]
+    fn bedrock_with_iam_credentials_is_signed() {
+        let pairs = [
+            ("AI_BEDROCK_REGION", "eu-west-2"),
+            ("AI_BEDROCK_MODEL", "qwen.q3:0"),
+            ("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE"),
+            (
+                "AWS_SECRET_ACCESS_KEY",
+                "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            ),
+        ];
+        let br = ep("bedrock", &pairs);
+        let secs = 1_440_938_160;
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let r = request_at(&br, "S", "U", &dec(), false, t);
+        let names: Vec<&str> = r.headers.iter().map(|(k, _)| *k).collect();
+        assert_eq!(names, ["host", "x-amz-date", "authorization"]);
+        assert_eq!(r.headers[0].1, "bedrock-runtime.eu-west-2.amazonaws.com");
+        assert_eq!(r.headers[1].1, "20150830T123600Z");
+        assert!(r.headers[2].1.starts_with(
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/eu-west-2/bedrock/aws4_request, \
+             SignedHeaders=content-type;host;x-amz-date, Signature="
+        ));
+        // Same input, same time: the same signature; the body is part of it.
+        assert_eq!(
+            request_at(&br, "S", "U", &dec(), false, t).headers,
+            r.headers
+        );
+        assert_ne!(
+            request_at(&br, "S", "V", &dec(), false, t).headers[2],
+            r.headers[2]
+        );
+        let dbg = format!("{r:?}");
+        assert!(!dbg.contains("Signature") && !dbg.contains("AKID"), "{dbg}");
     }
 
     #[test]

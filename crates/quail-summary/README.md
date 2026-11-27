@@ -340,7 +340,7 @@ let step = SummaryLlm::new(Arc::new(api), LlmConfig { enabled: true, ..LlmConfig
   `openai`, `openai_compatible`, `openrouter`, `groq`, `vllm`, `ollama`; also LM Studio, SGLang
   and llama.cpp's `llama-server`, so a self-hosted fine-tuned model is the `vllm` preset with
   `API_URL`); Anthropic Messages (`/v1/messages`, `x-api-key`, `anthropic-version: 2023-06-01`);
-  AWS Bedrock Converse (`/model/{id}/converse`) with a bearer token.
+  AWS Bedrock Converse (`/model/{id}/converse`) with a bearer token or IAM credentials.
 - **Configuration**, the same variables as hedgehog (`.env.example` at the repository root):
   each setting comes from the argument (`Connect`), then the process environment, then the
   `.env` file the caller names (`Env::with_file`; none is read otherwise), then the preset's
@@ -357,7 +357,32 @@ let step = SummaryLlm::new(Arc::new(api), LlmConfig { enabled: true, ..LlmConfig
   | `vllm` | `API_TOKEN` (optional) | `API_URL` (`/v1` appended) | `API_MODEL` |
   | `ollama` | `API_TOKEN` (optional) | `API_URL`, else `http://localhost:11434/v1` | `API_MODEL` |
   | `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`, else api.anthropic.com | `ANTHROPIC_MODEL`, else `claude-haiku-5-5` |
-  | `bedrock` | `AI_BEDROCK_BEARER_TOKEN` | `AI_BEDROCK_REGION` | `AI_BEDROCK_MODEL` |
+  | `bedrock` | `AI_BEDROCK_BEARER_TOKEN` (or `AWS_BEARER_TOKEN_BEDROCK`), else `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_SESSION_TOKEN`) | `AI_BEDROCK_REGION` (or `AWS_REGION`, `AWS_DEFAULT_REGION`), else the region of a `bedrock-runtime.<region>.amazonaws.com` base URL | `AI_BEDROCK_MODEL` |
+
+- **Bedrock authentication**, two ways:
+  - **Bearer token** (a Bedrock API key): `Authorization: Bearer <token>`. It wins when IAM
+    credentials are set too, so existing setups are unchanged.
+  - **IAM credentials**: an access key id, a secret access key and, for temporary credentials
+    (STS, an assumed role), a session token. Each request is signed with AWS Signature
+    Version 4 (`api::sigv4`: service `bedrock`, the endpoint's region; signed headers
+    `content-type`, `host`, `x-amz-date` and `x-amz-security-token`). Pure Rust on `sha2`, no
+    AWS SDK; tested against AWS's published SigV4 test vectors. A program passes them as
+    `AwsCredentials` to `Endpoint::resolve_with_aws`; the CLI reads the environment. AWS keys
+    alone do not make `bedrock` the auto-detected preset: set `AI_PROVIDER=bedrock` (or
+    `AI_BEDROCK_MODEL`). Profiles, SSO and instance roles are not read; pass the resolved
+    keys.
+
+  ```rust
+  use quail_summary::api::{AwsCredentials, Connect, Endpoint, Env};
+  let req = Connect {
+      provider: Some("bedrock".into()),
+      model: Some("qwen.qwen3-235b-a22b-2507-v1:0".into()),
+      base_url: Some("https://bedrock-runtime.eu-west-2.amazonaws.com".into()),
+      ..Connect::default()
+  };
+  let aws = AwsCredentials::new(key_id, secret).with_session_token(token);
+  let ep = Endpoint::resolve_with_aws(&req, Some(aws), &Env::process())?;
+  ```
 
 - **Same guarantees as the local model**: the same prompt and JSON output (the system message
   adds one sentence naming the JSON keys, `API_PROMPT_VERSION`), the same parser, the same fact

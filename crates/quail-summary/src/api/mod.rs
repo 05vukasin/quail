@@ -5,8 +5,8 @@
 //! - **Providers** ([`endpoint`]): `OpenAI` Chat Completions, which also covers
 //!   `openai_compatible`, `OpenRouter`, Groq, vLLM, Ollama, LM Studio and llama.cpp's
 //!   `llama-server` (so a self-hosted fine-tuned model works the same way); Anthropic
-//!   Messages; AWS Bedrock Converse with a bearer token. Presets and the environment variable
-//!   names are hedgehog's.
+//!   Messages; AWS Bedrock Converse with a bearer token or IAM credentials signed with `SigV4`
+//!   ([`sigv4`]). Presets and the environment variable names are hedgehog's.
 //! - **Same guarantees as the local model**: the same prompt ([`crate::prompt`]), the same
 //!   JSON parsing and the same fact check ([`crate::llm::checked_output`],
 //!   [`crate::mapreduce`]). An output that fails the check, an error, a refusal, a timeout or
@@ -24,7 +24,8 @@
 //!   (`AI_MAX_CONCURRENT_LLM`, default 4).
 //! - **Cache**: the [`SummarizerId`] fingerprint holds the protocol, the base URL's host, the
 //!   model, the prompt versions and the decoding settings, never the key.
-//! - **Keys** ([`Secret`]) are never logged, never in `Debug` output, never in errors.
+//! - **Keys** ([`Secret`], [`AwsCredentials`]) are never logged, never in `Debug` output, never
+//!   in errors.
 //! - **Training log** ([`log`], opt-in): one JSONL row per call with the text the model read
 //!   and wrote. It contains document text and must stay private.
 
@@ -32,6 +33,7 @@ pub mod endpoint;
 pub mod env;
 pub mod http;
 pub mod log;
+pub mod sigv4;
 pub mod wire;
 
 use std::sync::Arc;
@@ -40,7 +42,7 @@ use std::time::{Duration, Instant};
 
 use quail_core::{Error, Result};
 
-pub use endpoint::{Connect, Endpoint, Kind, Secret};
+pub use endpoint::{AwsCredentials, Connect, Endpoint, Kind, Secret};
 pub use env::Env;
 pub use http::{Limiter, RetryPolicy};
 pub use log::TrainingLog;
@@ -194,12 +196,20 @@ impl ApiSummarizer {
         }
     }
 
-    /// `s` with the key replaced by `***` (an error body that echoes it stays safe).
-    fn redact(&self, s: String) -> String {
-        match &self.ep.key {
-            Some(k) if k.expose().len() >= 4 => s.replace(k.expose(), "***"),
-            _ => s,
+    /// `s` with the key and the IAM credentials replaced by `***` (an error body that echoes
+    /// one stays safe).
+    fn redact(&self, mut s: String) -> String {
+        let aws = self
+            .ep
+            .aws
+            .iter()
+            .flat_map(endpoint::AwsCredentials::secrets);
+        for k in self.ep.key.iter().chain(aws) {
+            if k.expose().len() >= 4 {
+                s = s.replace(k.expose(), "***");
+            }
         }
+        s
     }
 
     /// One model call: the raw text, its usage and notes (an optional field was dropped).

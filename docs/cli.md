@@ -144,6 +144,12 @@ within the file's `--timeout`, and at most `AI_MAX_CONCURRENT_LLM` (default 4) r
 Identical documents are asked once per run. Not with `--isolate` yet. A build without the
 feature rejects `--llm` with an error naming it.
 
+`bedrock` authenticates with a bearer token (`AI_BEDROCK_BEARER_TOKEN` or
+`AWS_BEARER_TOKEN_BEDROCK`), else with IAM credentials (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY` and, for temporary credentials, `AWS_SESSION_TOKEN`), each request
+signed with AWS Signature Version 4. The bearer token wins when both are set. AWS profiles,
+SSO and instance roles are not read.
+
 ### Behaviour
 
 - **Every input gets a record.** A file that cannot be opened, a manifest entry that is
