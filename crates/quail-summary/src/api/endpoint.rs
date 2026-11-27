@@ -14,7 +14,14 @@
 //! | `vllm` (also `local`, `lmstudio`) | `API_TOKEN` (optional) | `API_URL` (required; `/v1` appended) | `API_MODEL` (required) |
 //! | `ollama` | `API_TOKEN` (optional) | `API_URL`, else `http://localhost:11434/v1` | `API_MODEL` (required) |
 //! | `anthropic` (also `claude`) | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`, else `https://api.anthropic.com` | `ANTHROPIC_MODEL`, else `claude-haiku-5-5` |
-//! | `bedrock` (also `aws`) | `AI_BEDROCK_BEARER_TOKEN` (or `AWS_BEARER_TOKEN_BEDROCK`) | region `AI_BEDROCK_REGION` (or `AWS_REGION`, `AWS_DEFAULT_REGION`) | `AI_BEDROCK_MODEL` (required) |
+//! | `bedrock` (also `aws`) | `AI_BEDROCK_BEARER_TOKEN` (or `AWS_BEARER_TOKEN_BEDROCK`), else IAM credentials `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` (optional) | region `AI_BEDROCK_REGION` (or `AWS_REGION`, `AWS_DEFAULT_REGION`), else the region of a `bedrock-runtime.<region>.amazonaws.com` base URL | `AI_BEDROCK_MODEL` (required) |
+//!
+//! **Bedrock authentication**: a bearer token (a Bedrock API key) is sent as
+//! `Authorization: Bearer`. Without one, IAM credentials ([`AwsCredentials`], from
+//! [`Endpoint::resolve_with_aws`] or the environment) sign each request with AWS Signature
+//! Version 4 ([`super::sigv4`], service `bedrock`, the endpoint's region). When both are set the
+//! bearer token wins. The region comes from the caller ([`Connect::region`]), else from a
+//! regional base URL, else from the environment.
 //!
 //! `AI_PROVIDER` picks the preset when the caller names none; when it is unset too and exactly
 //! one preset has credentials, that one is used. `AI_CHAT_MODEL` is the last model fallback,
@@ -75,6 +82,65 @@ impl fmt::Debug for Secret {
     }
 }
 
+/// IAM credentials for Bedrock: an access key id, a secret access key and, for temporary
+/// credentials (STS, an assumed role), a session token. Each is a [`Secret`], so `Debug`
+/// shows none of them; requests are signed with `SigV4` ([`super::sigv4`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AwsCredentials {
+    /// `AWS_ACCESS_KEY_ID`.
+    pub access_key_id: Secret,
+    /// `AWS_SECRET_ACCESS_KEY`.
+    pub secret_access_key: Secret,
+    /// `AWS_SESSION_TOKEN`, sent as `x-amz-security-token`.
+    pub session_token: Option<Secret>,
+}
+
+impl AwsCredentials {
+    /// Long-term credentials (no session token).
+    pub fn new(access_key_id: impl Into<String>, secret_access_key: impl Into<String>) -> Self {
+        Self {
+            access_key_id: Secret::new(access_key_id),
+            secret_access_key: Secret::new(secret_access_key),
+            session_token: None,
+        }
+    }
+
+    /// The same with a session token.
+    #[must_use]
+    pub fn with_session_token(mut self, token: impl Into<String>) -> Self {
+        self.session_token = Some(Secret::new(token));
+        self
+    }
+
+    /// From `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` (optional);
+    /// `None` unless both of the first two are set, an error when only one is.
+    pub fn from_env(env: &Env) -> Result<Option<Self>> {
+        match (env.get("AWS_ACCESS_KEY_ID"), env.get("AWS_SECRET_ACCESS_KEY")) {
+            (Some(id), Some(secret)) => {
+                let mut c = Self::new(id, secret);
+                c.session_token = env.get("AWS_SESSION_TOKEN").map(Secret::new);
+                Ok(Some(c))
+            }
+            (None, None) => Ok(None),
+            (Some(_), None) => Err(config(
+                "bedrock IAM credentials: AWS_ACCESS_KEY_ID is set but AWS_SECRET_ACCESS_KEY is not"
+                    .to_owned(),
+            )),
+            (None, Some(_)) => Err(config(
+                "bedrock IAM credentials: AWS_SECRET_ACCESS_KEY is set but AWS_ACCESS_KEY_ID is not"
+                    .to_owned(),
+            )),
+        }
+    }
+
+    /// Every secret value, for redaction.
+    pub(crate) fn secrets(&self) -> impl Iterator<Item = &Secret> {
+        [&self.access_key_id, &self.secret_access_key]
+            .into_iter()
+            .chain(self.session_token.as_ref())
+    }
+}
+
 /// The wire protocol of an endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -82,7 +148,8 @@ pub enum Kind {
     OpenAi,
     /// Anthropic Messages (`POST {base}/v1/messages`).
     Anthropic,
-    /// AWS Bedrock Converse (`POST {base}/model/{model}/converse`) with a bearer token.
+    /// AWS Bedrock Converse (`POST {base}/model/{model}/converse`) with a bearer token or
+    /// `SigV4`-signed IAM credentials.
     Bedrock,
 }
 
@@ -299,9 +366,12 @@ pub struct Endpoint {
     pub base_url: String,
     /// Model id.
     pub model: String,
-    /// Key or bearer token; `None` for a local server that needs none.
+    /// Key or bearer token; `None` for a local server that needs none, and for Bedrock with
+    /// IAM credentials.
     pub key: Option<Secret>,
-    /// Bedrock region.
+    /// Bedrock IAM credentials, used only when [`Self::key`] is `None` (a bearer token wins).
+    pub aws: Option<AwsCredentials>,
+    /// Bedrock region (also the `SigV4` signing region).
     pub region: Option<String>,
     /// How thinking is switched off.
     pub thinking: ThinkingOff,
@@ -311,8 +381,15 @@ pub struct Endpoint {
 
 impl Endpoint {
     /// Resolves `req` against `env` (see the module docs for the order).
-    #[allow(clippy::too_many_lines)] // one table of presets, in order
     pub fn resolve(req: &Connect, env: &Env) -> Result<Self> {
+        Self::resolve_with_aws(req, None, env)
+    }
+
+    /// [`Self::resolve`] with Bedrock IAM credentials from the caller: they come before
+    /// `AWS_ACCESS_KEY_ID` and friends in `env`, and a bearer token (from `req` or `env`) still
+    /// wins over both. Other presets ignore `aws`.
+    #[allow(clippy::too_many_lines)] // one table of presets, in order
+    pub fn resolve_with_aws(req: &Connect, aws: Option<AwsCredentials>, env: &Env) -> Result<Self> {
         let env_provider = env.get("AI_PROVIDER");
         let name = if let Some(n) = req.provider.clone().or_else(|| env_provider.clone()) {
             n
@@ -359,6 +436,7 @@ impl Endpoint {
             base_url: String::new(),
             model: String::new(),
             key: None,
+            aws: None,
             region: None,
             thinking: p.thinking,
             max_concurrent,
@@ -416,15 +494,26 @@ impl Endpoint {
             }
             Kind::Bedrock => {
                 let key = key.or_else(|| env.get("AWS_BEARER_TOKEN_BEDROCK").map(Secret::new));
-                ep.key = Some(key.ok_or_else(|| {
-                    config(
-                        "bedrock needs an API key (bearer token): set AI_BEDROCK_BEARER_TOKEN"
-                            .to_owned(),
-                    )
-                })?);
+                if key.is_some() {
+                    ep.key = key;
+                } else {
+                    let aws = match aws {
+                        Some(c) => Some(c),
+                        None => AwsCredentials::from_env(env)?,
+                    };
+                    ep.aws = Some(aws.ok_or_else(|| {
+                        config(
+                            "bedrock needs an API key (bearer token) or IAM credentials: set \
+                             AI_BEDROCK_BEARER_TOKEN, or AWS_ACCESS_KEY_ID and \
+                             AWS_SECRET_ACCESS_KEY"
+                                .to_owned(),
+                        )
+                    })?);
+                }
                 let region = req
                     .region
                     .clone()
+                    .or_else(|| req.base_url.as_deref().and_then(bedrock_region))
                     .or_else(|| env.get(p.url_env))
                     .or_else(|| env.get("AWS_REGION"))
                     .or_else(|| env.get("AWS_DEFAULT_REGION"))
@@ -478,6 +567,21 @@ impl Endpoint {
     }
 }
 
+/// The region of a `https://bedrock-runtime[-fips].<region>.amazonaws.com[...]` URL.
+pub fn bedrock_region(url: &str) -> Option<String> {
+    let host = host_of(url).to_ascii_lowercase();
+    let host = host.split(':').next().unwrap_or("");
+    let region = host
+        .strip_prefix("bedrock-runtime.")
+        .or_else(|| host.strip_prefix("bedrock-runtime-fips."))?
+        .strip_suffix(".amazonaws.com")?;
+    (!region.is_empty()
+        && region
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'))
+    .then(|| region.to_owned())
+}
+
 /// Percent-encodes a path segment (Bedrock model ids hold `:`).
 fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -491,7 +595,9 @@ fn encode(s: &str) -> String {
     out
 }
 
-/// Presets that have credentials in `env` (names only): a key, or for `vllm` its URL.
+/// Presets that have credentials in `env` (names only): a key, or for `vllm` its URL. Bedrock
+/// counts with a bearer token, or with IAM credentials and `AI_BEDROCK_MODEL` (AWS keys alone
+/// are common in an environment and do not mean Bedrock).
 pub fn available(env: &Env) -> Vec<&'static str> {
     let mut out = Vec::new();
     for name in [
@@ -506,7 +612,10 @@ pub fn available(env: &Env) -> Vec<&'static str> {
         let ok = match name {
             "vllm" => env.get(p.url_env).is_some(),
             "bedrock" => {
-                env.get(p.key_env).is_some() || env.get("AWS_BEARER_TOKEN_BEDROCK").is_some()
+                env.get(p.key_env).is_some()
+                    || env.get("AWS_BEARER_TOKEN_BEDROCK").is_some()
+                    || (matches!(AwsCredentials::from_env(env), Ok(Some(_)))
+                        && env.get(p.model_env).is_some())
             }
             _ => env.get(p.key_env).is_some(),
         };
@@ -695,6 +804,127 @@ mod tests {
         )
         .unwrap();
         assert_eq!(e.max_concurrent, DEFAULT_MAX_CONCURRENT);
+    }
+
+    #[test]
+    fn bedrock_with_iam_credentials() {
+        let base = [
+            ("AI_BEDROCK_REGION", "eu-west-2"),
+            ("AI_BEDROCK_MODEL", "m"),
+            ("AWS_ACCESS_KEY_ID", "AKIDTEST"),
+            ("AWS_SECRET_ACCESS_KEY", "SECRET-KEY-123"),
+        ];
+        let e = resolve(Some("bedrock"), &base).unwrap();
+        assert!(e.key.is_none());
+        let c = e.aws.clone().unwrap();
+        assert_eq!(c.access_key_id.expose(), "AKIDTEST");
+        assert!(c.session_token.is_none());
+        let dbg = format!("{e:?}");
+        assert!(
+            !dbg.contains("AKIDTEST") && !dbg.contains("SECRET-KEY"),
+            "{dbg}"
+        );
+        let mut pairs = base.to_vec();
+        pairs.push(("AWS_SESSION_TOKEN", "TOKEN-1"));
+        let e = resolve(Some("bedrock"), &pairs).unwrap();
+        assert_eq!(
+            e.aws.unwrap().session_token.map(|t| t.expose().to_owned()),
+            Some("TOKEN-1".to_owned())
+        );
+        // A bearer token wins over IAM credentials.
+        pairs.push(("AWS_BEARER_TOKEN_BEDROCK", "bearer"));
+        let e = resolve(Some("bedrock"), &pairs).unwrap();
+        assert_eq!(e.key.map(|k| k.expose().to_owned()), Some("bearer".into()));
+        assert!(e.aws.is_none());
+        // Caller credentials come before the environment's.
+        let req = Connect {
+            provider: Some("bedrock".into()),
+            ..Connect::default()
+        };
+        let e = Endpoint::resolve_with_aws(
+            &req,
+            Some(AwsCredentials::new("AKIDARG", "s").with_session_token("t")),
+            &env(&base),
+        )
+        .unwrap();
+        assert_eq!(e.aws.unwrap().access_key_id.expose(), "AKIDARG");
+        // Half a key pair is an error that names the missing variable, never the value.
+        let msg = resolve(
+            Some("bedrock"),
+            &[
+                ("AI_BEDROCK_REGION", "eu-west-2"),
+                ("AI_BEDROCK_MODEL", "m"),
+                ("AWS_ACCESS_KEY_ID", "AKIDTEST"),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            msg.contains("AWS_SECRET_ACCESS_KEY") && !msg.contains("AKIDTEST"),
+            "{msg}"
+        );
+        let msg = resolve(
+            Some("bedrock"),
+            &[
+                ("AI_BEDROCK_REGION", "eu-west-2"),
+                ("AI_BEDROCK_MODEL", "m"),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            msg.contains("needs an API key") && msg.contains("AWS_ACCESS_KEY_ID"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn bedrock_region_from_the_base_url() {
+        let req = Connect {
+            provider: Some("bedrock".into()),
+            model: Some("m".into()),
+            base_url: Some("https://bedrock-runtime.us-east-1.amazonaws.com/".into()),
+            api_key: Some(Secret::new("t")),
+            region: None,
+        };
+        let e = Endpoint::resolve(&req, &env(&[("AWS_REGION", "eu-west-2")])).unwrap();
+        assert_eq!(e.region.as_deref(), Some("us-east-1"));
+        assert_eq!(
+            e.url(),
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse"
+        );
+        let e = Endpoint::resolve(
+            &Connect {
+                region: Some("ap-south-1".into()),
+                ..req.clone()
+            },
+            &env(&[]),
+        )
+        .unwrap();
+        assert_eq!(e.region.as_deref(), Some("ap-south-1"), "the argument wins");
+        assert_eq!(
+            bedrock_region("https://bedrock-runtime-fips.us-west-2.amazonaws.com"),
+            Some("us-west-2".into())
+        );
+        assert_eq!(bedrock_region("http://127.0.0.1:9000"), None);
+        assert_eq!(
+            bedrock_region("https://bedrock-runtime..amazonaws.com"),
+            None
+        );
+    }
+
+    #[test]
+    fn aws_keys_alone_do_not_select_bedrock() {
+        let keys = [
+            ("AWS_ACCESS_KEY_ID", "AKIDTEST"),
+            ("AWS_SECRET_ACCESS_KEY", "s"),
+            ("GROQ_API_KEY", "k"),
+            ("GROQ_MODEL", "llama"),
+        ];
+        assert_eq!(available(&env(&keys)), ["groq"]);
+        let mut pairs = keys.to_vec();
+        pairs.push(("AI_BEDROCK_MODEL", "m"));
+        assert_eq!(available(&env(&pairs)), ["bedrock", "groq"]);
     }
 
     #[test]

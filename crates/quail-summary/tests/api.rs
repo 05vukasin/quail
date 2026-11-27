@@ -18,7 +18,8 @@ use quail_core::{
 };
 use quail_engine::EngineBuilder;
 use quail_summary::api::{
-    ApiConfig, ApiSummarizer, Connect, Endpoint, Env, Limiter, RetryPolicy, Secret, TrainingLog,
+    ApiConfig, ApiSummarizer, AwsCredentials, Connect, Endpoint, Env, Limiter, RetryPolicy, Secret,
+    TrainingLog,
 };
 use quail_summary::summarizer::checked_or_extractive;
 use quail_summary::{
@@ -317,6 +318,175 @@ fn bedrock_success() {
         b["system"][0]["text"].as_str().map(|s| s.contains("JSON")),
         Some(true)
     );
+}
+
+const AWS_ID: &str = "AKIDMOCK0123456789";
+const AWS_SECRET: &str = "mock/SECRET/access/key/0123456789";
+const AWS_TOKEN: &str = "mock-SESSION-token-0123456789";
+
+/// The `Authorization` header of a `SigV4` request, split up.
+struct SigV4Header {
+    credential: String,
+    signed: Vec<String>,
+    signature: String,
+}
+
+fn parse_sigv4(h: &str) -> SigV4Header {
+    let rest = h
+        .strip_prefix("AWS4-HMAC-SHA256 ")
+        .unwrap_or_else(|| panic!("not SigV4: {h}"));
+    let mut parts = rest.split(", ");
+    let mut field = |name: &str| {
+        let p = parts.next().unwrap();
+        p.strip_prefix(name)
+            .unwrap_or_else(|| panic!("{name} missing in {h}"))
+            .to_owned()
+    };
+    let credential = field("Credential=");
+    let signed = field("SignedHeaders=")
+        .split(';')
+        .map(str::to_owned)
+        .collect();
+    let signature = field("Signature=");
+    SigV4Header {
+        credential,
+        signed,
+        signature,
+    }
+}
+
+/// The server's side of `SigV4`: the signature recomputed from the request as received.
+fn verify_sigv4(seen: &Seen, secret: &str) -> SigV4Header {
+    use quail_summary::api::sigv4::{Scope, Signable, authorization};
+    let h = parse_sigv4(seen.header("authorization").unwrap());
+    let date = seen.header("x-amz-date").unwrap();
+    assert_eq!(date.len(), 16, "{date}");
+    assert!(date.ends_with('Z') && date.as_bytes()[8] == b'T', "{date}");
+    let cred: Vec<&str> = h.credential.split('/').collect();
+    assert_eq!(cred.len(), 5, "{}", h.credential);
+    assert_eq!((cred[1], cred[4]), (&date[..8], "aws4_request"));
+    for must in ["host", "x-amz-date"] {
+        assert!(h.signed.iter().any(|s| s == must), "{must} not signed");
+    }
+    let mut sorted = h.signed.clone();
+    sorted.sort();
+    assert_eq!(sorted, h.signed, "signed headers are sorted");
+    let headers: Vec<(&str, &str)> = h
+        .signed
+        .iter()
+        .map(|n| {
+            let v = seen
+                .header(n)
+                .unwrap_or_else(|| panic!("signed header {n} was not sent"));
+            (n.as_str(), v)
+        })
+        .collect();
+    let mut words = seen.line.split(' ');
+    let method = words.next().unwrap();
+    let target = words.next().unwrap();
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let creds = AwsCredentials::new(cred[0], secret);
+    let scope = Scope {
+        amz_date: date,
+        region: cred[2],
+        service: cred[3],
+    };
+    let expected = authorization(
+        &creds,
+        &scope,
+        &Signable {
+            method,
+            path,
+            query,
+            headers: &headers,
+            payload: seen.body.as_bytes(),
+        },
+    );
+    assert_eq!(
+        parse_sigv4(&expected).signature,
+        h.signature,
+        "bad signature"
+    );
+    h
+}
+
+fn bedrock_iam(mock: &Mock, aws: AwsCredentials) -> ApiSummarizer {
+    let req = Connect {
+        provider: Some("bedrock".to_owned()),
+        model: Some("qwen.q3:0".to_owned()),
+        base_url: Some(format!("http://{}", mock.addr)),
+        api_key: None,
+        region: Some("eu-west-2".to_owned()),
+    };
+    let none = Env::from_map(Vec::<(String, String)>::new());
+    ApiSummarizer::new(
+        Endpoint::resolve_with_aws(&req, Some(aws), &none).unwrap(),
+        cfg(),
+    )
+}
+
+fn bedrock_reply() -> Reply {
+    ok(serde_json::json!({
+        "output": {"message": {"role": "assistant", "content": [{"text": GOOD}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 400, "outputTokens": 50, "totalTokens": 450}
+    })
+    .to_string())
+}
+
+#[test]
+fn bedrock_iam_credentials_are_signed_with_sigv4() {
+    let mut mock = Mock::serve(vec![bedrock_reply(), bedrock_reply()]);
+    let s = bedrock_iam(&mock, AwsCredentials::new(AWS_ID, AWS_SECRET));
+    assert!(with_input(|i| s.summarize(i)).unwrap().checked);
+    let s = bedrock_iam(
+        &mock,
+        AwsCredentials::new(AWS_ID, AWS_SECRET).with_session_token(AWS_TOKEN),
+    );
+    assert!(with_input(|i| s.summarize(i)).unwrap().checked);
+    let seen = mock.seen();
+    assert_eq!(seen.len(), 2);
+    for (n, r) in seen.iter().enumerate() {
+        assert_eq!(r.line, "POST /model/qwen.q3%3A0/converse HTTP/1.1");
+        assert_eq!(r.header("host"), Some(mock.addr.to_string().as_str()));
+        let h = verify_sigv4(r, AWS_SECRET);
+        assert!(h.credential.starts_with(&format!("{AWS_ID}/")));
+        assert!(h.credential.ends_with("/eu-west-2/bedrock/aws4_request"));
+        assert_eq!(h.signature.len(), 64);
+        let with_token = n == 1;
+        assert_eq!(
+            r.header("x-amz-security-token"),
+            with_token.then_some(AWS_TOKEN)
+        );
+        assert_eq!(
+            h.signed.iter().any(|s| s == "x-amz-security-token"),
+            with_token
+        );
+        assert!(h.signed.iter().any(|s| s == "content-type"));
+        assert!(!r.headers.iter().any(|(_, v)| v.contains(AWS_SECRET)));
+    }
+    // A wrong secret does not verify (the check above is not vacuous).
+    let bad = std::panic::catch_unwind(|| verify_sigv4(&seen[0], "another-secret"));
+    assert!(bad.is_err());
+}
+
+#[test]
+fn bedrock_iam_secrets_never_leak_into_errors() {
+    let echo = format!(r#"{{"message": "denied for {AWS_ID} with {AWS_SECRET} and {AWS_TOKEN}"}}"#);
+    let mock = Mock::serve(vec![status(403, &echo)]);
+    let s = bedrock_iam(
+        &mock,
+        AwsCredentials::new(AWS_ID, AWS_SECRET).with_session_token(AWS_TOKEN),
+    );
+    let err = with_input(|i| s.summarize(i)).unwrap_err().to_string();
+    assert!(err.contains("403"), "{err}");
+    for secret in [AWS_ID, AWS_SECRET, AWS_TOKEN] {
+        assert!(!err.contains(secret), "{err}");
+    }
+    let dbg = format!("{s:?}");
+    for secret in [AWS_ID, AWS_SECRET, AWS_TOKEN] {
+        assert!(!dbg.contains(secret), "{dbg}");
+    }
 }
 
 #[test]
