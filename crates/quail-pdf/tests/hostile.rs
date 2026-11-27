@@ -671,8 +671,9 @@ fn costly_forms_in_a_fanout_are_cut_by_the_form_data_cap() {
         let bytes = heavy_fanout_pdf(levels, heavy, junk);
         let t = Instant::now();
         let r = run(bytes, &Limits::default());
+        // Generous for slow CI runners (Windows debug: ~5 s); before the fix this took ~100 s.
         assert!(
-            t.elapsed() < Duration::from_secs(5),
+            t.elapsed() < Duration::from_secs(20),
             "{heavy}: {:?}",
             t.elapsed()
         );
