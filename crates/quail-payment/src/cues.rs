@@ -1,5 +1,5 @@
 //! Cue phrases, in folded form (lowercase, no diacritics, Cyrillic → Latin): a trailing `*`
-//! matches any ending (`naknad*` covers `naknada`, `naknade`, `naknadu`). Punctuation
+//! matches any ending (`iznos*` covers `iznos`, `iznosi`, `iznosu`). Punctuation
 //! between the words of a phrase is skipped (`PDV-a` reads as `pdv a`).
 
 /// How strongly a cue says "this is the price".
@@ -95,7 +95,10 @@ pub const PRICE: &[(&[&str], Cue)] = &[
     (&["godisnja", "naknada"], (F, Role::Plain, Some(Period::Yearly))),
     (&["kvartalna", "naknada"], (F, Role::Plain, Some(Period::Quarterly))),
     (&["jednokratna", "naknada"], (F, Role::Plain, Some(Period::OneOff))),
-    (&["naknad*"], (F, Role::Plain, None)),
+    (&["naknada"], (F, Role::Plain, None)),
+    (&["naknade"], (F, Role::Plain, None)),
+    (&["naknadu"], (F, Role::Plain, None)),
+    (&["naknadom"], (F, Role::Plain, None)),
     (&["cena"], (F, Role::Plain, None)),
     (&["cenu"], (F, Role::Plain, None)),
     (&["honorar*"], (F, Role::Plain, None)),
@@ -269,7 +272,7 @@ pub const NOT_PRICE: &[&str] = &[
 /// Words that mark a line as being about paying (for a period cue away from the amount:
 /// `Naknada se plaća mesečno`).
 pub const PAY_WORDS: &[&str] = &[
-    "naknad*", "plac*", "plat*", "uplat*", "fakturis*", "faktur*", "cen*", "zakupnin*", "fee",
+    "naknada", "naknade", "naknadu", "plac*", "plat*", "uplat*", "fakturis*", "faktur*", "cen*", "zakupnin*", "fee",
     "fees", "pay*", "invoic*", "billed", "price", "rent", "charge*",
 ];
 
