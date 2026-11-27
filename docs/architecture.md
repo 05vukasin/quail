@@ -26,6 +26,9 @@ exact keys, ids and limits.
 | `quail-parties` | company mentions, roles, defined terms, ranked party candidates | `party.*` |
 | `quail-clauses` | governing law, term and renewal, notice and survival periods, termination | `clause.*` |
 | `quail-items` | price lines (description, quantity, unit, prices) with CPV categories | `item.*` |
+| `quail-payment` | what is paid for and how much: subject, category, net/VAT/gross price, currency, period, lines, with highlights (finalizer) | `payment.*` |
+| `quail-contract` | key contract and invoice facts with highlights: parties and identifiers, term, payment terms, obligations, law and disputes, annexes (finalizer) | `contract.*` |
+| `quail-card` | the normalised key-facts card from the other steps' facts, with highlights (finalizer) | `card.*` |
 | `quail-sketch` | similarity sketches: MinHash + LSH bands, SimHashes, layout, page pHash | `sketch.*` |
 | `quail-summary` | the file card and extractive summary (finalizers); optional local LLM summary | `summary.*` |
 | `quail-ocr` | OCR of pages without a usable text layer (native backend; in `quail` with `--features ocr`, profile `deep`) | `ocr.*` |

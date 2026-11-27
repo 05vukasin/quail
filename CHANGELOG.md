@@ -15,6 +15,39 @@
 - `docx.extract@2`: `docx.w15_doc_id` (Text), the `w15:docId/@w15:val` of
   `word/settings.xml`, as written, trimmed (braces kept). `w14:docId` is not read.
 
+### Key contract facts and the key-facts card (#129)
+
+- New step `contract.facts@1` (`quail-contract`, feature `contract`, in the default build): the
+  key facts of a contract or invoice, each with a `contract.highlight`, on native and OCR text,
+  in Serbian (Latin and Cyrillic) and English: parties with their role, identifiers (PIB, MB,
+  VAT, registration number, accounts, IBAN, BIC), address, representative and signatories;
+  term, renewal, notice period and termination rights; days to pay, payment method, advance,
+  indexation and late-payment interest; penalties, guarantees, liability caps,
+  confidentiality, service levels, deadlines and the warranty period; governing law, court,
+  arbitration and language; annexes and what an amendment changes. It reuses the facts of
+  the other steps (`party.company`, `signal.*` identifiers and dates, `clause.*`, `ref.*`)
+  instead of finding them again. Nothing is guessed: a fact without a cue is absent.
+- New step `card.facts@1` (`quail-card`, feature `card`, in the default build): the
+  normalised key-facts card `card.*`, one canonical value per field (ISO dates, money,
+  durations in months or days, codes), with `card.text` and a `card.highlight` per source
+  fact.
+- `quail-fuzz` runs both steps.
+
+### Payment facts (#128)
+
+- New step `payment.extract@1` (`quail-payment`, feature `payment`, in the default build): what
+  a contract, offer or invoice is paid for and how much, on native and OCR text alike, in
+  Serbian (Latin and Cyrillic) and English. Keys: `payment.subject`, `payment.category` (a
+  keyword taxonomy in one table), `payment.amount` with `payment.amount_basis`,
+  `payment.currency`, `payment.net`, `payment.vat`, `payment.gross`, `payment.period`,
+  `payment.lines` (from `item.line`) and `payment.highlight`. Nothing is guessed: a fact
+  without a cue is absent.
+- `quail_core::highlight`: one shared highlight shape (`key page block start end quote`, the
+  fact's `conf`) and `BlockIndex`, which numbers blocks as doewood's `GetDocumentText` does,
+  for every step that highlights its facts. Documented in `docs/keys.md`.
+- `quail-fuzz` runs `item.lines` and `payment.extract`, and forwards `after` and `finalizer`
+  of the wrapped steps.
+
 ### PPTX and HTML (#120)
 
 - New extractors `pptx.extract@1` (`quail-pptx`) and `html.extract@1` (`quail-html`), in

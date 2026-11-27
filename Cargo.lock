@@ -2925,6 +2925,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "quail-card"
+version = "0.1.0"
+dependencies = [
+ "quail-clauses",
+ "quail-contract",
+ "quail-core",
+ "quail-items",
+ "quail-parties",
+ "quail-payment",
+ "quail-refs",
+ "quail-signals",
+]
+
+[[package]]
 name = "quail-clauses"
 version = "0.1.0"
 dependencies = [
@@ -2938,8 +2952,10 @@ dependencies = [
  "clap",
  "ctrlc",
  "lopdf",
+ "quail-card",
  "quail-clauses",
  "quail-cli",
+ "quail-contract",
  "quail-core",
  "quail-docx",
  "quail-engine",
@@ -2950,6 +2966,7 @@ dependencies = [
  "quail-items",
  "quail-ocr",
  "quail-parties",
+ "quail-payment",
  "quail-pdf",
  "quail-pptx",
  "quail-refs",
@@ -2962,6 +2979,19 @@ dependencies = [
  "serde_json",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "quail-contract"
+version = "0.1.0"
+dependencies = [
+ "quail-clauses",
+ "quail-core",
+ "quail-parties",
+ "quail-payment",
+ "quail-refs",
+ "quail-signals",
+ "quail-text",
 ]
 
 [[package]]
@@ -3018,12 +3048,16 @@ version = "0.1.0"
 dependencies = [
  "lopdf",
  "miniz_oxide 0.8.9",
+ "quail-card",
+ "quail-contract",
  "quail-core",
  "quail-docx",
  "quail-engine",
  "quail-hash",
  "quail-html",
+ "quail-items",
  "quail-parties",
+ "quail-payment",
  "quail-pdf",
  "quail-pptx",
  "quail-refs",
@@ -3114,6 +3148,15 @@ dependencies = [
  "quail-text",
  "serde_json",
  "unicode-normalization",
+]
+
+[[package]]
+name = "quail-payment"
+version = "0.1.0"
+dependencies = [
+ "quail-core",
+ "quail-items",
+ "quail-text",
 ]
 
 [[package]]

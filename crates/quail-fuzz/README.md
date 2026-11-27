@@ -33,7 +33,7 @@ stderr tail, and a line in `crashes/summary.tsv`.
 The engine as `quail-cli` wires it, in the `Deep` profile: `hash.identity`, `docx.extract`,
 `pptx.extract`, `html.extract`, `pdf.extract` (with its `raster`), `text.stats`, `text.lang`, `signal.scan`, `ref.references`,
 `party.candidates`, every `sketch.*` analyzer including `sketch.page_phash` (renders through the
-raster), plus a fuzz-only plain-text extractor (`fuzz.text@1`: pages at form feeds, a block per
+raster), `item.lines` and the `payment.extract`, `contract.facts` and `card.facts` finalizers, plus a fuzz-only plain-text extractor (`fuzz.text@1`: pages at form feeds, a block per
 line) so the text analyzers see the tricky-Unicode inputs. After the engine, when the extractor
 provided a `Raster`, the first two pages are rendered at 36 dpi and their embedded scans decoded
 (`QF-STEP render`): this is the OCR path, which runs outside the engine's panic containment.

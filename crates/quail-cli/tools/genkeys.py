@@ -21,6 +21,8 @@ SPECS = [
     ("CLAUSES", "quail_clauses::keys", "quail-clauses/src/lib.rs", "keys", "clauses"),
     ("SKETCH", "quail_sketch::keys", "quail-sketch/src/lib.rs", "keys", "sketch"),
     ("ITEMS", "quail_items::keys", "quail-items/src/lib.rs", "keys", "items"),
+    ("CONTRACT", "quail_contract::keys", "quail-contract/src/lib.rs", "keys", "contract"),
+    ("CARD", "quail_card::keys", "quail-card/src/lib.rs", "keys", "card"),
     ("SUMMARY", "quail_summary::keys", "quail-summary/src/lib.rs", "keys", "summary"),
     ("OCR", "quail_ocr::keys", "quail-ocr/src/lib.rs", "keys", "ocr"),
 ]

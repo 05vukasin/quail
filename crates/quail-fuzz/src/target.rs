@@ -100,6 +100,12 @@ impl<A: Analyzer> Analyzer for Traced<A> {
     fn provides(&self) -> &'static [&'static str] {
         self.0.provides()
     }
+    fn after(&self) -> &'static [&'static str] {
+        self.0.after()
+    }
+    fn finalizer(&self) -> bool {
+        self.0.finalizer()
+    }
     fn profile(&self) -> Profile {
         self.0.profile()
     }
@@ -365,7 +371,12 @@ impl Target {
             .analyzer(Box::new(Traced(quail_sketch::InvoiceLayout)))
             .analyzer(Box::new(Traced(quail_sketch::TextKey)))
             .analyzer(Box::new(Traced(quail_sketch::CompatMinHash)))
-            .analyzer(Box::new(Traced(quail_sketch::PagePHash)));
+            .analyzer(Box::new(Traced(quail_sketch::PagePHash)))
+            .analyzer(Box::new(Traced(quail_items::ItemLines::new())))
+            // A finalizer: runs after the others, on their facts.
+            .analyzer(Box::new(Traced(quail_payment::PaymentExtract)))
+            .analyzer(Box::new(Traced(quail_contract::ContractFacts)))
+            .analyzer(Box::new(Traced(quail_card::KeyFactsCard)));
         // quail's own panic hook would hide panic locations; ours is installed afterwards.
         let engine = match b.build() {
             Ok(e) => e,

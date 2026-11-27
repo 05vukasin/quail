@@ -21,6 +21,9 @@ crates/
   quail-parties  company and role candidates                                namespace party.*
   quail-clauses  governing law, term, notice, survival, termination         namespace clause.*
   quail-items    price lines with CPV categories                            namespace item.*
+  quail-payment  subject, category, price, period and lines of a payment     namespace payment.*
+  quail-contract key contract facts: parties, term, obligations, law         namespace contract.*
+  quail-card     the normalised key-facts card                              namespace card.*
   quail-sketch   similarity sketches                                        namespace sketch.*
   quail-summary  file card, extractive and optional LLM summary             namespace summary.*
   quail-ocr      OCR of pages without a text layer (optional backend)       namespace ocr.*

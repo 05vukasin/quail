@@ -211,6 +211,9 @@ returns the `EngineBuilder` with everything this build has, `STEPS` documents ea
 | `clauses` (default) | quail-clauses | `clause.terms@1` |
 | `sketch` (default) | quail-sketch | `sketch.minhash@2`, `sketch.simhash_text@2`, `sketch.simhash_template@2`, `sketch.layout@2`, `sketch.invoice_layout@2`, `sketch.text_key@2` (Fast); `sketch.minhash_compat@3` (Standard: not in `--profile fast`); with `pdf`: `sketch.page_phash@4` (Standard, runs only on documents with a scanned page or a page needing OCR) |
 | `items` (default) | quail-items | `item.lines@6` (CPV categories from Standard) |
+| `payment` (default, needs `items`) | quail-payment | `payment.extract@1` (finalizer, before the summary steps) |
+| `contract` (default) | quail-contract | `contract.facts@1` (finalizer, after `payment.extract`) |
+| `card` (default) | quail-card | `card.facts@1` (finalizer, after `contract.facts`) |
 | `summary` (default) | quail-summary | `summary.card@4`, `summary.extractive@2`, `summary.outline@1`, `summary.keywords@1`, `summary.topics@1` (Standard, documents of 20+ pages) (finalizers); `summary.digest@3` is in the crate, not registered by default |
 | `ocr` | quail-ocr | `ocr.pages@2` (Deep only; PP-OCRv6 on ONNX Runtime, native, not default) and `quail models` |
 | `llm-api` | quail-summary (`api`) | `--llm`: `summary.llm@5` through an API (OpenAI-compatible, Anthropic, Bedrock), not default |
