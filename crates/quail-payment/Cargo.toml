@@ -1,0 +1,18 @@
+[package]
+name = "quail-payment"
+description = "What is paid for and how much: subject, category, price (net, VAT, gross), currency, period and line items of contracts and invoices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quail-core.workspace = true
+quail-text = { path = "../quail-text" }
+
+[dev-dependencies]
+quail-items = { path = "../quail-items" }
+
+[lints]
+workspace = true

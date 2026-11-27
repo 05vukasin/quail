@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Payment facts (#128)
+
+- New step `payment.extract@1` (`quail-payment`, feature `payment`, in the default build): what
+  a contract, offer or invoice is paid for and how much, on native and OCR text alike, in
+  Serbian (Latin and Cyrillic) and English. Keys: `payment.subject`, `payment.category` (a
+  keyword taxonomy in one table), `payment.amount` with `payment.amount_basis`,
+  `payment.currency`, `payment.net`, `payment.vat`, `payment.gross`, `payment.period`,
+  `payment.lines` (from `item.line`) and `payment.highlight`. Nothing is guessed: a fact
+  without a cue is absent.
+- `quail_core::highlight`: one shared highlight shape (`key page block start end quote`, the
+  fact's `conf`) and `BlockIndex`, which numbers blocks as doewood's `GetDocumentText` does,
+  for every step that highlights its facts. Documented in `docs/keys.md`.
+- `quail-fuzz` runs `item.lines` and `payment.extract`, and forwards `after` and `finalizer`
+  of the wrapped steps.
+
 ### PPTX and HTML (#120)
 
 - New extractors `pptx.extract@1` (`quail-pptx`) and `html.extract@1` (`quail-html`), in

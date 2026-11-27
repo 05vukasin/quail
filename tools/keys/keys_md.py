@@ -29,6 +29,7 @@ TITLES = {
     "party": "party: companies and roles",
     "clause": "clause: contract clauses",
     "item": "item: price lines",
+    "payment": "payment: what is paid for and how much",
     "sketch": "sketch: similarity sketches",
     "summary": "summary: file card and summaries",
     "ocr": "ocr: OCR",
@@ -75,6 +76,25 @@ def render(quail):
         if ns not in nss:
             nss.append(ns)
     w("Namespaces: " + " · ".join(f"[`{ns}`](#{ns})" for ns in nss))
+    w("")
+    w("## Highlights")
+    w("")
+    w("A step that highlights its facts emits, beside each fact, a `<namespace>.highlight` Record")
+    w("(`payment.highlight` today) with one shared shape, `quail_core::highlight::Highlight`:")
+    w("")
+    w("| field | meaning |")
+    w("|---|---|")
+    w("| `key` | the fact key it proves (`payment.amount`) |")
+    w("| `page` | the page index (0-based) |")
+    w("| `block` | the block's index among all the document's blocks, from 0 |")
+    w("| `start`, `end` | character range in that block's text (Unicode scalar values, end exclusive) |")
+    w("| `quote` | the block text between `start` and `end` |")
+    w("")
+    w("The fact's `conf` is the highlight's confidence and its evidence is the byte span in the page")
+    w("text. Blocks are numbered as doewood's `GetDocumentText` returns them for the same bytes and")
+    w("step versions: pages in order, blocks in reading order, blank blocks skipped, the cells of one")
+    w("table row merged into one block (each cell trimmed, a tab per column). A highlight never spans")
+    w("two blocks: a passage that runs on is cut at its block's end.")
     w("")
     w("## Steps")
     w("")
