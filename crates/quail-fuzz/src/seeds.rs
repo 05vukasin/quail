@@ -591,8 +591,27 @@ pub fn text_seeds() -> Vec<Vec<u8>> {
     bad.extend_from_slice(b"\xc0\xaf\xed\xa0\x80\xf4\x90\x80\x80\xff\xfe ");
     bad.extend_from_slice(BUSINESS[5].as_bytes());
     v.push(bad);
+    v.push(text_body(PAYMENT).into_bytes());
     v
 }
+
+/// Payment cues for `payment.extract`: subjects, prices with VAT markers, periods, rates,
+/// penalties, Latin and Cyrillic.
+const PAYMENT: &[&str] = &[
+    "UGOVOR O PRUŽANJU USLUGA ODRŽAVANJA SOFTVERA",
+    "Član 1. Predmet ugovora",
+    "Predmet ovog ugovora je pružanje usluga održavanja softvera Naručioca.",
+    "Ukupna vrednost ugovora iznosi 1.234.567,89 RSD bez PDV-a.",
+    "PDV (20%) iznosi 246.913,58 RSD.",
+    "Ukupno za uplatu:",
+    "1 481 481,47 RSD sa PDV-om",
+    "Предмет уговора: закуп пословног простора.",
+    "Месечна закупнина износи 1.500,00 EUR месечно.",
+    "Scope of Services: hosting and support.",
+    "The total fee is EUR 25,000.00 excluding VAT, USD 1,200.00 per month.",
+    "Subtotal: $1,500.00 Tax (8%): $120.00 Total: $1,620.00",
+    "Cena po satu 50,00 EUR. Ugovorna kazna iznosi 10.000,00 RSD.",
+];
 
 // -- PPTX -------------------------------------------------------------------------------------
 

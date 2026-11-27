@@ -202,6 +202,9 @@ fn features() -> Vec<&'static str> {
     if cfg!(feature = "items") {
         v.push("items");
     }
+    if cfg!(feature = "payment") {
+        v.push("payment");
+    }
     if cfg!(feature = "summary") {
         v.push("summary");
     }

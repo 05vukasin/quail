@@ -215,6 +215,13 @@ pub const STEPS: &[StepDoc] = &[
         formats: &[],
         doc: "Price items from tables and rate lines: description, quantity, unit, prices, CPV top-3.",
     },
+    #[cfg(feature = "payment")]
+    StepDoc {
+        id: quail_payment::PaymentExtract::ID,
+        kind: StepKind::Analyzer,
+        formats: &[],
+        doc: "What is paid for and how much (finalizer): subject, category, price with net/VAT/gross, currency, period, lines, highlights.",
+    },
     #[cfg(feature = "summary")]
     StepDoc {
         id: quail_summary::SummaryCard::ID,
@@ -365,7 +372,9 @@ pub fn builder_with(profile: Profile, limits: Limits, ocr: Option<&OcrSettings>)
     // Builds its CPV index once; shared by every worker.
     #[cfg(feature = "items")]
     let b = b.analyzer(Box::new(quail_items::ItemLines::new()));
-    // Finalizers: the engine runs them after every other step.
+    // Finalizers: the engine runs them after every other step, in this order.
+    #[cfg(feature = "payment")]
+    let b = b.analyzer(Box::new(quail_payment::PaymentExtract));
     #[cfg(feature = "summary")]
     let b = b
         .analyzer(Box::new(quail_summary::SummaryCard::new()))
@@ -405,6 +414,8 @@ pub fn key_tables() -> Vec<(&'static str, &'static [KeyDoc])> {
     v.push(("quail-sketch", keydocs::SKETCH));
     #[cfg(feature = "items")]
     v.push(("quail-items", keydocs::ITEMS));
+    #[cfg(feature = "payment")]
+    v.push(("quail-payment", keydocs::PAYMENT));
     #[cfg(feature = "summary")]
     v.push(("quail-summary", keydocs::SUMMARY));
     #[cfg(feature = "ocr")]
@@ -580,6 +591,8 @@ mod tests {
             ("quail-sketch", "quail-sketch/src/lib.rs"),
             #[cfg(feature = "items")]
             ("quail-items", "quail-items/src/lib.rs"),
+            #[cfg(feature = "payment")]
+            ("quail-payment", "quail-payment/src/lib.rs"),
             #[cfg(feature = "summary")]
             ("quail-summary", "quail-summary/src/lib.rs"),
             #[cfg(feature = "ocr")]

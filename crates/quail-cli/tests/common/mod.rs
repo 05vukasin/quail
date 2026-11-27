@@ -164,3 +164,123 @@ pub const CONTRACT: &[&str] = &[
     "and the customer shall pay every invoice within forty five days of receipt.",
     "Payments go to IBAN DE89 3704 0044 0532 0130 00. Total: EUR 4,200.50.",
 ];
+
+/// A PDF whose pages are the first `pages` pages of `pdf` rendered at `dpi` (8-bit gray) and
+/// drawn as one image each, without a text layer: what scanning the printed document gives.
+#[cfg(feature = "pdf")]
+pub fn scanned(pdf: &[u8], pages: u32, dpi: f32) -> Vec<u8> {
+    use quail_core::{Blob, Limits, PageRaster};
+    let raster = quail_pdf::PdfRaster::new(Blob::from(pdf.to_vec()));
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let mut kids = Vec::new();
+    for p in 0..pages {
+        let img = raster.render(p, dpi, &Limits::default()).unwrap();
+        let gray: Vec<u8> = match img.channels {
+            1 => img.data,
+            n => img
+                .data
+                .chunks_exact(usize::from(n))
+                .map(|px| px[0] / 3 + px[1] / 3 + px[2] / 3)
+                .collect(),
+        };
+        let image_id = doc.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => i64::from(img.width),
+                "Height" => i64::from(img.height),
+                "ColorSpace" => "DeviceGray",
+                "BitsPerComponent" => 8,
+            },
+            gray,
+        ));
+        let ops = vec![
+            Operation::new("q", vec![]),
+            Operation::new(
+                "cm",
+                vec![W.into(), 0.into(), 0.into(), H.into(), 0.into(), 0.into()],
+            ),
+            Operation::new("Do", vec!["Im1".into()]),
+            Operation::new("Q", vec![]),
+        ];
+        let content = Content { operations: ops };
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => dictionary! { "XObject" => dictionary! { "Im1" => image_id } },
+        });
+        kids.push(page_id.into());
+    }
+    let count = i64::try_from(kids.len()).unwrap();
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => kids,
+            "Count" => count,
+            "MediaBox" => vec![0.into(), 0.into(), W.into(), H.into()],
+        }),
+    );
+    let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog_id);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
+/// A Serbian service contract (Latin, written without diacritics, as Helvetica in WinAnsi
+/// cannot draw `č ć đ`): subject clause, net, VAT and gross, a penalty that is not the price.
+pub const PAY_SR_CONTRACT: &[&str] = &[
+    "UGOVOR O PRUZANJU USLUGA ODRZAVANJA SOFTVERA",
+    "zakljucen izmedju Alfa Soft d.o.o. i Beta Trgovina d.o.o.",
+    "Clan 1. Predmet ugovora",
+    "Predmet ovog ugovora je pruzanje usluga odrzavanja poslovnog softvera Narucioca.",
+    "Clan 2. Cena",
+    "Ukupna vrednost ugovora iznosi 1.234.567,89 RSD bez PDV-a.",
+    "PDV (20%) iznosi 246.913,58 RSD.",
+    "Ukupna vrednost ugovora sa PDV-om iznosi 1.481.481,47 RSD.",
+    "Ugovorna kazna iznosi 50.000,00 RSD.",
+];
+
+/// An English monthly-fee agreement in EUR.
+pub const PAY_EN_MONTHLY: &[&str] = &[
+    "SOFTWARE SUBSCRIPTION AGREEMENT",
+    "This Agreement is made between Acme Ltd and Example Corp.",
+    "Scope of Services: hosting and support of the online shop of the Client.",
+    "The Client shall pay a monthly fee of EUR 2,500.00 excluding VAT.",
+];
+
+/// An English invoice in USD with line items, subtotal, tax and total.
+pub const PAY_EN_INVOICE: &[&str] = &[
+    "INVOICE No. 2026-0042",
+    "Bill to: Example Corp",
+    "Description Qty Unit Unit price Amount",
+    "Consulting services 10 h 150.00 1,500.00",
+    "Travel expenses 1 pcs 300.00 300.00",
+    "Subtotal: $1,800.00",
+    "Tax (8%): $144.00",
+    "Total: $1,944.00",
+];
+
+/// A Serbian invoice in RSD with line items and net, VAT and the amount due.
+pub const PAY_SR_INVOICE: &[&str] = &[
+    "FAKTURA br. 12/2026",
+    "Kupac: Beta Trgovina d.o.o.",
+    "Opis Kolicina JM Cena Iznos",
+    "Odrzavanje servera 10 h 3.000,00 30.000,00",
+    "Licenca za antivirus 5 kom 2.000,00 10.000,00",
+    "Ukupno bez PDV-a: 40.000,00 RSD",
+    "PDV 20%: 8.000,00 RSD",
+    "Ukupno za uplatu: 48.000,00 RSD",
+];
+
+/// A Serbian contract without a price.
+pub const PAY_SR_NO_PRICE: &[&str] = &[
+    "UGOVOR O POSLOVNOJ SARADNJI",
+    "Predmet ovog ugovora je uredjivanje medjusobnih odnosa ugovornih strana.",
+    "Ugovor stupa na snagu danom potpisivanja i vazi 2 godine.",
+    "Rok za odgovor je 30 dana od 15.01.2026.",
+];

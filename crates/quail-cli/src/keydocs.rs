@@ -893,6 +893,55 @@ pub const ITEMS: &[KeyDoc] = &[
     },
 ];
 
+/// Keys of `quail_payment::keys`.
+#[cfg(feature = "payment")]
+pub const PAYMENT: &[KeyDoc] = &[
+    KeyDoc {
+        key: quail_payment::keys::SUBJECT,
+        doc: "What is paid for, as the document states it (Record: `text`, `source`: `clause`, `after_heading`, `line_items` or `title`).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::CATEGORY,
+        doc: "Category of what is paid for (Record: `code`, `label`, `keyword`). Codes: `it_software`, `telecom`, `legal`, `accounting_audit`, `consulting`, `marketing`, `rent_lease`, `utilities`, `fuel_energy`, `logistics_transport`, `cleaning_facility`, `maintenance_repair`, `insurance`, `goods_materials`, `financial_services`, `other`.",
+    },
+    KeyDoc {
+        key: quail_payment::keys::AMOUNT,
+        doc: "The price the document commits to (Money): the gross amount when stated, else the plain total, else the net amount. A monthly fee stays a monthly fee (see `payment.period`).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::AMOUNT_BASIS,
+        doc: "What `payment.amount` is: `gross`, `net` or `unstated` (Text).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::CURRENCY,
+        doc: "ISO 4217 code of the price (Text).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::NET,
+        doc: "The price without VAT, where stated (Money).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::VAT,
+        doc: "The VAT amount, where stated (Money).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::GROSS,
+        doc: "The price with VAT, where stated (Money).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::PERIOD,
+        doc: "How often the price is paid: `one_off`, `monthly`, `quarterly`, `yearly` (Text).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::LINES,
+        doc: "Invoice and offer line items (List of Record: `description`, `quantity`, `unit`, `unit_price`, `total`, `currency`, `vat_rate`, fields where known; from `item.line`).",
+    },
+    KeyDoc {
+        key: quail_payment::keys::HIGHLIGHT,
+        doc: "Where a payment fact sits in the text, one per fact (one per line of `payment.lines`). Record: `key` (the fact key), `page`, `block` (the block's index among all the document's blocks, as doewood's `GetDocumentText` numbers them: blank blocks skipped, the cells of a table row merged), `start`, `end` (characters in the block's text, end exclusive), `quote` (that text); `conf` is the fact's. Shared shape, see `quail_core::highlight`.",
+    },
+];
+
 /// Keys of `quail_summary::keys`.
 #[cfg(feature = "summary")]
 pub const SUMMARY: &[KeyDoc] = &[

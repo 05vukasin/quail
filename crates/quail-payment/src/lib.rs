@@ -48,7 +48,8 @@
 //!   under such a label when it is a heading; else the first line descriptions; else a
 //!   specific title (`UGOVOR O ODRŽAVANJU SOFTVERA`).
 //! - **Category** ([`category`]): keyword weights over the subject's words.
-//! - **Lines**: the `item.line` facts of `quail-items` (tables, PDF layout, aligned OCR rows).
+//! - **Lines**: the `item.line` facts of `quail-items` (tables, PDF layout, aligned OCR rows)
+//!   with a confidence of at least [`MIN_LINE_CONF`].
 //!
 //! # Limits
 //!
@@ -71,7 +72,7 @@ pub mod subject;
 
 mod analyzer;
 
-pub use analyzer::{MAX_LINES, MAX_SCAN_BYTES, MAX_SCAN_LINES, PaymentExtract};
+pub use analyzer::{MAX_LINES, MAX_SCAN_BYTES, MAX_SCAN_LINES, MIN_LINE_CONF, PaymentExtract};
 
 /// Fact keys emitted by this crate.
 pub mod keys {

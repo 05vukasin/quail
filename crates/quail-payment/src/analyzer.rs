@@ -23,6 +23,9 @@ pub const MAX_SCAN_BYTES: usize = 8 << 20;
 pub const MAX_SCAN_LINES: usize = 200_000;
 /// Most entries of `payment.lines`.
 pub const MAX_LINES: usize = 200;
+/// Lowest `item.line` confidence taken into `payment.lines` (below it the line parser only
+/// guessed which number is which).
+pub const MIN_LINE_CONF: f32 = 0.4;
 /// Line descriptions joined into a subject when no subject clause is found.
 const SUBJECT_FROM_LINES: usize = 3;
 
@@ -224,7 +227,7 @@ pub(crate) fn analyze(doc: &Document, lines: &[Line], facts: &[Fact], out: &mut 
     // Line items.
     let items: Vec<&Fact> = facts
         .iter()
-        .filter(|f| f.key.as_str() == "item.line")
+        .filter(|f| f.key.as_str() == "item.line" && f.conf >= MIN_LINE_CONF)
         .take(MAX_LINES)
         .collect();
     if !items.is_empty() {
@@ -267,10 +270,11 @@ pub(crate) fn analyze(doc: &Document, lines: &[Line], facts: &[Fact], out: &mut 
         outs.push(subject_out(&s.text, s.source, subject_conf, subject_at));
         subject_keys = s.keys;
     } else if !items.is_empty() {
-        let descs: Vec<&str> = items
+        let descs: Vec<String> = items
             .iter()
             .filter_map(|f| f.value.field("description").and_then(Value::as_text))
             .take(SUBJECT_FROM_LINES)
+            .map(|d| d.split_whitespace().collect::<Vec<_>>().join(" "))
             .collect();
         if !descs.is_empty() {
             let text = descs.join("; ");
