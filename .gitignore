@@ -25,3 +25,6 @@
 !.env.example
 /.claude/*
 !/.claude/skills/
+
+# quail-fuzz output when --out is left at its default
+/quail-fuzz-out/
