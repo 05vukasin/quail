@@ -299,13 +299,13 @@ mod tests {
     #[test]
     fn an_engine_in_use_is_kept_while_older_ones_expire() {
         let f = F::new();
-        let pool =
-            EnginePool::new(f.clone(), 4).with_idle_timeout(Some(Duration::from_millis(100)));
+        let pool = EnginePool::new(f.clone(), 4).with_idle_timeout(Some(Duration::from_secs(1)));
         // Two engines idle, then one taken again and returned later: only the other expires
-        // on the first deadline.
+        // on the first deadline. The 800 ms margin keeps a slow runner (macOS CI, quail #122)
+        // from sleeping past the first deadline, which expired both and made a third engine.
         pool.with(|_| pool.with(|_| ()).unwrap_or(())).unwrap_or(());
         assert_eq!(pool.idle(), 2);
-        std::thread::sleep(Duration::from_millis(60));
+        std::thread::sleep(Duration::from_millis(200));
         pool.with(|_| ()).unwrap_or(());
         assert!(eventually(|| f.alive() == 1));
         assert!(eventually(|| f.alive() == 0));
