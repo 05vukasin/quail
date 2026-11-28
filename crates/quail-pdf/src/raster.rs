@@ -52,6 +52,9 @@ struct State {
     budget: Arc<DecodeBudget>,
     pdf: Option<Pdf>,
     decoded_since_open: u64,
+    /// Per page: its content streams were refused by a decode budget with this many bytes
+    /// left, so they need more than that (see [`PdfRaster::content_over_budget`]).
+    content_need: Vec<Option<u64>>,
 }
 
 impl std::fmt::Debug for PdfRaster {
@@ -96,6 +99,7 @@ impl PdfRaster {
                 budget: Arc::new(DecodeBudget::new(0, 0)),
                 pdf: None,
                 decoded_since_open: 0,
+                content_need: Vec::new(),
             }),
             no_scan,
             over_cap: Vec::new(),
@@ -110,6 +114,21 @@ impl PdfRaster {
     #[must_use]
     pub(crate) fn over_cap(mut self, over_cap: Vec<bool>) -> Self {
         self.over_cap = over_cap;
+        self
+    }
+
+    /// Pages whose content streams the extractor's decode budget refused: `need[i] == Some(n)`
+    /// means page `i`'s content needs more than `n` decoded bytes. A call whose budget has no
+    /// more than `n` left for it refuses page `i` at once (`LimitExceeded("max_decompressed")`)
+    /// instead of inflating the content up to the cap again (the scan lookup, then the render)
+    /// only to refuse it then. The raster records its own refusals the same way, so a content
+    /// bomb is inflated at most once more per file, not once per call.
+    #[must_use]
+    pub(crate) fn content_over_budget(mut self, need: Vec<Option<u64>>) -> Self {
+        self.state
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .content_need = need;
         self
     }
 
@@ -132,7 +151,8 @@ impl PdfRaster {
         if page >= limits.max_pages {
             return Err(Error::LimitExceeded("max_pages"));
         }
-        let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let st = &mut *guard;
         st.budget
             .reset(limits.max_decompressed, limits.max_render_pixels);
         if st.pdf.is_none() {
@@ -143,7 +163,11 @@ impl PdfRaster {
         let result = match st.pdf.as_ref() {
             Some(pdf) => {
                 let pages = pdf.pages();
-                match pages.get(usize::try_from(page).unwrap_or(usize::MAX)) {
+                let i = usize::try_from(page).unwrap_or(usize::MAX);
+                match pages.get(i) {
+                    Some(p) if content_refused(p, &budget, &mut st.content_need, i) => {
+                        Err(Error::LimitExceeded("max_decompressed"))
+                    }
                     Some(p) => f(p, &budget),
                     // A page tree cut short by the decode budget is a limit, not a bad index.
                     None if budget.limit_hit() => Err(Error::LimitExceeded("max_decompressed")),
@@ -167,6 +191,43 @@ impl PdfRaster {
             st.pdf = None;
         }
         result
+    }
+}
+
+/// Whether page `p`'s content streams (page `i`) need more than `budget` has left: known from
+/// an earlier refusal with at least as much left, or found by decoding them now (hayro keeps
+/// them for the interpretation that follows), when this decode is what hits the limit.
+fn content_refused(
+    p: &HPage<'_>,
+    budget: &DecodeBudget,
+    need: &mut Vec<Option<u64>>,
+    i: usize,
+) -> bool {
+    let left = budget.remaining();
+    if need.get(i).copied().flatten().is_some_and(|n| left <= n) {
+        return true;
+    }
+    let refused = content_refused_now(p, budget);
+    if refused {
+        note_content_need(need, i, left);
+    }
+    refused
+}
+
+/// Decodes page `p`'s content streams; whether that decode is what hit the budget's limit.
+pub(crate) fn content_refused_now(p: &HPage<'_>, budget: &DecodeBudget) -> bool {
+    let hit_before = budget.limit_hit();
+    let _ = catch_unwind(AssertUnwindSafe(|| p.page_stream()));
+    !hit_before && budget.limit_hit()
+}
+
+/// Records that page `i`'s content needs more than `left` decoded bytes.
+pub(crate) fn note_content_need(need: &mut Vec<Option<u64>>, i: usize, left: u64) {
+    if need.len() <= i {
+        need.resize(i.saturating_add(1), None);
+    }
+    if let Some(n) = need.get_mut(i) {
+        *n = Some(n.map_or(left, |n| n.max(left)));
     }
 }
 
@@ -243,6 +304,8 @@ impl PageRaster for PdfRaster {
     ///   counting dry run;
     /// - a page with a stream or image over `max_decompressed` / `max_render_pixels`
     ///   (`LimitExceeded("max_decompressed")`): a render with images missing would mislead OCR.
+    ///   Content streams the budget refused before, with at least as much left, are refused
+    ///   at once (see [`PdfRaster::content_over_budget`]).
     fn render(&self, page: u32, dpi: f32, limits: &Limits) -> Result<Image> {
         if !(dpi.is_finite() && dpi > 0.0 && dpi <= MAX_DPI) {
             return Err(Error::Other(format!("dpi {dpi} outside (0, {MAX_DPI}]")));

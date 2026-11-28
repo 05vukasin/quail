@@ -29,7 +29,7 @@ use crate::device::{
 };
 use crate::open::{Caught, caught, open};
 use crate::quality::{Signals, judge};
-use crate::raster::PdfRaster;
+use crate::raster::{PdfRaster, content_refused_now, note_content_need};
 use crate::{keys, layout, meta, raw, xmp, zones};
 
 /// Decoded bytes after which the parsed document is dropped and re-opened, releasing hayro's
@@ -137,11 +137,12 @@ fn extract(blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> 
         );
     }
 
-    let (doc, no_scan, over_cap) = pages(pdf, blob, &budget, limits, out);
+    let (doc, no_scan, over_cap, content_need) = pages(pdf, blob, &budget, limits, out);
     // Later steps (OCR) get pixels through the core trait and never depend on this crate.
     out.provide(Raster(Arc::new(
         PdfRaster::with_no_scan(blob.clone(), no_scan)
             .over_cap(over_cap)
+            .content_over_budget(content_need)
             .until(file_deadline),
     )));
     Ok(doc)
@@ -229,6 +230,9 @@ struct Walk<'o> {
     no_scan: Vec<bool>,
     /// Per page: interpretation stopped at a per-page draw cap (calls, nestings, form data).
     over_cap: Vec<bool>,
+    /// Per page: the content streams were refused by the decode budget with this many bytes
+    /// left.
+    content_need: Vec<Option<u64>>,
 }
 
 /// Whether to go on with the next page.
@@ -244,7 +248,7 @@ fn pages(
     budget: &Arc<DecodeBudget>,
     limits: &Limits,
     out: &mut Emitter,
-) -> (Document, Vec<bool>, Vec<bool>) {
+) -> (Document, Vec<bool>, Vec<bool>, Vec<Option<u64>>) {
     let total = first.pages().len();
     out.fact(keys::PAGE_COUNT, int(total));
     let max = usize::try_from(limits.max_pages).unwrap_or(usize::MAX);
@@ -272,6 +276,7 @@ fn pages(
         scanned_pages: 0,
         no_scan: Vec::new(),
         over_cap: Vec::new(),
+        content_need: Vec::new(),
     };
     let settings = InterpreterSettings::default();
     let mut next = 0usize;
@@ -324,6 +329,7 @@ fn pages(
         scanned_pages,
         no_scan,
         over_cap,
+        content_need,
         ..
     } = walk;
 
@@ -342,7 +348,7 @@ fn pages(
         keys::PAGES_NEEDING_OCR,
         int(doc.pages.iter().filter(|p| p.needs_ocr).count()),
     );
-    (doc, no_scan, over_cap)
+    (doc, no_scan, over_cap, content_need)
 }
 
 /// `pdf.scanned_pages`, and `pdf.is_scanned` when a page was extracted.
@@ -428,6 +434,16 @@ impl Walk<'_> {
         }
         let _ = catch_unwind(AssertUnwindSafe(|| meta::page_fonts(page, &mut self.fonts)));
 
+        // The content first, on its own: when the budget refuses it, the raster learns how
+        // much was left and does not inflate it up to the cap again.
+        let left = self.budget.remaining();
+        if content_refused_now(page, self.budget) {
+            note_content_need(
+                &mut self.content_need,
+                usize::try_from(index).unwrap_or(usize::MAX),
+                left,
+            );
+        }
         let (w, h) = page.render_dimensions();
         let page_text = self.page_text;
         let captured = {

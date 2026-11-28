@@ -597,6 +597,92 @@ fn a_page_over_the_draw_cap_is_refused_by_the_raster_at_once() {
 }
 
 #[test]
+fn a_page_over_the_decode_budget_is_refused_by_the_raster_at_once() {
+    // Fuzz finding (quail #136, `slow@pdf.extract@4`, `slow@sketch.page_phash@4`): a page
+    // whose `/Contents` lists one small stream of operators thousands of times, so its
+    // content inflates past the 256 MiB `max_decompressed` cap. The extractor stops at the
+    // cap; every scan lookup and render then inflated and interpreted it up to the cap again
+    // only to refuse it. They now refuse it at once.
+    let part = b"0 0 0 0 0 0 cm ".repeat(32 * 1024 / 15);
+    let refs = "5 0 R ".repeat(10_000);
+    let bytes = build(
+        &[
+            (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+            (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+            (
+                3,
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << {FONT} >> /Contents [4 0 R {refs}] >>"
+                )
+                .into_bytes(),
+            ),
+            (4, stream_flate("", b"BT /F1 9 Tf 72 700 Td (bomb) Tj ET")),
+            (5, stream_flate("", &part)),
+        ],
+        1,
+        true,
+    );
+    let limits = Limits::default();
+    let t = Instant::now();
+    let r = run(bytes, &limits);
+    let extract = t.elapsed();
+    assert!(has_problem(&r, "max_decompressed"), "{:?}", r.problems);
+    let raster = r.raster.expect("raster");
+    // Page hashing and OCR ask for the page's scan and renders, at several sizes.
+    let calls = Instant::now();
+    for dpi in [36.0, 72.0, 100.0, 150.0, 200.0, 300.0, 400.0, 600.0] {
+        assert!(matches!(
+            raster.0.embedded_scan(0, &limits),
+            Some(Err(Error::LimitExceeded("max_decompressed")))
+        ));
+        assert!(matches!(
+            raster.0.embedded_scan_reduced(0, 128, &limits),
+            Some(Err(Error::LimitExceeded("max_decompressed")))
+        ));
+        assert!(matches!(
+            raster.0.render(0, dpi, &limits),
+            Err(Error::LimitExceeded("max_decompressed"))
+        ));
+    }
+    // All of them together cost less than the one capped pass of the extractor.
+    assert!(
+        calls.elapsed() < extract,
+        "{:?} vs {extract:?}",
+        calls.elapsed()
+    );
+    assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+}
+
+/// Whether a render shows some ink.
+fn inked(img: &quail_core::Image) -> bool {
+    img.data.iter().any(|&p| p < 128)
+}
+
+#[test]
+fn large_pages_under_the_decode_budget_still_render() {
+    // A big content stream under the cap is extracted and rendered as before.
+    let mut content = b"BT /F1 24 Tf 72 700 Td (large) Tj ET ".to_vec();
+    content.resize(128 * MIB, b' ');
+    let bytes = page_pdf(&content, FONT, vec![]);
+    drop(content);
+    let limits = Limits::default();
+    let r = run(bytes, &limits);
+    assert!(r.doc.expect("doc").pages[0].text.contains("large"));
+    let img = r.raster.expect("raster").0.render(0, 36.0, &limits);
+    assert!(inked(&img.expect("render")));
+
+    // A page the extractor refused only because earlier pages spent the file's budget fits
+    // the raster's fresh per-call budget, so it still renders.
+    let limits = small_budget(64);
+    let r = run(shared_pdf(3, 24, false), &limits);
+    assert!(has_problem(&r, "page 2: a stream"), "{:?}", r.problems);
+    let raster = r.raster.expect("raster");
+    for _ in 0..2 {
+        assert!(inked(&raster.0.render(2, 36.0, &limits).expect("render")));
+    }
+}
+
+#[test]
 fn one_huge_text_show_is_bounded_in_memory() {
     // Fuzz finding (quail #131, `oom-abort@pdf.extract@3`): one `Tj` of a few million
     // characters (a 20 KB file inflating to 8 MB of content). hayro collected every glyph of
