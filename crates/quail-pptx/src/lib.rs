@@ -35,10 +35,10 @@
 //! [`Limits::max_decompressed`](quail_core::Limits) for the whole file (declared sizes are
 //! never trusted), DOCTYPEs never expanded, one XML event at most 16 MiB, the deadline
 //! checked every 2048 XML events and per slide. Slides are read before the properties.
-//! `max_pages` slides; `max_text_bytes` charged for every byte of page text, separators
-//! included; at most 250 000 blocks per file, 20 000 slides listed, 100 000 shapes,
-//! paragraphs and cells per part, groups 64 deep, 1 MiB per paragraph, 1000 layouts and
-//! masters. Stopping short is reported with `Emitter::problem`; malformed XML ends only
+//! `max_pages` slides, each slide and notes part read once however often it is named;
+//! `max_text_bytes` charged for every byte of page text, separators included; at most
+//! 250 000 blocks per file, 20 000 slides listed, 100 000 shapes, paragraphs and cells per
+//! part, groups 64 deep, 1 MiB per paragraph, 1000 layouts and masters. Stopping short is reported with `Emitter::problem`; malformed XML ends only
 //! its part.
 
 mod extract;
