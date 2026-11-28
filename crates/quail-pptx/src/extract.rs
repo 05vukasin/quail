@@ -1,7 +1,7 @@
 //! Wiring: the presentation's slide list, each slide with its layout positions and notes,
 //! and the package-level facts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use quail_core::{
     Block, BlockKind, Document, Emitter, Error, Format, Limits, Page, PageKind, Result, Span,
@@ -139,6 +139,8 @@ struct Slides<'a, 'p> {
     warn: &'a mut Notes,
     budget: Budget,
     layouts: HashMap<String, Positions>,
+    /// Notes parts already read (lowercased): two slides naming one notes part read it once.
+    notes_read: HashSet<String>,
     timed_out: bool,
     tables: usize,
     notes: usize,
@@ -221,6 +223,7 @@ impl Slides<'_, '_> {
         }
         if let Some(notes) = rels.part_of_kind("notesSlide")
             && !self.timed_out
+            && self.notes_read.insert(notes.to_ascii_lowercase())
             && let Some((nodes, info)) =
                 parse(self.pkg, &notes, self.out, self.warn, &mut self.timed_out)
         {
@@ -557,6 +560,7 @@ pub(crate) fn run(
             capped: false,
         },
         layouts: HashMap::new(),
+        notes_read: HashSet::new(),
         timed_out: false,
         tables: 0,
         notes: 0,
@@ -567,6 +571,10 @@ pub(crate) fn run(
     };
     let mut pages = Vec::new();
     let mut missing = 0usize;
+    // A slide part listed again is read once (quail #141): 500 entries naming one slide
+    // gave the text limit's 64 MiB from an 8 KB file.
+    let mut slides_read = HashSet::new();
+    let mut repeated = 0usize;
     for id in &ids {
         if pages.len() >= max_pages {
             break;
@@ -579,6 +587,10 @@ pub(crate) fn run(
             missing += 1;
             continue;
         };
+        if !slides_read.insert(part.to_ascii_lowercase()) {
+            repeated += 1;
+            continue;
+        }
         let index = u32::try_from(pages.len()).unwrap_or(u32::MAX);
         pages.push(s.slide(&part, index));
         if s.budget.capped || s.budget.truncated {
@@ -618,10 +630,15 @@ pub(crate) fn run(
             "{missing} slides listed but missing from the package"
         ));
     }
-    if read + missing < ids.len() && !budget.truncated && !budget.capped && !timed_out {
+    if repeated > 0 {
+        warn.push(format!(
+            "{repeated} slides listed again: each slide part read once"
+        ));
+    }
+    if read + missing + repeated < ids.len() && !budget.truncated && !budget.capped && !timed_out {
         warn.problem(format!(
             "{} slides beyond max_pages ({}) skipped",
-            ids.len() - read - missing,
+            ids.len() - read - missing - repeated,
             limits.max_pages
         ));
     }

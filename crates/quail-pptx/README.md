@@ -51,7 +51,7 @@ is kept); notes about the file are warnings.
 | entry names | absolute, `..`, drive letter, backslash, control characters: ignored (warning) |
 | inflated bytes | the bytes parts **actually** inflate to, against `max_decompressed` for the whole file; declared sizes never trusted. Slides are read before the properties |
 | XML | DOCTYPE never expanded (no entity bombs, no external entities); one XML event at most 16 MiB; malformed XML ends only its part |
-| slides | `max_pages` pages; at most 20 000 listed |
+| slides | `max_pages` pages; at most 20 000 listed; a slide or notes part named again is read once (warning) |
 | text | `max_text_bytes`: every byte of page text is charged, separators included; at most 1 MiB per paragraph |
 | items | 250 000 blocks per file; 100 000 shapes, paragraphs and cells per part; groups 64 deep (deeper ones flattened into their parent) |
 | layouts | 1000 layouts and masters parsed for placeholder positions |
