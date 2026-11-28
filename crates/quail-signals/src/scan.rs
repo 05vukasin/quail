@@ -13,6 +13,7 @@ use crate::ident::IdentScan;
 use crate::keys;
 use crate::page::PageText;
 use crate::{contact, money};
+use quail_text::piece::{PIECE_BYTES, pieces};
 
 /// Distinct values kept per key and file; more are dropped with a problem.
 pub const MAX_PER_KEY: usize = 200;
@@ -68,7 +69,10 @@ const SERBIAN_MARKERS: &[&str] = &[
 /// Requires the `document` artifact; runs in `Fast`. Reads at most
 /// `Limits::max_text_bytes` of text, keeps at most [`MAX_PER_KEY`] distinct values per key
 /// (one fact per distinct value, with the evidence of its most confident occurrence) and
-/// records a problem when either limit or the deadline stops it.
+/// records a problem when either limit or the deadline stops it. A page longer than
+/// [`PIECE_BYTES`] is scanned in pieces cut at blank lines or line breaks
+/// ([`quail_text::piece`]), so its token buffers stay within tens of megabytes; a value that
+/// spans a cut is not read.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SignalScan;
 
@@ -179,6 +183,7 @@ fn block_at(blocks: &[Block], sorted: bool, at: u32) -> Option<&Block> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one pass over pages and their pieces, in one place
 fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
     let mut pt = PageText::default();
     let mut col = Collector::default();
@@ -189,6 +194,7 @@ fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
     let mut cands = Vec::new();
     let mut page_dates = Vec::new();
     let mut first_page = true;
+    let mut timed_out = false;
     for page in &doc.pages {
         if out.check_deadline().is_err() {
             out.problem(format!(
@@ -209,43 +215,66 @@ fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
         if text.trim().is_empty() {
             continue;
         }
-        pt.load(text);
-        serbian = serbian || (0..pt.len()).any(|i| SERBIAN_MARKERS.contains(&pt.key(i)));
-        cands.clear();
-        let mut ids = IdentScan::new(&pt, serbian);
-        ids.run(&mut cands);
-        jmbg = jmbg.saturating_add(ids.jmbg);
-        money::scan(&pt, &mut cands);
-        contact::scan(&pt, serbian, &mut cands);
-        page_dates.clear();
-        date::scan(&pt, first_page, &mut page_dates);
-        first_page = false;
-
+        // A page of many megabytes is scanned piece by piece (cut at blank lines or line
+        // breaks), so the token buffers stay bounded; a page up to `PIECE_BYTES` is one piece.
         let sorted = page
             .blocks
             .windows(2)
             .all(|w| w[0].span.start <= w[1].span.start);
-        let evidence = |sp: Span| {
-            let src = pt.map.span_to_source(sp);
-            let block = block_at(&page.blocks, sorted, src.start);
-            Evidence {
-                page: Some(page.index),
-                zone: block.map(|b| b.zone).unwrap_or_default(),
-                span: Some(src),
-                bbox: block.and_then(|b| b.bbox),
+        for (base, piece) in pieces(text, PIECE_BYTES) {
+            if piece.trim().is_empty() {
+                continue;
             }
-        };
-        for c in cands.drain(..) {
-            let ev = evidence(c.span);
-            col.add(c.key, c.value, c.conf, ev);
-        }
-        for d in page_dates.drain(..) {
-            if dates.len() >= MAX_DATES {
-                dates_capped = true;
+            if base > 0 && out.check_deadline().is_err() {
+                out.problem(format!(
+                    "signal.scan: deadline reached inside page {}, the rest not scanned",
+                    page.index
+                ));
+                timed_out = true;
                 break;
             }
-            let ev = evidence(d.span);
-            dates.push((d, ev));
+            pt.load(piece);
+            serbian = serbian || (0..pt.len()).any(|i| SERBIAN_MARKERS.contains(&pt.key(i)));
+            cands.clear();
+            let mut ids = IdentScan::new(&pt, serbian);
+            ids.run(&mut cands);
+            jmbg = jmbg.saturating_add(ids.jmbg);
+            money::scan(&pt, &mut cands);
+            contact::scan(&pt, serbian, &mut cands);
+            page_dates.clear();
+            date::scan(&pt, first_page, &mut page_dates);
+            first_page = false;
+
+            let base = u32::try_from(base).unwrap_or(u32::MAX);
+            let evidence = |sp: Span| {
+                let src = pt.map.span_to_source(sp);
+                let src = Span {
+                    start: src.start.saturating_add(base),
+                    end: src.end.saturating_add(base),
+                };
+                let block = block_at(&page.blocks, sorted, src.start);
+                Evidence {
+                    page: Some(page.index),
+                    zone: block.map(|b| b.zone).unwrap_or_default(),
+                    span: Some(src),
+                    bbox: block.and_then(|b| b.bbox),
+                }
+            };
+            for c in cands.drain(..) {
+                let ev = evidence(c.span);
+                col.add(c.key, c.value, c.conf, ev);
+            }
+            for d in page_dates.drain(..) {
+                if dates.len() >= MAX_DATES {
+                    dates_capped = true;
+                    break;
+                }
+                let ev = evidence(d.span);
+                dates.push((d, ev));
+            }
+        }
+        if timed_out {
+            break;
         }
     }
     if dates_capped {

@@ -773,3 +773,30 @@ fn hostile_text_is_fast_and_does_not_panic() {
         let _ = run(odd);
     }
 }
+
+#[test]
+fn a_page_longer_than_a_piece_is_scanned_to_its_end() {
+    // Quail #142: a page of many megabytes is scanned in `PIECE_BYTES` pieces, so the token
+    // buffers stay bounded. A value in a later piece is still found, with its span in the page.
+    let filler = "Lorem ipsum dolor sit amet, consectetur adipiscing.\n"
+        .repeat(quail_text::piece::PIECE_BYTES / 52 + 20_000);
+    let pib = pib();
+    let text = format!("Ugovor o zakupu\n\n{filler}\nPIB: {pib}\nkontakt: ured@firma.rs\n");
+    assert!(text.len() > quail_text::piece::PIECE_BYTES);
+    let page_text = text.clone();
+    let (f, problems) = run_doc(doc(&[&text]), &Limits::default());
+    assert!(problems.is_empty(), "{problems:?}");
+    for (key, want) in [
+        (&keys::RS_PIB, pib.as_str()),
+        (&keys::EMAIL_DOMAIN, "firma.rs"),
+    ] {
+        let fact = f.iter().find(|x| &x.key == key).expect("found");
+        let span = fact.evidence.as_ref().and_then(|e| e.span).expect("span");
+        assert!(span.start as usize > quail_text::piece::PIECE_BYTES);
+        assert!(
+            span.slice(&page_text).contains(want),
+            "{key}: {:?}",
+            span.slice(&page_text)
+        );
+    }
+}

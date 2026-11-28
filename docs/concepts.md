@@ -232,7 +232,7 @@ once, read by many, never changed after they are stored. They are not part of th
 |---|---|---|
 | `document` | the extractor | every text analyzer |
 | `raster` | `pdf.extract` | page pHash, OCR |
-| `normalized_text` | `text.stats` | `text.lang`, refs, parties, sketches (one normalization per file, shared) |
+| `normalized_text` | `text.stats` | `text.lang`, refs, parties, sketches (one normalization per file, shared; at most 8 MiB of page text, pages up to 4 MiB) |
 | `revised_document` | `ocr.pages` | every text analyzer, through `Ctx::document()` |
 
 A step declares the artifacts it `requires` (it does not run without them), the ones it

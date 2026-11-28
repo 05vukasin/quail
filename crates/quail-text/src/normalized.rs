@@ -15,7 +15,8 @@
 //! - the length of the page text it was built from.
 //!
 //! A page is only present when it was normalized as a whole: pages cut by
-//! `Limits::max_text_bytes` (and every page after) are `None`.
+//! `Limits::max_text_bytes` (and every page after) are `None`, and so are the pages after
+//! the artifact holds [`MAX_SHARED_BYTES`] of page text.
 //!
 //! # Using it
 //!
@@ -29,7 +30,9 @@
 //!
 //! 16 bytes per token (about one token per 5–6 bytes of text), plus the normalized text,
 //! the keys that differ from their token, and 16 bytes per map checkpoint: about 4–5 bytes
-//! of heap per byte of page text, held until the file is done.
+//! of heap per byte of page text, held until the file is done. [`MAX_SHARED_BYTES`] bounds it
+//! (about 40 MB): the pages past it are normalized by each consumer, one page or piece at a
+//! time.
 //!
 //! [`keyed_tokens`]: crate::token::keyed_tokens
 
@@ -38,6 +41,12 @@ use quail_core::{Artifact, Document};
 use crate::fold::{FoldOptions, fold_into};
 use crate::normalize::{NormalizeOptions, OffsetMap, normalize_mapped};
 use crate::token::{TokenKind, tokens_with_symbols};
+
+/// Page text the artifact holds at most: pages are added in order while their total stays
+/// within it. A page that does not fit, or is longer than
+/// [`PIECE_BYTES`](crate::piece::PIECE_BYTES), is `None` (and its consumers normalize it
+/// themselves).
+pub const MAX_SHARED_BYTES: usize = 8 << 20;
 
 /// One token of a [`NormalizedPage`]: byte range in the normalized page text and kind. Its
 /// key is the token text itself when folding does not change it (most lowercase words and

@@ -4,6 +4,7 @@ use std::borrow::Cow;
 
 use quail_core::{Document, Emitter, Limits, Result};
 use quail_text::normalize::{NormalizeOptions, normalize_into};
+use quail_text::piece::{PIECE_BYTES, pieces};
 use quail_text::shingle::hash_str;
 use quail_text::token::Token;
 use quail_text::{NormalizedPage, NormalizedText};
@@ -50,16 +51,23 @@ fn for_each_part<'d>(
     Ok(())
 }
 
-/// Page texts joined by `'\n'`, as extracted (see [`for_each_part`]).
-pub(crate) fn raw_text(doc: &Document, limits: &Limits, out: &mut Emitter) -> Result<String> {
-    let mut text = String::new();
+/// The page texts of [`for_each_part`] as extracted, as consecutive segments of their
+/// `'\n'`-joined text: page parts, `"\n"` between them, and a part longer than
+/// [`PIECE_BYTES`] cut into pieces. Joined, they are that text; the compat sketches stream
+/// them instead of holding the joined copy.
+pub(crate) fn raw_segments<'d>(
+    doc: &'d Document,
+    limits: &Limits,
+    out: &mut Emitter,
+) -> Result<Vec<&'d str>> {
+    let mut segs = Vec::new();
     for_each_part(doc, limits, out, |_, part| {
-        if !text.is_empty() {
-            text.push('\n');
+        if !segs.is_empty() {
+            segs.push("\n");
         }
-        text.push_str(part);
+        segs.extend(pieces(part, PIECE_BYTES).map(|(_, p)| p));
     })?;
-    Ok(text)
+    Ok(segs)
 }
 
 /// Page texts joined by `'\n'`, each normalized with the `quail-text` defaults (see
@@ -83,15 +91,33 @@ pub(crate) fn normalized_text(
     Ok(text)
 }
 
+/// One part of a [`DocText`]: a page of the `normalized_text` artifact, or page text to
+/// normalize when it is read.
+enum Part<'a> {
+    Shared(&'a NormalizedPage),
+    Raw(&'a str),
+}
+
+impl Part<'_> {
+    fn load(&self) -> Cow<'_, NormalizedPage> {
+        match self {
+            Part::Shared(p) => Cow::Borrowed(*p),
+            Part::Raw(t) => Cow::Owned(NormalizedPage::new(t)),
+        }
+    }
+}
+
 /// The normalized document text the text sketches read: the pages of [`for_each_part`], each
 /// normalized with the `quail-text` defaults and tokenized, as if joined by `'\n'`.
 ///
 /// A page comes from the `normalized_text` artifact when the artifact holds it and the whole
-/// page is read; otherwise it is normalized here. Both give the same page, and the tokens of
-/// the pages are exactly the tokens of their joined text (a line break always ends a token),
-/// so the sketches are the same either way.
+/// page is read; otherwise it is normalized here, one page at a time while it is read, so at
+/// most one page is held. Both give the same page, and the tokens of the pages are exactly
+/// the tokens of their joined text (a line break always ends a token), so the sketches are
+/// the same either way. A page longer than [`PIECE_BYTES`] is read as its pieces, each
+/// normalized like a page.
 pub(crate) struct DocText<'a> {
-    pages: Vec<Cow<'a, NormalizedPage>>,
+    parts: Vec<Part<'a>>,
 }
 
 impl<'a> DocText<'a> {
@@ -102,30 +128,32 @@ impl<'a> DocText<'a> {
         limits: &Limits,
         out: &mut Emitter,
     ) -> Result<Self> {
-        let mut pages = Vec::new();
+        let mut parts = Vec::new();
         for_each_part(doc, limits, out, |pos, part| {
             let full = &doc.pages[pos].text;
-            let page = match shared.and_then(|n| n.page(pos, full)) {
-                Some(p) if part.len() == full.len() => Cow::Borrowed(p),
-                _ => Cow::Owned(NormalizedPage::new(part)),
-            };
-            pages.push(page);
+            match shared.and_then(|n| n.page(pos, full)) {
+                Some(p) if part.len() == full.len() => parts.push(Part::Shared(p)),
+                _ => parts.extend(pieces(part, PIECE_BYTES).map(|(_, p)| Part::Raw(p))),
+            }
         })?;
-        Ok(Self { pages })
+        Ok(Self { parts })
     }
 
     /// Calls `f(key)` with the folded key of every word-like token, in order.
     pub fn for_each_key(&self, mut f: impl FnMut(&str)) {
-        for p in &self.pages {
-            p.for_each_keyed(|_, key| f(key));
+        for part in &self.parts {
+            part.load().for_each_keyed(|_, key| f(key));
         }
     }
 
     /// Hashes ([`hash_str`]) of the folded keys, in order: `token_hashes` of the joined text.
-    pub fn key_hashes(&self) -> Vec<u64> {
-        let mut out = Vec::new();
-        self.for_each_key(|k| out.push(hash_str(k)));
-        out
+    /// Computed one page at a time, as the iterator advances.
+    pub fn key_hashes(&self) -> impl Iterator<Item = u64> + '_ {
+        self.parts.iter().flat_map(|part| {
+            let mut v = Vec::new();
+            part.load().for_each_keyed(|_, key| v.push(hash_str(key)));
+            v
+        })
     }
 
     /// Calls `f(token, key, gap)` for every word-like token of the joined text, in order:
@@ -135,11 +163,12 @@ impl<'a> DocText<'a> {
         // Joined text since the last token, while that token is on an earlier page.
         let mut tail = String::new();
         let mut base = 0usize;
-        for (n, p) in self.pages.iter().enumerate() {
+        for (n, part) in self.parts.iter().enumerate() {
             if n > 0 {
                 tail.push('\n');
                 base += 1;
             }
+            let p = part.load();
             let text = p.text();
             let mut last: Option<usize> = None;
             for (i, t) in p.tokens().iter().enumerate() {
@@ -169,6 +198,22 @@ impl<'a> DocText<'a> {
             }
             base += text.len();
         }
+    }
+}
+
+/// Appends `values` to `set`, a list of `u64` to be sorted and deduplicated by its user:
+/// whenever it would grow past a million entries it is sorted and deduplicated first, so a
+/// text that repeats itself holds about its distinct values, not one per occurrence.
+pub(crate) fn extend_distinct(set: &mut Vec<u64>, values: impl IntoIterator<Item = u64>) {
+    for v in values {
+        if set.len() == set.capacity() && set.len() >= 1 << 20 {
+            set.sort_unstable();
+            set.dedup();
+            if set.len() > set.capacity() / 2 {
+                set.reserve_exact(set.len() / 2);
+            }
+        }
+        set.push(v);
     }
 }
 
@@ -244,14 +289,14 @@ mod tests {
         assert_eq!(seen(&alone), want);
         let shared = NormalizedText::of(&d);
         let with = DocText::read(&d, Some(&shared), &limits, &mut out).unwrap();
-        assert!(with.pages.iter().all(|p| matches!(p, Cow::Borrowed(_))));
+        assert!(with.parts.iter().all(|p| matches!(p, Part::Shared(_))));
         assert_eq!(seen(&with), want);
         let keys: Vec<String> = want.iter().map(|w| w.3.clone()).collect();
         let mut got = Vec::new();
         with.for_each_key(|k| got.push(k.to_owned()));
         assert_eq!(got, keys);
         assert_eq!(
-            with.key_hashes(),
+            with.key_hashes().collect::<Vec<_>>(),
             keys.iter().map(|k| hash_str(k)).collect::<Vec<_>>()
         );
     }
@@ -266,10 +311,22 @@ mod tests {
         let mut out = Emitter::new(AnalyzerId::new("sketch.test", 1));
         let shared = NormalizedText::of(&d);
         let t = DocText::read(&d, Some(&shared), &limits, &mut out).unwrap();
-        assert!(matches!(t.pages[0], Cow::Borrowed(_)));
-        assert!(matches!(t.pages[1], Cow::Owned(_)));
+        assert!(matches!(t.parts[0], Part::Shared(_)));
+        assert!(matches!(t.parts[1], Part::Raw(_)));
         let mut keys = Vec::new();
         t.for_each_key(|k| keys.push(k.to_owned()));
         assert_eq!(keys, ["abc", "def", "ghi"]);
+    }
+
+    #[test]
+    fn distinct_values_are_kept_once_as_the_list_fills() {
+        let mut set = Vec::new();
+        // Three passes over 700 000 values: a million and more are deduplicated on the way.
+        extend_distinct(&mut set, (0..2_100_000u64).map(|i| (i % 700_000) * 7919));
+        assert!(set.capacity() < 2_100_000, "{}", set.capacity());
+        set.sort_unstable();
+        set.dedup();
+        let want: Vec<u64> = (0..700_000u64).map(|i| i * 7919).collect();
+        assert_eq!(set, want);
     }
 }

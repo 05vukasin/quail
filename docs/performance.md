@@ -66,6 +66,21 @@ Each change below was measured when it was made, with records compared before an
   hashes at most 4 pages per file (40 to 58 % less step time).
 - **CPV index.** The index behind the price-line categories went from about 47 MB to 9 MB
   of RSS, built once per process and shared.
+- **Text at the limit** (#142). A file whose text reaches `max_text_bytes` (64 MiB) used to
+  push the text analyzers past 1 GiB (a 280 KB PPTX aborted on a 512 MiB allocation in
+  `signal.scan`): per-token buffers of 16 to 48 bytes a token, several copies of the text, a
+  `Vec` of every 3-word window. Now the `normalized_text` artifact holds at most 8 MiB of page
+  text (about 40 MB) and no page over 4 MiB; `signal.scan` and `ref.references` read a longer
+  page in 4 MiB pieces cut at blank lines or line breaks (`quail_text::piece`); the sketches
+  normalize one page or piece at a time, hash the joined words as they come and keep only
+  shingle digests; the compatibility sketches stream the text instead of joining it;
+  `party.candidates`, `summary.keywords` and `summary.extractive` read the first 4 MiB of
+  such a page. Peaks on one page of 64 MiB of generated text (optimized build): `signal.scan`
+  711 → 49 MiB, `sketch.minhash_compat` 665 → 74, `ref.references` 579 → 83,
+  `sketch.invoice_layout` 319 → 9, `text.stats` 315 → 8, `party.candidates` 252 → 63, and
+  every other step under 100 MiB except the fixed-cap `contract.facts` (160, at most 8 MiB of
+  text). The process peak fell from 1.10 GB to 0.46 GB of RSS. Records are identical on pages
+  up to 4 MiB; `crates/quail-cli/tests/text_memory.rs` asserts the bounds.
 - **Content dedup.** `--dedup` hashes each file first and reuses the record of identical
   bytes: on the private corpus, with 32 duplicates among 417 files, 11 % more files/s in the
   table above.

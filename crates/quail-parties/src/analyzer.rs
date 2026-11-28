@@ -6,6 +6,7 @@ use quail_core::{
     Analyzer, AnalyzerId, Artifact, Ctx, Document, Emitter, Evidence, Profile, Result, Value, Zone,
 };
 use quail_text::NormalizedText;
+use quail_text::piece::PIECE_BYTES;
 
 use crate::keys;
 use crate::names::{core_key, key_tokens, normalized_key};
@@ -36,7 +37,8 @@ pub const MAX_STATEMENTS: usize = 16;
 pub const MAX_TITLES: usize = 8;
 /// Entries of `party.candidates`.
 pub const MAX_RANKED: usize = 10;
-/// Text read per document, whatever `Limits::max_text_bytes` allows.
+/// Text read per document, whatever `Limits::max_text_bytes` allows. Of a page longer than
+/// [`PIECE_BYTES`], the first `PIECE_BYTES` are read.
 pub const MAX_SCAN_BYTES: usize = 16 << 20;
 
 /// Company and role candidates of a document. See the crate documentation for the keys and
@@ -176,10 +178,18 @@ pub fn collect_with(
         if page.needs_ocr || page.text.trim().is_empty() {
             continue;
         }
-        let w = PageWords::with_shared(page, left, shared.and_then(|n| n.page(i, &page.text)));
+        // A page of many megabytes is read up to `PIECE_BYTES`: parties are named near the
+        // start, and the token buffers stay bounded.
+        let read = left.min(PIECE_BYTES);
+        let w = PageWords::with_shared(page, read, shared.and_then(|n| n.page(i, &page.text)));
         if page.text.len() > left {
             out.problem(format!(
                 "party: text limit reached inside page {}",
+                page.index
+            ));
+        } else if page.text.len() > read {
+            out.problem(format!(
+                "party: page {} read up to {PIECE_BYTES} bytes",
                 page.index
             ));
         }

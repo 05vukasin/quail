@@ -124,10 +124,13 @@ pub(crate) fn region(pp: &Prepared<'_>, i: usize) -> (bool, bool) {
         return (false, false);
     };
     let zone = pp.zone_at(t.ns);
-    let head =
-        (pp.page.index == 0 && t.line < HEAD_LINES) || matches!(zone, Zone::Header | Zone::Title);
+    let head = (pp.page.index == 0 && pp.top && t.line < HEAD_LINES)
+        || matches!(zone, Zone::Header | Zone::Title);
     let foot = zone == Zone::Footer
-        || (zone == Zone::Unknown && t.line + FOOT_LINES >= pp.lines && pp.lines > FOOT_LINES * 3);
+        || (zone == Zone::Unknown
+            && pp.bottom
+            && t.line + FOOT_LINES >= pp.lines
+            && pp.lines > FOOT_LINES * 3);
     (head || foot, head)
 }
 
@@ -401,7 +404,7 @@ pub(crate) fn generic_numbers(p: &Patterns, pp: &Prepared<'_>) -> Vec<(Number, b
         i = b + 1;
         let (own, head) = region(pp, a);
         if !(own && head) {
-            if pp.page.index == 0 && pp.line(a) >= HEAD_LINES {
+            if pp.page.index == 0 && pp.top && pp.line(a) >= HEAD_LINES {
                 break;
             }
             continue;

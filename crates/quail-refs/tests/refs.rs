@@ -906,3 +906,36 @@ fn split_title_lines_must_stack() {
         assert_eq!(title(boxes).as_deref(), Some("SERVICE AGREEMENT"));
     }
 }
+
+#[test]
+fn a_page_longer_than_a_piece_is_read_to_its_end() {
+    // Quail #142: a page of many megabytes is read in `PIECE_BYTES` pieces. The title comes
+    // from the first piece and a citation in a later one keeps its span in the page.
+    let filler = "Tekst ugovora bez ikakvih brojeva i oznaka.\n"
+        .repeat(quail_text::piece::PIECE_BYTES / 44 + 20_000);
+    let text = format!(
+        "UGOVOR O PRUŽANJU USLUGA\nbr. 114/23\n\n{filler}\nU skladu sa Ugovorom br. 77/22 od 01.02.2022.\n"
+    );
+    assert!(text.len() > quail_text::piece::PIECE_BYTES);
+    let f = run(&[&text]);
+    assert_eq!(
+        single_text(&f, &keys::TITLE).as_deref(),
+        Some("UGOVOR O PRUŽANJU USLUGA")
+    );
+    assert_eq!(own(&f), vec![(s("contract"), s("11423"))]);
+    let cite = f
+        .iter()
+        .find(|x| {
+            x.evidence
+                .as_ref()
+                .and_then(|e| e.span)
+                .is_some_and(|sp| sp.start as usize > quail_text::piece::PIECE_BYTES)
+        })
+        .expect("a fact from the second piece");
+    let span = cite.evidence.as_ref().and_then(|e| e.span).unwrap();
+    assert!(
+        span.slice(&text).contains("77/22"),
+        "{:?}",
+        span.slice(&text)
+    );
+}

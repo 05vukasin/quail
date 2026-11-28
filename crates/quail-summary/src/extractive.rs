@@ -19,6 +19,7 @@ use quail_core::{Document, TextSource};
 use quail_text::NormalizedText;
 use quail_text::fold::{FoldOptions, fold};
 use quail_text::normalize::{NormalizeOptions, normalize};
+use quail_text::piece::{PIECE_BYTES, prefix};
 
 use crate::card::FileCard;
 use crate::format::{self, capitalize, clip, one_line};
@@ -421,7 +422,8 @@ pub fn head_pages_with(doc: &Document, shared: Option<&NormalizedText>) -> Vec<(
         }
         let mut t = match shared.and_then(|n| n.page(pos, &p.text)) {
             Some(n) => n.text().to_owned(),
-            None => normalize(&p.text, &opts).into_owned(),
+            // A page of many megabytes: only its start can be kept.
+            None => normalize(prefix(&p.text, PIECE_BYTES), &opts).into_owned(),
         };
         if bytes + t.len() > MAX_BYTES {
             let mut end = MAX_BYTES.saturating_sub(bytes);

@@ -74,6 +74,12 @@ impl InvoiceFeatures {
 /// `invoice_number_patterns(text)`.
 pub fn number_patterns(text: &str) -> Result<Vec<String>, RegexLimit> {
     let mut out: Vec<String> = Vec::new();
+    patterns_into(text, &mut out)?;
+    Ok(out)
+}
+
+/// The number shapes of `text` not yet in `out`, appended in order.
+fn patterns_into(text: &str, out: &mut Vec<String>) -> Result<(), RegexLimit> {
     for (a, b) in INVOICE_NUMBER.matches(text)? {
         let token = &text[a..b];
         if !DIGIT_RUN.is_match(token) {
@@ -84,22 +90,67 @@ pub fn number_patterns(text: &str) -> Result<Vec<String>, RegexLimit> {
             out.push(pattern);
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 /// `invoice_layout_features(text)`.
 pub fn features(text: &str) -> Result<InvoiceFeatures, RegexLimit> {
-    let normalized = format!(" {} ", WHITESPACE.replace_all(&text.to_lowercase(), " "));
+    features_of(&[text])
+}
+
+/// [`features`] of the text that `segments` make when joined, one segment at a time: the
+/// lowercased, white-space-collapsed text is built as a stream and only its last bytes are
+/// kept, enough to find a label that spans two segments. Segments should be cut at white
+/// space (as [`quail_text::piece`] cuts): then the result is that of the joined text.
+pub(crate) fn features_of(segments: &[&str]) -> Result<InvoiceFeatures, RegexLimit> {
+    // The longest needle, ` <label> `, is 16 bytes: keep 15 bytes of the stream before each
+    // new segment.
+    const KEEP: usize = 15;
+    let needles: Vec<String> = LABELS.iter().map(|l| format!(" {l} ")).collect();
+    let mut found = [false; LABELS.len()];
+    let mut patterns = Vec::new();
+    // The collapsed text since the kept tail; it starts with the leading space of the
+    // original's ` {text} `.
+    let mut stream = String::from(" ");
+    // The stream ends with a collapsed run of the text (not the leading space).
+    let mut space = false;
+    let check = |stream: &str, found: &mut [bool; LABELS.len()]| {
+        for (f, n) in found.iter_mut().zip(&needles) {
+            *f = *f || stream.contains(n.as_str());
+        }
+    };
+    for seg in segments {
+        let lower = seg.to_lowercase();
+        let mut last = 0;
+        for m in WHITESPACE.find_iter(&lower) {
+            stream.push_str(&lower[last..m.start()]);
+            if m.start() > last || !space {
+                stream.push(' ');
+            }
+            space = true;
+            last = m.end();
+        }
+        if last < lower.len() {
+            stream.push_str(&lower[last..]);
+            space = false;
+        }
+        check(&stream, &mut found);
+        let mut cut = stream.len().saturating_sub(KEEP);
+        while !stream.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        stream.drain(..cut);
+        patterns_into(seg, &mut patterns)?;
+    }
+    stream.push(' ');
+    check(&stream, &mut found);
     let mut labels: Vec<&'static str> = LABELS
         .iter()
-        .copied()
-        .filter(|l| normalized.contains(&format!(" {l} ")))
+        .zip(found)
+        .filter_map(|(l, f)| f.then_some(*l))
         .collect();
     labels.sort_unstable();
-    Ok(InvoiceFeatures {
-        labels,
-        patterns: number_patterns(text)?,
-    })
+    Ok(InvoiceFeatures { labels, patterns })
 }
 
 #[cfg(test)]

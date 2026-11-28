@@ -4,6 +4,7 @@ use quail_core::{
     Analyzer, AnalyzerId, Artifact, Ctx, Date, Document, Emitter, Evidence, Page, Profile, Result,
     Value,
 };
+use quail_text::piece::{PIECE_BYTES, pieces};
 use quail_text::{NormalizedPage, NormalizedText};
 
 use crate::keys;
@@ -29,7 +30,9 @@ pub const MAX_IDS: usize = 32;
 /// Requires the `document` artifact, runs in [`Profile::Fast`]. See the crate docs for the
 /// keys and the record shapes. Reads at most `Limits::max_text_bytes` of text, checks the
 /// deadline per page, skips pages flagged `needs_ocr`, and records a problem when a cap or the
-/// text limit cuts the output short.
+/// text limit cuts the output short. A page longer than [`PIECE_BYTES`] is read in pieces cut
+/// at blank lines or line breaks ([`quail_text::piece`]): head lines are those of its first
+/// piece, foot lines those of its last.
 #[derive(Debug)]
 pub struct RefAnalyzer {
     pats: Patterns,
@@ -103,6 +106,11 @@ fn within(text: &str, budget: usize) -> &str {
     &text[..end]
 }
 
+/// The first piece of `text` (see [`quail_text::piece`]): all of it up to `PIECE_BYTES`.
+fn within_piece(text: &str) -> &str {
+    pieces(text, PIECE_BYTES).next().map_or("", |(_, p)| p)
+}
+
 #[derive(Clone)]
 struct Own {
     kind: Option<Kind>,
@@ -134,6 +142,7 @@ struct Acc {
     capped: [bool; 5],
 }
 
+#[allow(clippy::too_many_lines)] // the title pages first, then the rest, piece by piece
 fn run_document(
     p: &Patterns,
     doc: &Document,
@@ -144,6 +153,7 @@ fn run_document(
     // The first two pages are prepared first: they hold the title, which decides how every
     // number is read (own or cited). Later pages are prepared one at a time.
     let mut first: Vec<Prepared<'_>> = Vec::new();
+    let mut first_rest: Vec<&str> = Vec::new();
     let mut stopped = None;
     for (pos, page) in doc.pages.iter().enumerate().take(2) {
         out.check_deadline()?;
@@ -159,7 +169,17 @@ fn run_document(
         if text.len() < page.text.len() {
             stopped = Some(page.index);
         }
-        first.push(Prepared::new(page, text, whole(shared, pos, page, text)));
+        // A long page: its first piece here, the others after the title is known.
+        let head = within_piece(text);
+        let bottom = head.len() == page.text.len();
+        first.push(Prepared::new(
+            page,
+            0,
+            head,
+            bottom,
+            whole(shared, pos, page, head),
+        ));
+        first_rest.push(text);
     }
     let title = title::find(p, &first);
     let mut acc = Acc::default();
@@ -205,8 +225,16 @@ fn run_document(
     }
     let inferred = title.as_ref().and_then(|t| t.kind).is_none();
     let ctx = Classify { doc_kind, inferred };
-    for (pp, ms) in first.iter().zip(&first_mentions) {
+    for ((pp, ms), text) in first.iter().zip(&first_mentions).zip(&first_rest) {
         page_pass(p, pp, ms, &ctx, &mut acc, out);
+        let page = pp.page;
+        for (base, piece) in pieces(text, PIECE_BYTES).skip(1) {
+            out.check_deadline()?;
+            let bottom = base + piece.len() == page.text.len();
+            let pp = Prepared::new(page, base, piece, bottom, None);
+            let ms = mentions(p, &pp);
+            page_pass(p, &pp, &ms, &ctx, &mut acc, out);
+        }
     }
     drop(first);
     if stopped.is_none() {
@@ -224,9 +252,21 @@ fn run_document(
             if text.len() < page.text.len() {
                 stopped = Some(page.index);
             }
-            let pp = Prepared::new(page, text, whole(shared, pos, page, text));
-            let ms = mentions(p, &pp);
-            page_pass(p, &pp, &ms, &ctx, &mut acc, out);
+            // A long page piece by piece; a page up to `PIECE_BYTES` is one piece.
+            for (base, piece) in pieces(text, PIECE_BYTES) {
+                if base > 0 {
+                    out.check_deadline()?;
+                }
+                let bottom = base + piece.len() == page.text.len();
+                let shared = if base == 0 && bottom {
+                    whole(shared, pos, page, piece)
+                } else {
+                    None
+                };
+                let pp = Prepared::new(page, base, piece, bottom, shared);
+                let ms = mentions(p, &pp);
+                page_pass(p, &pp, &ms, &ctx, &mut acc, out);
+            }
         }
     }
     if let Some(i) = stopped {
