@@ -88,6 +88,8 @@ pub struct Pptx {
     pub core: Option<String>,
     /// Slide part numbers in `sldIdLst` order (default: 1..=n).
     pub order: Option<Vec<usize>>,
+    /// Every slide with notes points at one notes part (`notesSlide1.xml`, the first notes).
+    pub shared_notes: bool,
 }
 
 /// A layout whose title sits at the top and body below it; the master puts dates, footers
@@ -120,6 +122,7 @@ impl Pptx {
             extra: Vec::new(),
             core: None,
             order: None,
+            shared_notes: false,
         }
     }
 
@@ -180,11 +183,12 @@ impl Pptx {
                 r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>"#
             );
             if let Some(nx) = &s.notes {
-                rels.push_str(&format!(r#"<Relationship Id="rId2" Type="{REL}/notesSlide" Target="../notesSlides/notesSlide{i}.xml"/>"#));
-                files.push((
-                    format!("ppt/notesSlides/notesSlide{i}.xml"),
-                    nx.clone().into_bytes(),
-                ));
+                let j = if self.shared_notes { 1 } else { i };
+                rels.push_str(&format!(r#"<Relationship Id="rId2" Type="{REL}/notesSlide" Target="../notesSlides/notesSlide{j}.xml"/>"#));
+                let name = format!("ppt/notesSlides/notesSlide{j}.xml");
+                if !files.iter().any(|f| f.0 == name) {
+                    files.push((name, nx.clone().into_bytes()));
+                }
             }
             rels.push_str("</Relationships>");
             files.push((
