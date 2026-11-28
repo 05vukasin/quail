@@ -8,6 +8,31 @@ use smallvec::{SmallVec, smallvec};
 
 pub use crate::byte_reader::Reader;
 
+// quail: the xref repair scan (`xref::RepairWork`) measures how far each of its attempts read.
+// A failed read or skip rewinds its reader, so the offset it reached is noted here first: the
+// furthest one, for readers over the data being measured (the address of its first byte, 0 when
+// nothing is measured).
+#[cfg(feature = "std")]
+std::thread_local! {
+    pub(crate) static REPAIR_REACH: core::cell::Cell<(usize, usize)> =
+        const { core::cell::Cell::new((0, 0)) };
+}
+
+/// quail: notes where a failed read or skip stopped (see `REPAIR_REACH`). Without `std`
+/// nothing is noted, and the repair scan counts only where its readers end.
+#[inline]
+fn note_failed_read(data: &[u8], offset: usize) {
+    #[cfg(feature = "std")]
+    REPAIR_REACH.with(|reach| {
+        let (base, furthest) = reach.get();
+        if base == data.as_ptr().addr() && offset > furthest {
+            reach.set((base, offset));
+        }
+    });
+    #[cfg(not(feature = "std"))]
+    let _ = (data, offset);
+}
+
 /// Extension trait for the `Reader` struct.
 pub trait ReaderExt<'a> {
     fn read<T: Readable<'a>>(&mut self, ctx: &ReaderContext<'a>) -> Option<T>;
@@ -39,6 +64,8 @@ impl<'a> ReaderExt<'a> for Reader<'a> {
         let old_offset = self.offset;
 
         T::read(self, ctx).or_else(|| {
+            // quail: see `note_failed_read`.
+            note_failed_read(self.data, self.offset);
             self.offset = old_offset;
 
             None
@@ -69,6 +96,8 @@ impl<'a> ReaderExt<'a> for Reader<'a> {
         let old_offset = self.offset;
 
         T::skip_with_depth(self, is_content_stream, depth).or_else(|| {
+            // quail: see `note_failed_read`.
+            note_failed_read(self.data, self.offset);
             self.offset = old_offset;
             None
         })?;

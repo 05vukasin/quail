@@ -97,6 +97,21 @@ The crate using them (`quail-pdf`) cannot do that from outside.
   at the end) made every header and every `<<` walk 512 levels deep: 3.3 s for 4 MB. An object
   nested deeper than 32 levels is not found by the repair scan; files with a valid xref are not
   affected.
+- **`xref.rs`, `reader.rs` (repair work budget):** each step of the repair scan (an object
+  header, the validation of the object after it, a dictionary probe, an object stream read) is
+  measured, and the steps starting in one window (up to the next `endobj`) may read
+  `REPAIR_WORK_FACTOR` (16) times the window's size in total (`RepairWork`). Once that is spent,
+  the scan skips to the window's end; a step reads no further than what is left. A failed read
+  rewinds its reader, so `ReaderExt::read` and `skip_with_depth` note the offset a failure
+  reached first (`REPAIR_REACH`, a thread-local, set only while a scan runs and only for
+  readers over the scanned file). Steps overlap without limit only when they start inside a
+  string, a comment or a container an earlier step already walked: 16 000 `<<` inside one
+  unclosed 2.5 MB literal string each walked the rest of it (20 GB, 16 s), and `<< /A %`
+  repeated on one line made every probe read the same long array after it (1 MB, 11 s). Object
+  headers between digits and `obj`, and the comment after `obj`, are read within the budget too.
+  In total the steps read at most 16 times the file. Well-formed windows cost about 2 (validation, then
+  the probe); a window that spends its budget is damaged or hostile, and objects and
+  dictionaries in the rest of it are not found.
 - **`object/stream.rs`:** `Stream::encoded_len`, the stored data length without a copy.
 - **`content/mod.rs`:** an inline image's end is probed (`starts_with_content` on the content
   after a candidate `EI`) at most `MAX_CONTENT_PROBES` (64) times; then the candidate is taken
