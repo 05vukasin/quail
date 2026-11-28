@@ -8,7 +8,8 @@ use crate::garbage::{GarbageReport, garbage_report};
 use crate::keys;
 use crate::lang::{Detection, LanguageDetector};
 use crate::normalize::{NormalizeOptions, normalize_into};
-use crate::normalized::{NormalizedPage, NormalizedText};
+use crate::normalized::{MAX_SHARED_BYTES, NormalizedPage, NormalizedText};
+use crate::piece::{PIECE_BYTES, pieces};
 use crate::script::ScriptCounts;
 use crate::token::tokens;
 
@@ -38,7 +39,8 @@ fn within(text: &str, budget: usize) -> &str {
 /// `Limits::max_text_bytes` of text and records a problem when it stops early.
 ///
 /// Provides the [`NormalizedText`] artifact (`normalized_text`): every page it read whole,
-/// normalized with the default options, with its offset map and keyed tokens.
+/// normalized with the default options, with its offset map and keyed tokens, up to
+/// [`MAX_SHARED_BYTES`] of page text in all.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TextStats;
 
@@ -78,6 +80,7 @@ impl Analyzer for TextStats {
         let mut words = 0usize;
         let mut pages_with_text = 0usize;
         let mut norm = String::new();
+        let mut shared_left = MAX_SHARED_BYTES;
         let mut scripts = ScriptCounts::default();
         let mut garbage = GarbageReport::default();
         for page in &doc.pages {
@@ -91,8 +94,16 @@ impl Analyzer for TextStats {
             }
             let text = within(&page.text, budget);
             budget -= text.len();
-            // A page read whole goes into the artifact, and its words come from there.
-            let whole = (text.len() == page.text.len()).then(|| NormalizedPage::new(text));
+            // A page read whole goes into the artifact while it holds less than
+            // `MAX_SHARED_BYTES` of page text, and its words come from there. A page longer
+            // than `PIECE_BYTES` never does: its consumers read it in pieces or in part.
+            let whole = (text.len() == page.text.len()
+                && text.len() <= shared_left
+                && text.len() <= PIECE_BYTES)
+                .then(|| {
+                shared_left -= text.len();
+                NormalizedPage::new(text)
+            });
             let g = garbage_report(text);
             if g.chars > 0 {
                 pages_with_text += 1;
@@ -103,9 +114,14 @@ impl Analyzer for TextStats {
                 words += if let Some(p) = &whole {
                     p.words()
                 } else {
-                    norm.clear();
-                    normalize_into(text, &NormalizeOptions::default(), &mut norm);
-                    tokens(&norm).count()
+                    // Piece by piece: a page of many megabytes is never normalized at once.
+                    pieces(text, PIECE_BYTES)
+                        .map(|(_, piece)| {
+                            norm.clear();
+                            normalize_into(piece, &NormalizeOptions::default(), &mut norm);
+                            tokens(&norm).count()
+                        })
+                        .sum()
                 };
             }
             normalized.push(whole);

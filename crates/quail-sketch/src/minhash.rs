@@ -164,8 +164,10 @@ pub fn shingle_hashes(text: &str, out: &mut Vec<u64>) {
 
 /// [`shingle_hashes`] from the token key hashes of the text (`hash_str` of each folded key,
 /// in order) instead of the text.
-pub(crate) fn shingle_hashes_of_keys(key_hashes: Vec<u64>, out: &mut Vec<u64>) {
-    out.extend(Shingles::from_hashes(key_hashes.into_iter(), SHINGLE_WORDS));
+pub(crate) fn shingle_hashes_of_keys(
+    key_hashes: impl Iterator<Item = u64>,
+) -> impl Iterator<Item = u64> {
+    Shingles::from_hashes(key_hashes, SHINGLE_WORDS)
 }
 
 /// MinHash of a text: normalizes it, shingles it and signs the set. `None` without any

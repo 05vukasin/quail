@@ -1,5 +1,6 @@
 //! The `item.lines@6` analyzer.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -440,7 +441,9 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
             }
             None => {}
         }
-        let mut text_lines: Vec<(String, quail_core::Span, Option<quail_core::BBox>)> = Vec::new();
+        // Lines of the page text are borrowed: a page of many megabytes is not copied.
+        let mut text_lines: Vec<(Cow<'_, str>, quail_core::Span, Option<quail_core::BBox>)> =
+            Vec::new();
         let geometric = page.kind == PageKind::Physical
             && page
                 .blocks
@@ -449,7 +452,10 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
         if geometric {
             let (g, rest) = geom::tables(page, &h);
             grids.extend(g);
-            text_lines.extend(rest.iter().map(geom::Row::joined));
+            text_lines.extend(rest.iter().map(|r| {
+                let (t, span, bbox) = r.joined();
+                (Cow::Owned(t), span, bbox)
+            }));
         } else {
             for b in &page.blocks {
                 if matches!(b.kind, BlockKind::TableCell { .. })
@@ -466,7 +472,7 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
                         start: u32::try_from(start).unwrap_or(u32::MAX),
                         end: u32::try_from(start + l.len()).unwrap_or(u32::MAX),
                     };
-                    text_lines.push((l.to_owned(), span, b.bbox));
+                    text_lines.push((Cow::Borrowed(l), span, b.bbox));
                 }
             }
         }
@@ -482,7 +488,8 @@ pub(crate) fn extract(doc: &Document, out: &mut Emitter) -> Found {
             if parsed.roles.is_none() {
                 for &ri in &parsed.unused_rows {
                     if let Some(row) = g.rows.get(ri) {
-                        text_lines.push(joined_row(row));
+                        let (t, span, bbox) = joined_row(row);
+                        text_lines.push((Cow::Owned(t), span, bbox));
                     }
                 }
             }

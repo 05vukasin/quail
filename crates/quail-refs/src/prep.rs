@@ -25,9 +25,15 @@ pub(crate) struct Tok {
     pub line: u32,
 }
 
-/// A prepared page.
+/// A prepared page, or one piece of a long page (see [`quail_text::piece`]).
 pub(crate) struct Prepared<'p> {
     pub page: &'p Page,
+    /// Offset of the piece in the page text (0 for a whole page).
+    pub base: usize,
+    /// The piece starts the page: its first lines are the page's head lines.
+    pub top: bool,
+    /// The piece ends the page: its last lines are the page's foot lines.
+    pub bottom: bool,
     pub norm: Cow<'p, str>,
     pub map: Cow<'p, OffsetMap>,
     pub keys: String,
@@ -77,9 +83,16 @@ impl KeyLine {
 }
 
 impl<'p> Prepared<'p> {
-    /// Prepares `text` (a prefix of `page.text`, or all of it). `shared` is the page from
-    /// the `normalized_text` artifact, when it holds exactly this text normalized.
-    pub fn new(page: &'p Page, text: &str, shared: Option<&'p NormalizedPage>) -> Self {
+    /// Prepares `text`, the part of `page.text` from byte `base` (all of it, a prefix, or a
+    /// piece). `bottom`: no page text follows it. `shared` is the page from the
+    /// `normalized_text` artifact, when it holds exactly this text normalized.
+    pub fn new(
+        page: &'p Page,
+        base: usize,
+        text: &str,
+        bottom: bool,
+        shared: Option<&'p NormalizedPage>,
+    ) -> Self {
         let (norm, map) = if let Some(s) = shared {
             (Cow::Borrowed(s.text()), Cow::Borrowed(s.map()))
         } else {
@@ -106,6 +119,9 @@ impl<'p> Prepared<'p> {
         let lines = if b.toks.is_empty() { 0 } else { b.line + 1 };
         Self {
             page,
+            base,
+            top: base == 0,
+            bottom,
             norm,
             map,
             keys: b.keys,
@@ -174,10 +190,15 @@ impl<'p> Prepared<'p> {
     /// Span in the original page text of normalized bytes `ns..ne`.
     pub fn source_span(&self, ns: usize, ne: usize) -> Span {
         let to = |x: usize| u32::try_from(x).unwrap_or(u32::MAX);
-        self.map.span_to_source(Span {
+        let s = self.map.span_to_source(Span {
             start: to(ns),
             end: to(ne),
-        })
+        });
+        let base = to(self.base);
+        Span {
+            start: s.start.saturating_add(base),
+            end: s.end.saturating_add(base),
+        }
     }
 
     /// The block holding original byte `at`.

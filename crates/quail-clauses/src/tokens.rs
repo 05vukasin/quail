@@ -4,15 +4,16 @@
 
 use quail_core::{Document, Span};
 
-/// One token.
+/// One token. Its key ([`Stream::key`]: lowercase text, typographic quotes and apostrophes
+/// folded to ASCII) is kept in the stream's key buffer, so a token is 20 bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tok {
     /// Page index.
     pub page: u32,
     /// Byte span in the page text.
     pub span: Span,
-    /// Lowercase text; typographic quotes and apostrophes folded to ASCII.
-    pub key: String,
+    /// End of its key in [`Stream`]'s key buffer; the key starts where the previous one ends.
+    key_end: u32,
     /// A run of letters and digits (otherwise one punctuation character).
     pub word: bool,
     /// The first character is an uppercase letter.
@@ -24,6 +25,8 @@ pub struct Tok {
 pub struct Stream {
     /// Tokens in reading order.
     pub toks: Vec<Tok>,
+    /// The keys of all tokens, concatenated.
+    keys: String,
     /// Pages whose text was cut by the byte budget (index of the first one).
     pub cut_at: Option<u32>,
 }
@@ -52,7 +55,7 @@ impl Stream {
             if end < page.text.len() {
                 s.cut_at.get_or_insert(page.index);
             }
-            tokenize(&page.text[..end], page.index, &mut s.toks);
+            tokenize(&page.text[..end], page.index, &mut s.toks, &mut s.keys);
             left -= end;
         }
         (s, false)
@@ -70,7 +73,13 @@ impl Stream {
 
     /// Key of token `i` (`""` past the end).
     pub fn key(&self, i: usize) -> &str {
-        self.toks.get(i).map_or("", |t| t.key.as_str())
+        let Some(t) = self.toks.get(i) else {
+            return "";
+        };
+        let start = i
+            .checked_sub(1)
+            .map_or(0, |p| self.toks[p].key_end as usize);
+        self.keys.get(start..t.key_end as usize).unwrap_or("")
     }
 
     /// Token `i` is a word.
@@ -82,7 +91,7 @@ impl Stream {
     pub fn is_punct(&self, i: usize, c: char) -> bool {
         self.toks
             .get(i)
-            .is_some_and(|t| !t.word && t.key.starts_with(c))
+            .is_some_and(|t| !t.word && self.key(i).starts_with(c))
     }
 
     /// The word positions `i..` spell `seq` (punctuation tokens in between are not allowed).
@@ -98,7 +107,7 @@ impl Stream {
         if t.word {
             return false;
         }
-        match t.key.as_str() {
+        match self.key(i) {
             ";" | "!" | "?" => true,
             "." => {
                 // "2.5", "Inc." and "U.S." do not end a sentence here: only a dot before an
@@ -106,7 +115,7 @@ impl Stream {
                 let next = self.toks.get(i + 1);
                 let prev_digit = i > 0 && self.key(i - 1).starts_with(|c: char| c.is_ascii_digit());
                 let next_digit =
-                    next.is_some_and(|n| n.key.starts_with(|c: char| c.is_ascii_digit()));
+                    next.is_some() && self.key(i + 1).starts_with(|c: char| c.is_ascii_digit());
                 if prev_digit && next_digit {
                     return false;
                 }
@@ -178,14 +187,15 @@ fn fold_char(c: char) -> char {
     }
 }
 
-fn tokenize(text: &str, page: u32, out: &mut Vec<Tok>) {
+fn tokenize(text: &str, page: u32, out: &mut Vec<Tok>, keys: &mut String) {
     let mut word_start: Option<usize> = None;
-    let push_word = |out: &mut Vec<Tok>, s: usize, e: usize| {
+    let push_word = |out: &mut Vec<Tok>, keys: &mut String, s: usize, e: usize| {
         let w = &text[s..e];
+        keys.push_str(&w.to_lowercase());
         out.push(Tok {
             page,
             span: span(s, e),
-            key: w.to_lowercase(),
+            key_end: to_u32(keys.len()),
             word: true,
             upper: w.starts_with(char::is_uppercase),
         });
@@ -196,22 +206,27 @@ fn tokenize(text: &str, page: u32, out: &mut Vec<Tok>) {
             continue;
         }
         if let Some(s) = word_start.take() {
-            push_word(out, s, i);
+            push_word(out, keys, s, i);
         }
         if c.is_whitespace() || c.is_control() {
             continue;
         }
+        keys.push(fold_char(c));
         out.push(Tok {
             page,
             span: span(i, i + c.len_utf8()),
-            key: fold_char(c).to_string(),
+            key_end: to_u32(keys.len()),
             word: false,
             upper: false,
         });
     }
     if let Some(s) = word_start {
-        push_word(out, s, text.len());
+        push_word(out, keys, s, text.len());
     }
+}
+
+fn to_u32(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 fn span(s: usize, e: usize) -> Span {
@@ -244,7 +259,7 @@ mod tests {
         let d = doc(&["Two (2) years\u{2019} notice.", "Next"]);
         let (s, stopped) = Stream::read(&d, 1 << 20, || false);
         assert!(!stopped);
-        let keys: Vec<&str> = s.toks.iter().map(|t| t.key.as_str()).collect();
+        let keys: Vec<&str> = (0..s.len()).map(|i| s.key(i)).collect();
         assert_eq!(
             keys,
             ["two", "(", "2", ")", "years", "'", "notice", ".", "next"]
@@ -267,7 +282,7 @@ mod tests {
         let d = doc(&["2.5 years under U.S. Law. Then"]);
         let (s, _) = Stream::read(&d, 1 << 20, || false);
         assert!(!s.sentence_end(1));
-        let last_dot = s.toks.iter().rposition(|t| t.key == ".").unwrap();
+        let last_dot = (0..s.len()).rposition(|i| s.key(i) == ".").unwrap();
         assert!(s.sentence_end(last_dot));
     }
 }

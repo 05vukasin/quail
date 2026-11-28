@@ -13,7 +13,7 @@ use quail_text::token::keyed_tokens;
 
 use crate::keys;
 use crate::minhash::{MIN_SHINGLES, MinHash, shingle_hashes_of_keys};
-use crate::text::{DocText, raw_text};
+use crate::text::{DocText, extend_distinct, raw_segments};
 use crate::{compat, invoice, layout, phash, simhash, template};
 
 fn int(n: usize) -> Value {
@@ -104,8 +104,9 @@ impl MinHashAnalyzer {
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
         let text = DocText::read(doc, ctx.get::<NormalizedText>(), ctx.limits, out)?;
+        // A set: duplicates are dropped as it fills.
         let mut hashes = Vec::new();
-        shingle_hashes_of_keys(text.key_hashes(), &mut hashes);
+        extend_distinct(&mut hashes, shingle_hashes_of_keys(text.key_hashes()));
         out.check_deadline()?;
         let Some(m) = MinHash::from_hashes(&mut hashes) else {
             return Ok(());
@@ -146,8 +147,7 @@ impl SimHashText {
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
         let text = DocText::read(doc, ctx.get::<NormalizedText>(), ctx.limits, out)?;
-        let mut hashes = Vec::new();
-        shingle_hashes_of_keys(text.key_hashes(), &mut hashes);
+        let hashes: Vec<u64> = shingle_hashes_of_keys(text.key_hashes()).collect();
         if let Some((h, n)) = simhash::shingles_simhash(hashes)
             && n >= MIN_SHINGLES
         {
@@ -186,7 +186,8 @@ impl SimHashTemplate {
         let mut hashes = Vec::new();
         let mut masker = template::Masker::new();
         text.for_each_keyed(|token, key, gap| {
-            hashes.push(hash_str(&masker.mask(token, key, gap)));
+            // A set: duplicates are dropped as it fills.
+            extend_distinct(&mut hashes, [hash_str(&masker.mask(token, key, gap))]);
         });
         if let Some((h, n)) = template::masked_simhash(hashes)
             && n >= MIN_TEMPLATE_WORDS
@@ -265,8 +266,8 @@ impl InvoiceLayout {
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
-        let text = raw_text(doc, ctx.limits, out)?;
-        match invoice::features(&text) {
+        let segs = raw_segments(doc, ctx.limits, out)?;
+        match invoice::features_of(&segs) {
             Ok(f) if !f.labels.is_empty() => {
                 out.fact(keys::INVOICE_LAYOUT, Value::U64(f.fingerprint()));
                 out.fact(keys::INVOICE_LABELS, int(f.labels.len()));
@@ -304,9 +305,10 @@ impl TextKey {
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
         let text = DocText::read(doc, ctx.get::<NormalizedText>(), ctx.limits, out)?;
-        let mut joined = String::new();
-        text.for_each_key(|key| join_key(&mut joined, key));
-        if let Some(k) = text_key_of_joined(&joined) {
+        // The joined words are hashed as they come, never held.
+        let mut joined = JoinedKey::new();
+        text.for_each_key(|key| joined.push(key));
+        if let Some(k) = joined.finish() {
             out.fact(keys::TEXT_KEY, Value::Bytes(k.to_vec().into()));
         }
         Ok(())
@@ -330,6 +332,38 @@ fn join_key(joined: &mut String, key: &str) {
         joined.push(' ');
     }
     joined.push_str(key);
+}
+
+/// [`text_key_of_joined`] of words pushed one by one, streamed into the hash.
+struct JoinedKey {
+    hasher: xxhash_rust::xxh3::Xxh3,
+    chars: usize,
+    any: bool,
+}
+
+impl JoinedKey {
+    fn new() -> Self {
+        Self {
+            hasher: xxhash_rust::xxh3::Xxh3::with_seed(quail_text::shingle::SEED),
+            chars: 0,
+            any: false,
+        }
+    }
+
+    fn push(&mut self, key: &str) {
+        // As `join_key`: a space before every key once the joined text is not empty.
+        if self.any {
+            self.hasher.update(b" ");
+            self.chars += 1;
+        }
+        self.any = self.any || !key.is_empty();
+        self.hasher.update(key.as_bytes());
+        self.chars += key.chars().count();
+    }
+
+    fn finish(&self) -> Option<[u8; 16]> {
+        (self.chars >= MIN_TEXT_KEY_CHARS).then(|| self.hasher.digest128().to_be_bytes())
+    }
 }
 
 /// [`text_key`] of the folded words joined by one space.
@@ -366,8 +400,8 @@ impl CompatMinHash {
     }
 
     fn sketch(self, ctx: &Ctx<'_>, doc: &Document, out: &mut Emitter) -> Result<()> {
-        let text = raw_text(doc, ctx.limits, out)?;
-        if let Some((sig, n)) = compat::raw_minhash(&text) {
+        let segs = raw_segments(doc, ctx.limits, out)?;
+        if let Some((sig, n)) = compat::raw_minhash_of(&segs) {
             let bytes: Vec<u8> = sig.iter().flat_map(|r| r.to_le_bytes()).collect();
             out.fact(keys::COMPAT_MINHASH, Value::Bytes(bytes.into()));
             out.fact(
@@ -382,8 +416,8 @@ impl CompatMinHash {
             out.fact(keys::COMPAT_SHINGLES, int(n));
         }
         out.check_deadline()?;
-        if !text.trim().is_empty() {
-            match compat::template_fp(&text) {
+        if segs.iter().any(|s| !s.trim().is_empty()) {
+            match compat::template_fp_of(&segs) {
                 Ok(fp) => out.fact(keys::COMPAT_TEMPLATE, Value::U64(fp)),
                 Err(e) => out.warn(format!("{}: {e}, sketch skipped", Self::ID)),
             }

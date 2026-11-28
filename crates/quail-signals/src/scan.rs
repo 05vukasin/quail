@@ -12,6 +12,7 @@ use crate::date::{self, DateCand};
 use crate::ident::IdentScan;
 use crate::keys;
 use crate::page::PageText;
+use quail_text::piece::{PIECE_BYTES, pieces};
 use crate::{contact, money};
 
 /// Distinct values kept per key and file; more are dropped with a problem.
@@ -189,6 +190,7 @@ fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
     let mut cands = Vec::new();
     let mut page_dates = Vec::new();
     let mut first_page = true;
+    let mut timed_out = false;
     for page in &doc.pages {
         if out.check_deadline().is_err() {
             out.problem(format!(
@@ -209,43 +211,66 @@ fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
         if text.trim().is_empty() {
             continue;
         }
-        pt.load(text);
-        serbian = serbian || (0..pt.len()).any(|i| SERBIAN_MARKERS.contains(&pt.key(i)));
-        cands.clear();
-        let mut ids = IdentScan::new(&pt, serbian);
-        ids.run(&mut cands);
-        jmbg = jmbg.saturating_add(ids.jmbg);
-        money::scan(&pt, &mut cands);
-        contact::scan(&pt, serbian, &mut cands);
-        page_dates.clear();
-        date::scan(&pt, first_page, &mut page_dates);
-        first_page = false;
-
+        // A page of many megabytes is scanned piece by piece (cut at blank lines or line
+        // breaks), so the token buffers stay bounded; a page up to `PIECE_BYTES` is one piece.
         let sorted = page
             .blocks
             .windows(2)
             .all(|w| w[0].span.start <= w[1].span.start);
-        let evidence = |sp: Span| {
-            let src = pt.map.span_to_source(sp);
-            let block = block_at(&page.blocks, sorted, src.start);
-            Evidence {
-                page: Some(page.index),
-                zone: block.map(|b| b.zone).unwrap_or_default(),
-                span: Some(src),
-                bbox: block.and_then(|b| b.bbox),
+        for (base, piece) in pieces(text, PIECE_BYTES) {
+            if piece.trim().is_empty() {
+                continue;
             }
-        };
-        for c in cands.drain(..) {
-            let ev = evidence(c.span);
-            col.add(c.key, c.value, c.conf, ev);
-        }
-        for d in page_dates.drain(..) {
-            if dates.len() >= MAX_DATES {
-                dates_capped = true;
+            if base > 0 && out.check_deadline().is_err() {
+                out.problem(format!(
+                    "signal.scan: deadline reached inside page {}, the rest not scanned",
+                    page.index
+                ));
+                timed_out = true;
                 break;
             }
-            let ev = evidence(d.span);
-            dates.push((d, ev));
+            pt.load(piece);
+            serbian = serbian || (0..pt.len()).any(|i| SERBIAN_MARKERS.contains(&pt.key(i)));
+            cands.clear();
+            let mut ids = IdentScan::new(&pt, serbian);
+            ids.run(&mut cands);
+            jmbg = jmbg.saturating_add(ids.jmbg);
+            money::scan(&pt, &mut cands);
+            contact::scan(&pt, serbian, &mut cands);
+            page_dates.clear();
+            date::scan(&pt, first_page, &mut page_dates);
+            first_page = false;
+
+            let base = u32::try_from(base).unwrap_or(u32::MAX);
+            let evidence = |sp: Span| {
+                let src = pt.map.span_to_source(sp);
+                let src = Span {
+                    start: src.start.saturating_add(base),
+                    end: src.end.saturating_add(base),
+                };
+                let block = block_at(&page.blocks, sorted, src.start);
+                Evidence {
+                    page: Some(page.index),
+                    zone: block.map(|b| b.zone).unwrap_or_default(),
+                    span: Some(src),
+                    bbox: block.and_then(|b| b.bbox),
+                }
+            };
+            for c in cands.drain(..) {
+                let ev = evidence(c.span);
+                col.add(c.key, c.value, c.conf, ev);
+            }
+            for d in page_dates.drain(..) {
+                if dates.len() >= MAX_DATES {
+                    dates_capped = true;
+                    break;
+                }
+                let ev = evidence(d.span);
+                dates.push((d, ev));
+            }
+        }
+        if timed_out {
+            break;
         }
     }
     if dates_capped {

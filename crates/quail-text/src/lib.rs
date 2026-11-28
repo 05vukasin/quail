@@ -17,6 +17,7 @@
 //! | [`money`] | numbers and amounts as written (`1,200.50`, `1.200,50`, `1 200,50`, `(€1,200.50)`, `5 miliona din.`) as exact decimals; currency symbols, words and codes |
 //! | [`decode`] | bytes of a plain-text file to text: BOM, UTF-8, UTF-16, legacy encodings (`chardetng` + `encoding_rs`) |
 //! | [`normalized`] | the `normalized_text` artifact: pages normalized once, with offset maps and keyed tokens |
+//! | [`piece`] | bounded pieces of a long page, cut at blank lines, lines or spaces, for streaming |
 //!
 //! Everything borrows where it can ([`std::borrow::Cow`] results, iterators over `&str`,
 //! `*_into` variants that append to a caller's buffer) and nothing keeps global state.
@@ -44,6 +45,7 @@ pub mod lang;
 pub mod money;
 pub mod normalize;
 pub mod normalized;
+pub mod piece;
 pub mod script;
 pub mod shingle;
 pub mod token;

@@ -41,6 +41,7 @@ use std::sync::{LazyLock, OnceLock};
 use crate::coeffs::{A, B};
 use crate::minhash::{BANDS, P, PERMUTATIONS, ROWS, permute};
 use crate::simhash::simhash;
+use crate::text::extend_distinct;
 
 /// Fewest distinct shingles for a version signature.
 pub const MIN_SHINGLES: usize = 40;
@@ -292,7 +293,7 @@ pub fn digest_int(value: &str) -> u64 {
 }
 
 /// [`digest_int`] of `words` joined by one space, without building the joined string.
-fn digest_words(words: &[&str]) -> u64 {
+fn digest_words<S: AsRef<str>>(words: &[S]) -> u64 {
     let mut st = blake2b_simd::Params::new()
         .hash_length(8)
         .personal(PERSONALIZATION)
@@ -301,24 +302,16 @@ fn digest_words(words: &[&str]) -> u64 {
         if i > 0 {
             st.update(b" ");
         }
-        st.update(w.as_bytes());
+        st.update(w.as_ref().as_bytes());
     }
     let mut out = [0u8; 8];
     out.copy_from_slice(st.finalize().as_bytes());
     u64::from_be_bytes(out)
 }
 
-/// The distinct `k`-word windows of `words` (tokens hold no white space, so equal joined
-/// strings are equal windows) with their digests, in no particular order. Equal windows have
-/// equal digests, so sorting by digest first and the words second puts duplicates side by
-/// side; two different windows that share a digest both stay. (Digesting first and sorting
-/// integers beats sorting the windows: shingles rarely repeat.)
-fn distinct_digests<'a>(words: &'a [&'a str], k: usize) -> Vec<(u64, &'a [&'a str])> {
-    let mut v: Vec<(u64, &[&str])> = words.windows(k).map(|w| (digest_words(w), w)).collect();
-    v.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
-    v.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-    v
-}
+/// Text the template mask reads at once: the segments of a longer text are masked in groups
+/// of about this size (see [`template_fp_of`]).
+const MASK_BYTES: usize = quail_text::piece::PIECE_BYTES;
 
 /// [`digest`] as 16 lowercase hex digits (`_hex_digest`).
 pub fn hex_digest(value: &str) -> String {
@@ -379,15 +372,46 @@ fn minhash_of_digests(base: &[u64]) -> [u64; PERMUTATIONS] {
 /// Same result as `minhash_of(&shingles(&tokens(text)))`, computed on borrowed tokens: each
 /// shingle is digested without being joined.
 pub fn raw_minhash(text: &str) -> Option<([u64; PERMUTATIONS], usize)> {
-    let lower = text.to_lowercase();
-    let words: Vec<&str> = WORD.find_iter(&lower).map(|m| m.as_str()).collect();
-    let k = if words.len() < 3 { 1 } else { 3 };
-    let features = distinct_digests(&words, k);
-    if features.len() < MIN_SHINGLES {
+    raw_minhash_of(&[text])
+}
+
+/// [`raw_minhash`] of the text that `segments` make when joined, streamed: one segment is
+/// lowercased at a time and only the digests of the 3-word windows are kept (8 bytes each,
+/// duplicates dropped as they fill). Segments should be cut at white space (a word cut in
+/// two would be two words). The shingle set is counted by digest: two different shingles of
+/// one text with the same 64-bit digest count once (the minhash is the same either way).
+pub(crate) fn raw_minhash_of(segments: &[&str]) -> Option<([u64; PERMUTATIONS], usize)> {
+    let mut digests = Vec::new();
+    // The last three words, oldest first.
+    let mut window: Vec<String> = Vec::with_capacity(3);
+    let mut words = 0usize;
+    for seg in segments {
+        let lower = seg.to_lowercase();
+        for m in WORD.find_iter(&lower) {
+            words += 1;
+            let mut w = if window.len() == 3 {
+                window.remove(0)
+            } else {
+                String::new()
+            };
+            w.clear();
+            w.push_str(m.as_str());
+            window.push(w);
+            if window.len() == 3 {
+                extend_distinct(&mut digests, [digest_words(&window)]);
+            }
+        }
+    }
+    if words < 3 {
+        // Fewer than three words: the words themselves (at most two, never enough).
+        digests = window.iter().map(|w| digest_words(&[w])).collect();
+    }
+    digests.sort_unstable();
+    digests.dedup();
+    if digests.len() < MIN_SHINGLES {
         return None;
     }
-    let base: Vec<u64> = features.iter().map(|f| f.0).collect();
-    Some((minhash_of_digests(&base), features.len()))
+    Some((minhash_of_digests(&digests), digests.len()))
 }
 
 /// `lsh_buckets(signature)`.
@@ -422,12 +446,39 @@ pub fn mask_entities(text: &str) -> Result<String, RegexLimit> {
 
 /// `template_fp(text)`: SimHash of the set of masked unigrams; 0 for no tokens.
 pub fn template_fp(text: &str) -> Result<u64, RegexLimit> {
-    let lower = mask_entities(text)?.to_lowercase();
-    // Unigrams repeat a lot: dedup the borrowed tokens first, then digest each once.
-    let mut words: Vec<&str> = WORD.find_iter(&lower).map(|m| m.as_str()).collect();
-    words.sort_unstable();
-    words.dedup();
-    Ok(simhash(words.iter().map(|w| (digest_int(w), 1))))
+    template_fp_of(&[text])
+}
+
+/// [`template_fp`] of the text that `segments` make when joined. Consecutive segments are
+/// joined and masked in groups of about [`MASK_BYTES`] (a text up to that size is masked
+/// whole, as [`template_fp`]); a group ends at a segment end, so a mask can only miss an
+/// entity that spans two groups. The unigram set is kept as digests (two different words with
+/// one 64-bit digest count once).
+pub(crate) fn template_fp_of(segments: &[&str]) -> Result<u64, RegexLimit> {
+    let mut digests = Vec::new();
+    let mut group = String::new();
+    let add = |group: &str, digests: &mut Vec<u64>| -> Result<(), RegexLimit> {
+        let lower = mask_entities(group)?.to_lowercase();
+        // Unigrams repeat a lot: dedup the borrowed tokens first, then digest each once.
+        let mut words: Vec<&str> = WORD.find_iter(&lower).map(|m| m.as_str()).collect();
+        words.sort_unstable();
+        words.dedup();
+        extend_distinct(digests, words.iter().map(|w| digest_int(w)));
+        Ok(())
+    };
+    for seg in segments {
+        if !group.is_empty() && group.len() + seg.len() > MASK_BYTES {
+            add(&group, &mut digests)?;
+            group.clear();
+        }
+        group.push_str(seg);
+    }
+    if !group.is_empty() {
+        add(&group, &mut digests)?;
+    }
+    digests.sort_unstable();
+    digests.dedup();
+    Ok(simhash(digests.iter().map(|&h| (h, 1))))
 }
 
 /// `_normalize_heading`: numbering off, white space collapsed, stripped, lowercased.

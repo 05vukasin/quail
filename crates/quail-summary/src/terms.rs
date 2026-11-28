@@ -31,6 +31,7 @@ use std::time::Instant;
 
 use quail_core::{Artifact, Document, TextSource};
 use quail_text::fold::{FoldOptions, fold};
+use quail_text::piece::{PIECE_BYTES, prefix};
 use quail_text::token::TokenKind;
 use quail_text::{NormalizedPage, NormalizedText};
 
@@ -457,7 +458,8 @@ pub fn build(
         let np = if let Some(n) = shared.and_then(|n| n.page(pos, &p.text)) {
             n
         } else {
-            own = NormalizedPage::new(&p.text);
+            // A page of many megabytes is read up to `PIECE_BYTES`.
+            own = NormalizedPage::new(prefix(&p.text, PIECE_BYTES));
             &own
         };
         let skip = furniture_ranges(np.text(), &furniture);
@@ -514,7 +516,8 @@ impl TermIndex {
             let np = if let Some(n) = shared.and_then(|n| n.page(pos as usize, &p.text)) {
                 n
             } else {
-                own = NormalizedPage::new(&p.text);
+                // As in `build`: the page up to `PIECE_BYTES`.
+                own = NormalizedPage::new(prefix(&p.text, PIECE_BYTES));
                 &own
             };
             while i < by_page.len() && by_page[i].0 == pos {

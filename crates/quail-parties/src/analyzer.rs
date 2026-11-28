@@ -6,6 +6,7 @@ use quail_core::{
     Analyzer, AnalyzerId, Artifact, Ctx, Document, Emitter, Evidence, Profile, Result, Value, Zone,
 };
 use quail_text::NormalizedText;
+use quail_text::piece::PIECE_BYTES;
 
 use crate::keys;
 use crate::names::{core_key, key_tokens, normalized_key};
@@ -176,10 +177,18 @@ pub fn collect_with(
         if page.needs_ocr || page.text.trim().is_empty() {
             continue;
         }
-        let w = PageWords::with_shared(page, left, shared.and_then(|n| n.page(i, &page.text)));
+        // A page of many megabytes is read up to `PIECE_BYTES`: parties are named near the
+        // start, and the token buffers stay bounded.
+        let read = left.min(PIECE_BYTES);
+        let w = PageWords::with_shared(page, read, shared.and_then(|n| n.page(i, &page.text)));
         if page.text.len() > left {
             out.problem(format!(
                 "party: text limit reached inside page {}",
+                page.index
+            ));
+        } else if page.text.len() > read {
+            out.problem(format!(
+                "party: page {} read up to {PIECE_BYTES} bytes",
                 page.index
             ));
         }

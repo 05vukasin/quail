@@ -52,8 +52,8 @@ pub(crate) fn page_marker(p: &Patterns, pp: &Prepared<'_>) -> Option<PageMarker>
         };
         let zone = pp.zone_at(r.0);
         let edge = matches!(zone, Zone::Header | Zone::Footer)
-            || pp.line(t) < 3
-            || pp.line(t) + FOOT_LINES >= pp.lines;
+            || (pp.top && pp.line(t) < 3)
+            || (pp.bottom && pp.line(t) + FOOT_LINES >= pp.lines);
         if edge {
             return Some(PageMarker {
                 n,
@@ -118,7 +118,7 @@ pub(crate) fn version_hints(p: &Patterns, pp: &Prepared<'_>) -> Vec<VersionHint>
         let (la, lb) = pp.line_bounds(a);
         let zoned = matches!(zone, Zone::Header | Zone::Footer);
         let head =
-            (zone == Zone::Title || (pp.page.index == 0 && pp.line(a) < HEAD_LINES)) && lb - la < 8;
+            (zone == Zone::Title || (pp.page.index == 0 && pp.top && pp.line(a) < HEAD_LINES)) && lb - la < 8;
         let numbered = c.name("w").is_none();
         let alone = la == a && (lb == b || (numbered && lb == b + 1));
         // On a head line a single marker word counts in capitals ("DRAFT") only: "Final SAP"
