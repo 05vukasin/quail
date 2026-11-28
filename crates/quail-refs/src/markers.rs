@@ -117,8 +117,9 @@ pub(crate) fn version_hints(p: &Patterns, pp: &Prepared<'_>) -> Vec<VersionHint>
         let zone = pp.zone_at(pp.toks[a].ns);
         let (la, lb) = pp.line_bounds(a);
         let zoned = matches!(zone, Zone::Header | Zone::Footer);
-        let head =
-            (zone == Zone::Title || (pp.page.index == 0 && pp.top && pp.line(a) < HEAD_LINES)) && lb - la < 8;
+        let head = (zone == Zone::Title
+            || (pp.page.index == 0 && pp.top && pp.line(a) < HEAD_LINES))
+            && lb - la < 8;
         let numbered = c.name("w").is_none();
         let alone = la == a && (lb == b || (numbered && lb == b + 1));
         // On a head line a single marker word counts in capitals ("DRAFT") only: "Final SAP"

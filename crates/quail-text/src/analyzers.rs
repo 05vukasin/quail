@@ -101,9 +101,9 @@ impl Analyzer for TextStats {
                 && text.len() <= shared_left
                 && text.len() <= PIECE_BYTES)
                 .then(|| {
-                shared_left -= text.len();
-                NormalizedPage::new(text)
-            });
+                    shared_left -= text.len();
+                    NormalizedPage::new(text)
+                });
             let g = garbage_report(text);
             if g.chars > 0 {
                 pages_with_text += 1;

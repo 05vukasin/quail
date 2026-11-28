@@ -124,8 +124,8 @@ pub(crate) fn region(pp: &Prepared<'_>, i: usize) -> (bool, bool) {
         return (false, false);
     };
     let zone = pp.zone_at(t.ns);
-    let head =
-        (pp.page.index == 0 && pp.top && t.line < HEAD_LINES) || matches!(zone, Zone::Header | Zone::Title);
+    let head = (pp.page.index == 0 && pp.top && t.line < HEAD_LINES)
+        || matches!(zone, Zone::Header | Zone::Title);
     let foot = zone == Zone::Footer
         || (zone == Zone::Unknown
             && pp.bottom

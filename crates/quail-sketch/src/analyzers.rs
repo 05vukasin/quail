@@ -525,3 +525,27 @@ impl PagePHash {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streamed_text_key_is_the_key_of_the_joined_words() {
+        let words: Vec<String> = (0..300).map(|i| format!("reč{i}")).collect();
+        for keys in [
+            vec!["", "a", "", "b"],
+            words.iter().map(String::as_str).collect(),
+            vec!["", ""],
+            vec![],
+        ] {
+            let mut joined = String::new();
+            let mut streamed = JoinedKey::new();
+            for k in &keys {
+                join_key(&mut joined, k);
+                streamed.push(k);
+            }
+            assert_eq!(streamed.finish(), text_key_of_joined(&joined), "{joined}");
+        }
+    }
+}

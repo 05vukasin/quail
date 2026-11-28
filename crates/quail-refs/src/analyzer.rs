@@ -30,7 +30,9 @@ pub const MAX_IDS: usize = 32;
 /// Requires the `document` artifact, runs in [`Profile::Fast`]. See the crate docs for the
 /// keys and the record shapes. Reads at most `Limits::max_text_bytes` of text, checks the
 /// deadline per page, skips pages flagged `needs_ocr`, and records a problem when a cap or the
-/// text limit cuts the output short.
+/// text limit cuts the output short. A page longer than [`PIECE_BYTES`] is read in pieces cut
+/// at blank lines or line breaks ([`quail_text::piece`]): head lines are those of its first
+/// piece, foot lines those of its last.
 #[derive(Debug)]
 pub struct RefAnalyzer {
     pats: Patterns,
@@ -140,6 +142,7 @@ struct Acc {
     capped: [bool; 5],
 }
 
+#[allow(clippy::too_many_lines)] // the title pages first, then the rest, piece by piece
 fn run_document(
     p: &Patterns,
     doc: &Document,

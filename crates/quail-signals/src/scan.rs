@@ -12,8 +12,8 @@ use crate::date::{self, DateCand};
 use crate::ident::IdentScan;
 use crate::keys;
 use crate::page::PageText;
-use quail_text::piece::{PIECE_BYTES, pieces};
 use crate::{contact, money};
+use quail_text::piece::{PIECE_BYTES, pieces};
 
 /// Distinct values kept per key and file; more are dropped with a problem.
 pub const MAX_PER_KEY: usize = 200;
@@ -69,7 +69,10 @@ const SERBIAN_MARKERS: &[&str] = &[
 /// Requires the `document` artifact; runs in `Fast`. Reads at most
 /// `Limits::max_text_bytes` of text, keeps at most [`MAX_PER_KEY`] distinct values per key
 /// (one fact per distinct value, with the evidence of its most confident occurrence) and
-/// records a problem when either limit or the deadline stops it.
+/// records a problem when either limit or the deadline stops it. A page longer than
+/// [`PIECE_BYTES`] is scanned in pieces cut at blank lines or line breaks
+/// ([`quail_text::piece`]), so its token buffers stay within tens of megabytes; a value that
+/// spans a cut is not read.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SignalScan;
 
@@ -180,6 +183,7 @@ fn block_at(blocks: &[Block], sorted: bool, at: u32) -> Option<&Block> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one pass over pages and their pieces, in one place
 fn scan_document(doc: &Document, mut budget: usize, out: &mut Emitter) {
     let mut pt = PageText::default();
     let mut col = Collector::default();

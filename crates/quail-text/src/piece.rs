@@ -122,14 +122,20 @@ mod tests {
             all("aaaa bb\ncc dd ee", 12),
             [(0, "aaaa bb\n"), (8, "cc dd ee")]
         );
-        assert_eq!(all("aaaa bbbb cccc", 8), [(0, "aaaa "), (5, "bbbb "), (10, "cccc")]);
+        assert_eq!(
+            all("aaaa bbbb cccc", 8),
+            [(0, "aaaa "), (5, "bbbb "), (10, "cccc")]
+        );
         // No white space: on a char boundary.
         assert_eq!(all("ččččč", 5), [(0, "čč"), (4, "čč"), (8, "č")]);
     }
 
     #[test]
     fn white_space_after_a_cut_stays_with_the_piece() {
-        assert_eq!(all("aaaa\n\n\n\n  bbbb", 8), [(0, "aaaa\n\n\n\n  "), (10, "bbbb")]);
+        assert_eq!(
+            all("aaaa\n\n\n\n  bbbb", 8),
+            [(0, "aaaa\n\n\n\n  "), (10, "bbbb")]
+        );
     }
 
     #[test]

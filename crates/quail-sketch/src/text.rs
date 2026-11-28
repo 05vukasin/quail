@@ -317,4 +317,16 @@ mod tests {
         t.for_each_key(|k| keys.push(k.to_owned()));
         assert_eq!(keys, ["abc", "def", "ghi"]);
     }
+
+    #[test]
+    fn distinct_values_are_kept_once_as_the_list_fills() {
+        let mut set = Vec::new();
+        // Three passes over 700 000 values: a million and more are deduplicated on the way.
+        extend_distinct(&mut set, (0..2_100_000u64).map(|i| (i % 700_000) * 7919));
+        assert!(set.capacity() < 2_100_000, "{}", set.capacity());
+        set.sort_unstable();
+        set.dedup();
+        let want: Vec<u64> = (0..700_000u64).map(|i| i * 7919).collect();
+        assert_eq!(set, want);
+    }
 }

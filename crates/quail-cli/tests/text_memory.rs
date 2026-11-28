@@ -1,10 +1,19 @@
-//! Measurement harness (#142): peak memory of every step on 64 MiB of generated text.
+//! Peak memory of every text step on a page at the `max_text_bytes` limit (quail #142).
+//!
+//! A file whose text reaches the 64 MiB limit, with nothing repeated, used to push the text
+//! analyzers past 1 GiB (`oom-abort@signal.scan@5` on a 280 KB PPTX): per-token buffers of
+//! 16 to 48 bytes a token, several copies of the text, a `Vec` of every 3-word window. Each
+//! step is now measured on such a text, generated here, with a thread-local allocation
+//! counter, and must stay within its bound.
+//!
+//! The counting allocator is the only `unsafe` here: it is test-only and forwards to the
+//! system allocator unchanged.
 #![allow(unsafe_code, clippy::cast_precision_loss, clippy::missing_panics_doc)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicIsize, Ordering};
-use std::time::Instant;
+use std::cell::{Cell, RefCell};
+use std::fmt::Write as _;
+use std::time::Duration;
 
 use quail_core::{
     Analyzer, AnalyzerId, Blob, Ctx, Document, Emitter, Extractor, Format, Limits, Profile, Result,
@@ -12,32 +21,47 @@ use quail_core::{
 };
 use quail_engine::EngineBuilder;
 
-static LIVE: AtomicIsize = AtomicIsize::new(0);
-static PEAK: AtomicIsize = AtomicIsize::new(0);
+// ---------------------------------------------------------------------------------------------
+// Peak-allocation measurement.
+
+thread_local! {
+    static LIVE: Cell<isize> = const { Cell::new(0) };
+    static PEAK: Cell<isize> = const { Cell::new(0) };
+    static PEAKS: RefCell<Vec<(String, usize)>> = const { RefCell::new(Vec::new()) };
+}
 
 struct Counting;
 
-// SAFETY: forwards to `System` unchanged.
+// SAFETY: every method forwards to `System` with the caller's arguments unchanged; the only
+// extra work is updating const-initialized thread-local counters, which never allocate.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded unchanged; the caller upholds `GlobalAlloc::alloc`'s contract.
         let p = unsafe { System.alloc(layout) };
         if !p.is_null() {
             track(layout.size().cast_signed());
         }
         p
     }
+
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded unchanged; the caller upholds the contract.
         let p = unsafe { System.alloc_zeroed(layout) };
         if !p.is_null() {
             track(layout.size().cast_signed());
         }
         p
     }
+
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         track(-layout.size().cast_signed());
+        // SAFETY: `ptr` was allocated by `System` with this layout (all allocations go
+        // through this type).
         unsafe { System.dealloc(ptr, layout) }
     }
+
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: forwarded unchanged; the caller upholds `GlobalAlloc::realloc`'s contract.
         let p = unsafe { System.realloc(ptr, layout, new_size) };
         if !p.is_null() {
             track(new_size.cast_signed() - layout.size().cast_signed());
@@ -47,51 +71,36 @@ unsafe impl GlobalAlloc for Counting {
 }
 
 fn track(delta: isize) {
-    let now = LIVE.fetch_add(delta, Ordering::Relaxed) + delta;
-    PEAK.fetch_max(now, Ordering::Relaxed);
-    let t = BT.load(Ordering::Relaxed);
-    if t > 0 && delta >= t {
-        let _ = INSIDE.try_with(|i| {
-            if !i.get() {
-                i.set(true);
-                let bt = std::backtrace::Backtrace::force_capture().to_string();
-                let mut lines = vec![format!("BIG {} MiB live {} MiB", delta >> 20, now >> 20)];
-                let mut prev = String::new();
-                for l in bt.lines() {
-                    let l = l.trim();
-                    if l.starts_with("at ") && l.contains("/crates/") && !l.contains("text_memory") {
-                        if prev.len() > 0 { lines.push(format!("   {prev} {l}")); }
-                    }
-                    prev = l.to_string();
-                }
-                eprintln!("{}", lines.join("\n"));
-                i.set(false);
+    let _ = LIVE.try_with(|l| {
+        let now = l.get() + delta;
+        l.set(now);
+        let _ = PEAK.try_with(|p| {
+            if now > p.get() {
+                p.set(now);
             }
         });
-    }
+    });
 }
-
-static BT: AtomicIsize = AtomicIsize::new(0);
-thread_local! { static INSIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 #[global_allocator]
 static ALLOC: Counting = Counting;
 
-static RESULTS: Mutex<Vec<(String, f64, f64)>> = Mutex::new(Vec::new());
-
-fn measure<T>(name: String, f: impl FnOnce() -> T) -> T {
-    let base = LIVE.load(Ordering::Relaxed);
-    PEAK.store(base, Ordering::Relaxed);
-    let t = Instant::now();
+/// Runs `f` and returns its result with the peak extra bytes this thread held meanwhile.
+fn peak_of<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    let base = LIVE.with(Cell::get);
+    let outer = PEAK.with(Cell::get);
+    PEAK.with(|p| p.set(base));
     let r = f();
-    let peak = PEAK.load(Ordering::Relaxed) - base;
-    let secs = t.elapsed().as_secs_f64();
-    RESULTS
-        .lock()
-        .unwrap()
-        .push((name, peak as f64 / f64::from(1 << 20), secs));
-    r
+    let peak = PEAK.with(Cell::get);
+    // An enclosing measurement still sees this peak.
+    PEAK.with(|p| p.set(outer.max(peak)));
+    (r, usize::try_from(peak - base).unwrap_or(0))
 }
+
+const MIB: usize = 1 << 20;
+
+// ---------------------------------------------------------------------------------------------
+// Steps that record their peak.
 
 struct Peak<A>(A);
 
@@ -118,13 +127,15 @@ impl<A: Analyzer> Analyzer for Peak<A> {
         self.0.applies(ctx)
     }
     fn run(&self, ctx: &Ctx<'_>, out: &mut Emitter) -> Result<()> {
-        measure(self.0.id().to_string(), || self.0.run(ctx, out))
+        let (r, peak) = peak_of(|| self.0.run(ctx, out));
+        PEAKS.with(|p| p.borrow_mut().push((self.0.id().name.to_owned(), peak)));
+        r
     }
 }
 
-struct PeakX<E>(E);
+struct PeakExtractor<E>(E);
 
-impl<E: Extractor> Extractor for PeakX<E> {
+impl<E: Extractor> Extractor for PeakExtractor<E> {
     fn id(&self) -> AnalyzerId {
         self.0.id()
     }
@@ -135,106 +146,24 @@ impl<E: Extractor> Extractor for PeakX<E> {
         self.0.provides()
     }
     fn extract(&self, blob: &Blob, limits: &Limits, out: &mut Emitter) -> Result<Document> {
-        measure(self.0.id().to_string(), || self.0.extract(blob, limits, out))
+        let (r, peak) = peak_of(|| self.0.extract(blob, limits, out));
+        PEAKS.with(|p| p.borrow_mut().push((self.0.id().name.to_owned(), peak)));
+        r
     }
 }
 
-/// xorshift64*.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 >> 12;
-        self.0 ^= self.0 << 25;
-        self.0 ^= self.0 >> 27;
-        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
-    }
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
-
-/// About `bytes` of contract-like text where nothing repeats: pseudo-words, distinct dates,
-/// amounts, ids and names, in lines and paragraphs.
-fn text(bytes: usize, seed: u64) -> String {
-    const SYL: &[&str] = &[
-        "ka", "lo", "vi", "ne", "ra", "go", "ze", "mi", "tu", "pre", "do", "sta", "ni", "ju",
-        "ugo", "vor", "ba", "še", "ći", "đa", "ž", "ко", "на", "ру",
-    ];
-    let mut r = Rng(seed | 1);
-    let mut s = String::with_capacity(bytes + 256);
-    let mut line = 0usize;
-    while s.len() < bytes {
-        match r.below(20) {
-            0 => {
-                let n = r.below(1 << 40);
-                s.push_str(&format!("{}.{:02},{:02} RSD", n % 1_000_000, n % 97, n % 89));
-            }
-            1 => {
-                let n = r.below(1 << 30);
-                s.push_str(&format!(
-                    "{:02}.{:02}.{}.",
-                    1 + n % 28,
-                    1 + (n >> 5) % 12,
-                    1990 + (n >> 9) % 40
-                ));
-            }
-            2 => s.push_str(&format!("PIB {}", 100_000_000 + r.below(899_999_999))),
-            3 => {
-                let n = r.next();
-                s.push_str(&format!("RS35{:018}", n % 1_000_000_000_000_000_000));
-            }
-            4 => s.push_str(&format!("{}%", r.below(10_000) as f64 / 100.0)),
-            5 => {
-                let n = r.below(100_000);
-                s.push_str(&format!("član {n}."));
-            }
-            _ => {
-                let k = 1 + r.below(4);
-                let cap = r.below(6) == 0;
-                for i in 0..k {
-                    let syl = SYL[usize::try_from(r.below(SYL.len() as u64)).unwrap()];
-                    if cap && i == 0 {
-                        let mut c = syl.chars();
-                        let f = c.next().unwrap();
-                        s.extend(f.to_uppercase());
-                        s.push_str(c.as_str());
-                    } else {
-                        s.push_str(syl);
-                    }
-                }
-                if r.below(8) == 0 {
-                    s.push_str(&format!("{}", r.below(1000)));
-                }
-            }
-        }
-        line += 1;
-        match r.below(14) {
-            0 => s.push_str(". "),
-            1 => s.push_str(", "),
-            _ => s.push(' '),
-        }
-        if line > 8 + usize::try_from(r.below(8)).unwrap() {
-            line = 0;
-            s.push('\n');
-            if r.below(6) == 0 {
-                s.push('\n');
-            }
-        }
-    }
-    s
-}
-
-fn engine(profile: Profile) -> quail_engine::Engine {
+/// Every text step of the default build, each recording its peak.
+fn engine() -> quail_engine::Engine {
     EngineBuilder::new()
-        .profile(profile)
+        .profile(Profile::Deep)
         .limits(Limits {
-            timeout: std::time::Duration::from_hours(1),
-            max_timeout: std::time::Duration::from_hours(1),
+            // Debug builds are slow; the deadline is not what is tested.
+            timeout: Duration::from_hours(1),
+            max_timeout: Duration::from_hours(1),
             ..Limits::default()
         })
         .quiet_panics(true)
-        .extractor(Box::new(PeakX(quail_text::TextExtractor::new())))
+        .extractor(Box::new(PeakExtractor(quail_text::TextExtractor::new())))
         .analyzer(Box::new(Peak(quail_hash::IdentityAnalyzer)))
         .analyzer(Box::new(Peak(quail_text::TextStats)))
         .analyzer(Box::new(Peak(quail_text::TextLang::new())))
@@ -262,28 +191,160 @@ fn engine(profile: Profile) -> quail_engine::Engine {
         .unwrap()
 }
 
+// ---------------------------------------------------------------------------------------------
+// Input.
+
+/// xorshift64*.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        usize::try_from(self.next() % n as u64).unwrap()
+    }
+}
+
+/// About `bytes` of contract-like text in which almost nothing repeats: pseudo-words in
+/// Latin and Cyrillic, distinct amounts, dates, tax ids, IBANs, percentages and article
+/// numbers, in lines of 9 to 16 items and paragraphs. One page (no form feed).
+fn text(bytes: usize, seed: u64) -> String {
+    const SYL: &[&str] = &[
+        "ka", "lo", "vi", "ne", "ra", "go", "ze", "mi", "tu", "pre", "do", "sta", "ni", "ju",
+        "ugo", "vor", "ba", "še", "ći", "đa", "ž", "ко", "на", "ру",
+    ];
+    let mut r = Rng(seed | 1);
+    let mut s = String::with_capacity(bytes + 256);
+    let mut items = 0;
+    while s.len() < bytes {
+        let n = r.next();
+        let _ = match r.below(20) {
+            0 => write!(s, "{}.{:02},{:02} RSD", n % 1_000_000, n % 97, n % 89),
+            1 => write!(
+                s,
+                "{:02}.{:02}.{}.",
+                1 + n % 28,
+                1 + (n >> 5) % 12,
+                1990 + (n >> 9) % 40
+            ),
+            2 => write!(s, "PIB {}", 100_000_000 + n % 899_999_999),
+            3 => write!(s, "RS35{:018}", n % 1_000_000_000_000_000_000),
+            4 => write!(s, "{}%", (n % 10_000) as f64 / 100.0),
+            5 => write!(s, "član {}.", n % 100_000),
+            _ => {
+                let cap = r.below(6) == 0;
+                for i in 0..=r.below(4) {
+                    let syl = SYL[r.below(SYL.len())];
+                    if cap && i == 0 {
+                        let mut c = syl.chars();
+                        s.extend(c.next().into_iter().flat_map(char::to_uppercase));
+                        s.push_str(c.as_str());
+                    } else {
+                        s.push_str(syl);
+                    }
+                }
+                if r.below(8) == 0 {
+                    let _ = write!(s, "{}", n % 1000);
+                }
+                Ok(())
+            }
+        };
+        s.push_str(match r.below(14) {
+            0 => ". ",
+            1 => ", ",
+            _ => " ",
+        });
+        items += 1;
+        if items > 8 + r.below(8) {
+            items = 0;
+            s.push_str(if r.below(6) == 0 { "\n\n" } else { "\n" });
+        }
+    }
+    s
+}
+
+// ---------------------------------------------------------------------------------------------
+
+/// Peak bound of each text step on one page of 64 MiB of text, measured in an optimized
+/// build before and after #142 (MiB): `signal.scan` 711 → 49, `sketch.minhash_compat`
+/// 665 → 74, `ref.references` 579 → 83, `sketch.invoice_layout` 319 → 9, `text.stats`
+/// 315 → 8, `party.candidates` 252 → 63, `clause.terms` 174 → 96, `summary.keywords`
+/// 170 → 63, `sketch.minhash` and `sketch.simhash_text` 128 → 84, `item.lines` 119 → 56.
+/// `payment.extract` (84) and `contract.facts` (160) read at most 8 MiB and were bounded
+/// already. Every bound has headroom over the measured peak.
+const BOUNDS: &[(&str, usize)] = &[
+    ("text.extract", 128),
+    ("hash.identity", 16),
+    ("text.stats", 32),
+    ("text.lang", 16),
+    ("signal.scan", 96),
+    ("ref.references", 128),
+    ("party.candidates", 96),
+    ("clause.terms", 128),
+    ("sketch.minhash", 128),
+    ("sketch.simhash_text", 128),
+    ("sketch.simhash_template", 64),
+    ("sketch.layout", 16),
+    ("sketch.invoice_layout", 32),
+    ("sketch.text_key", 48),
+    ("sketch.minhash_compat", 128),
+    ("item.lines", 96),
+    ("payment.extract", 128),
+    ("contract.facts", 192),
+    ("card.facts", 16),
+    ("summary.card", 16),
+    ("summary.extractive", 16),
+    ("summary.outline", 64),
+    ("summary.keywords", 96),
+    ("summary.topics", 16),
+];
+
 #[test]
-#[ignore = "measurement"]
-fn measure_steps_on_64_mib() {
-    let mib: usize = std::env::var("MEASURE_MIB")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(64);
-    let e = engine(Profile::Deep);
-    if let Some(t) = std::env::var("MEASURE_BT").ok().and_then(|v| v.parse::<isize>().ok()) {
-        BT.store(t << 20, Ordering::Relaxed);
-    }
-    let body = text(mib << 20, 142);
-    let rec = e.process(SourceItem {
-        locator: "big.txt".into(),
-        blob: Blob::from(body.into_bytes()),
-        modified: None,
+fn every_text_step_is_bounded_at_the_text_limit() {
+    let limit = usize::try_from(Limits::default().max_text_bytes).unwrap();
+    let body = text(limit, 142);
+    assert!(body.len() >= limit);
+    let e = engine();
+    PEAKS.with(|p| p.borrow_mut().clear());
+    let (rec, total) = peak_of(|| {
+        e.process(SourceItem {
+            locator: "big.txt".into(),
+            blob: Blob::from(body.into_bytes()),
+            modified: None,
+        })
     });
-    for (name, mib, secs) in RESULTS.lock().unwrap().iter() {
-        eprintln!("PEAK {name:32} {mib:9.1} MiB {secs:7.2} s");
+    let peaks = PEAKS.with(|p| p.borrow().clone());
+    let mut report = String::new();
+    for (name, peak) in &peaks {
+        let _ = writeln!(report, "{name:28} {:7.1} MiB", *peak as f64 / MIB as f64);
     }
-    if let Ok(path) = std::env::var("MEASURE_OUT") {
-        std::fs::write(path, serde_json::to_string_pretty(&rec).unwrap()).unwrap();
+    eprintln!("{report}whole file {:.1} MiB", total as f64 / MIB as f64);
+    for (name, bound) in BOUNDS {
+        let Some((_, peak)) = peaks.iter().find(|(n, _)| n == name) else {
+            panic!("{name} did not run\n{report}");
+        };
+        assert!(
+            *peak < bound * MIB,
+            "{name}: peak {} MiB, bound {bound} MiB\n{report}",
+            peak / MIB
+        );
     }
-    eprintln!("steps {:?}", rec.steps.len());
+    // The text (64 MiB) and its document are held all along; the steps add little to them.
+    assert!(total < 384 * MIB, "whole file {} MiB", total / MIB);
+    // The 64 MiB page was read, not skipped: the sketches and signals found something.
+    let has = |key: &str| rec.facts.iter().any(|f| f.key.as_str() == key);
+    for key in [
+        "signal.date",
+        "sketch.minhash",
+        "sketch.compat_minhash",
+        "sketch.compat_template",
+        "sketch.text_key",
+    ] {
+        assert!(has(key), "no {key}");
+    }
 }

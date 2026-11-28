@@ -556,6 +556,74 @@ mod tests {
     }
 
     #[test]
+    fn segments_give_the_sketches_of_the_joined_text() {
+        // The original definitions over the joined text.
+        let reference_raw = |t: &str| {
+            let f = shingles(&tokens(t));
+            (f.len() >= MIN_SHINGLES).then(|| (minhash_of(&f), f.len()))
+        };
+        let reference_labels = |t: &str| {
+            let normalized = format!(
+                " {} ",
+                regex::Regex::new(r"[\s\x1C-\x1F]+")
+                    .unwrap()
+                    .replace_all(&t.to_lowercase(), " ")
+            );
+            let mut l: Vec<&str> = crate::invoice::LABELS
+                .iter()
+                .copied()
+                .filter(|l| normalized.contains(&format!(" {l} ")))
+                .collect();
+            l.sort_unstable();
+            l
+        };
+        let words = [
+            "Invoice",
+            "Number",
+            "bill",
+            "to",
+            "Due\n",
+            "date",
+            "INV-2024/77",
+            "ab-12",
+            "Ugovor",
+            "o",
+            "zakupu",
+            "Σ",
+            "ΣΑΣ",
+            "\u{1c}",
+            "1.200,50",
+            "  ",
+            "\n\n",
+            "VAT",
+            "total",
+            "\t",
+            "due",
+            "AB/CD/9",
+            "plaća",
+        ];
+        let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+        for n in [40usize, 400, 4000] {
+            let mut t = String::new();
+            for _ in 0..n {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                t.push_str(words[usize::try_from(x % words.len() as u64).unwrap()]);
+                t.push(' ');
+            }
+            for max in [40, 97, 1000, 1 << 20] {
+                let segs: Vec<&str> = quail_text::piece::pieces(&t, max).map(|(_, p)| p).collect();
+                assert_eq!(raw_minhash_of(&segs), reference_raw(&t), "{n} {max}");
+                let f = crate::invoice::features_of(&segs).unwrap();
+                assert_eq!(f.labels, reference_labels(&t), "{n} {max}");
+                assert_eq!(f.patterns, crate::invoice::number_patterns(&t).unwrap());
+                assert_eq!(template_fp_of(&segs).unwrap(), template_fp(&t).unwrap());
+            }
+        }
+    }
+
+    #[test]
     fn python_word_class() {
         // Marks split words in Python; superscript digits are word characters.
         assert_eq!(

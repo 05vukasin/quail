@@ -37,7 +37,8 @@ pub const MAX_STATEMENTS: usize = 16;
 pub const MAX_TITLES: usize = 8;
 /// Entries of `party.candidates`.
 pub const MAX_RANKED: usize = 10;
-/// Text read per document, whatever `Limits::max_text_bytes` allows.
+/// Text read per document, whatever `Limits::max_text_bytes` allows. Of a page longer than
+/// [`PIECE_BYTES`], the first `PIECE_BYTES` are read.
 pub const MAX_SCAN_BYTES: usize = 16 << 20;
 
 /// Company and role candidates of a document. See the crate documentation for the keys and
