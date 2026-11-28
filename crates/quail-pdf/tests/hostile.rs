@@ -869,6 +869,58 @@ fn unclosed_nested_dictionaries_repair_in_linear_time() {
     assert!(image.is_ok(), "{image:?}");
 }
 
+/// A page PDF without its xref, then object 9 holding `junk`, then a trailer: the repair scan
+/// has to walk `junk` and still find the page.
+fn repair_pdf_with(junk: &[u8]) -> Vec<u8> {
+    let mut bytes = page_pdf(b"BT /F1 12 Tf 72 700 Td (repaired) Tj ET", FONT, vec![]);
+    let cut = bytes.windows(4).position(|w| w == b"xref").expect("xref");
+    bytes.truncate(cut);
+    bytes.extend_from_slice(b"9 0 obj\n<< /Length 5 >>\nstream\n");
+    bytes.extend_from_slice(junk);
+    bytes.extend_from_slice(b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    bytes
+}
+
+/// Opens `bytes` for text and raster (each parse repairs the file) within 20 s, and checks
+/// that the page was found.
+fn assert_repaired_in_time(bytes: Vec<u8>) {
+    let t = Instant::now();
+    let r = run(bytes, &Limits::default());
+    let raster = r.raster.expect("raster");
+    let image = raster.0.render(0, 36.0, &Limits::default());
+    // Generous for slow CI runners (Windows debug).
+    assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+    let doc = r.doc.expect("doc");
+    assert!(
+        doc.pages[0].text.contains("repaired"),
+        "{:?}",
+        doc.pages[0].text
+    );
+    assert!(image.is_ok(), "{image:?}");
+}
+
+#[test]
+fn dictionaries_inside_an_unclosed_string_repair_in_linear_time() {
+    // Fuzz finding (quail #139, `slow@pdf.extract@4`): a 2.5 MB stream with 16 000 `<<` and
+    // one literal string that never closes (every repetition opens one more `(` than it
+    // closes), no usable xref. The repair scan probes every `<<`, and every probe parsed into
+    // the string and walked to the next `endobj`: 20 GB, 16 s. Here 100 000 of them in 900 KB;
+    // before the fix this took about 90 s. The scan now has a work budget per `endobj` window.
+    assert_repaired_in_time(repair_pdf_with(&b"(x << /A\n".repeat(100_000)));
+}
+
+#[test]
+fn probes_hidden_by_comments_repair_in_linear_time() {
+    // Same scan, quail #139: `<< /A %` repeated on one line, then a long unclosed array. Every
+    // `<<` is inside the comment of the one before it, so each probe is a fresh start; each
+    // read its comment to the end of the line, then the whole array. Before the fix this took
+    // about 45 s.
+    let mut junk = b"<< /A % ".repeat(4_000);
+    junk.extend_from_slice(b"\n/B [ ");
+    junk.extend_from_slice(&b"1 ".repeat(500_000));
+    assert_repaired_in_time(repair_pdf_with(&junk));
+}
+
 #[test]
 fn type3_recursion_is_bounded() {
     // A Type3 glyph whose procedure shows the same glyph twice: recursion through fonts.

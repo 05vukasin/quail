@@ -113,6 +113,79 @@ impl EndobjCursor {
     }
 }
 
+/// quail: how many bytes the repair scan's attempts may read per byte of the window (between
+/// two `endobj`s) they start in. An attempt is everything one step of the scan reads past its
+/// position: an object header, the validation of the object after it, a dictionary probe, an
+/// object stream. A well-formed window costs about 2 (its object is validated, then its
+/// dictionary probed), random stream data less. Attempts overlap without limit only where they
+/// start inside a string, a comment or an unclosed container that an earlier attempt already
+/// walked: 16 000 `<<` inside one unclosed 2.5 MB literal string each walked the rest of it
+/// (20 GB, 16 s), and `<< /A %` repeated on one line made every probe walk the same long array
+/// after the line. Once a window's budget is spent, the rest of the window is skipped, so the
+/// scan reads at most this many times the file.
+const REPAIR_WORK_FACTOR: usize = 16;
+
+/// quail: the repair scan's work budget, per window (see `REPAIR_WORK_FACTOR`). It also installs
+/// the measurement of failed reads (`reader::REPAIR_REACH`) for the scan's data while alive.
+struct RepairWork {
+    /// The window (its end) being charged, and what is left of its budget.
+    window: Option<usize>,
+    left: usize,
+    /// The furthest offset the current attempt read, as seen by the scan.
+    reach: usize,
+    #[cfg(feature = "std")]
+    saved: (usize, usize),
+}
+
+impl RepairWork {
+    fn new(data: &[u8]) -> Self {
+        #[cfg(not(feature = "std"))]
+        let _ = data;
+        Self {
+            window: None,
+            left: 0,
+            reach: 0,
+            #[cfg(feature = "std")]
+            saved: crate::reader::REPAIR_REACH.with(|r| r.replace((data.as_ptr().addr(), 0))),
+        }
+    }
+
+    /// Starts an attempt at `pos`, in the window ending at `window`. Returns how far it may read,
+    /// or `None` when the window's budget is spent.
+    fn start(&mut self, pos: usize, window: usize, len: usize) -> Option<usize> {
+        if self.window != Some(window) {
+            self.window = Some(window);
+            self.left = REPAIR_WORK_FACTOR.saturating_mul(window.saturating_sub(pos));
+        }
+        self.reach = pos;
+        #[cfg(feature = "std")]
+        crate::reader::REPAIR_REACH.with(|r| r.set((r.get().0, 0)));
+        (self.left > 0).then(|| pos.saturating_add(self.left).min(len))
+    }
+
+    /// Notes that the current attempt read up to `offset`.
+    fn reached(&mut self, offset: usize) {
+        self.reach = self.reach.max(offset);
+    }
+
+    /// Ends the attempt started at `pos` and charges what it read.
+    fn finish(&mut self, pos: usize) {
+        #[cfg(feature = "std")]
+        let failed = crate::reader::REPAIR_REACH.with(|r| r.get().1);
+        #[cfg(not(feature = "std"))]
+        let failed = 0;
+        let read = self.reach.max(failed).saturating_sub(pos);
+        self.left = self.left.saturating_sub(read);
+    }
+}
+
+impl Drop for RepairWork {
+    fn drop(&mut self) {
+        #[cfg(feature = "std")]
+        crate::reader::REPAIR_REACH.with(|r| r.set(self.saved));
+    }
+}
+
 /// quail: the depth the repair scan's skips and probes start at, leaving them
 /// `REPAIR_NESTING_DEPTH` levels.
 const REPAIR_BASE_DEPTH: usize =
@@ -133,26 +206,54 @@ fn fallback_xref_map_inner<'a>(
     let mut last_obj_num = None;
     // quail: validation windows end at the next `endobj`.
     let mut endobj = EndobjCursor::new();
+    // quail: and every step's reads are charged to its window's budget.
+    let mut work = RepairWork::new(data.as_ref());
 
     loop {
         let cur_pos = r.offset();
 
-        let mut old_r = r.clone();
+        // quail: this step's attempts read no further than `lim`. When the window's budget is
+        // spent, the rest of the window is skipped (an `endobj` at `cur_pos` is stepped over).
+        let window = endobj.window_end(data.as_ref(), cur_pos);
+        let Some(lim) = work.start(cur_pos, window, data.as_ref().len()) else {
+            if window > cur_pos {
+                r.jump(window);
+            } else {
+                r.forward_while(|b| !is_white_space_character(b));
+                if r.offset == cur_pos {
+                    r.read_byte();
+                }
+            }
+            if r.at_end() {
+                break;
+            }
+            continue;
+        };
+        let bounded = &data.as_ref()[..lim];
+
+        let mut old_r = Reader::new_with(bounded, cur_pos);
 
         // First try to check if we have an object identifier.
         if r.peek_byte().is_some_and(|b: u8| b.is_ascii_digit()) {
-            if let Some(obj_id) = r.read::<ObjectIdentifier>(&dummy_ctx) {
-                let mut cloned = r.clone();
+            // quail: read within `lim`.
+            let mut id_reader = Reader::new_with(bounded, cur_pos);
+            let obj_id = id_reader.read::<ObjectIdentifier>(&dummy_ctx);
+            work.reached(id_reader.offset());
+            if let Some(obj_id) = obj_id {
+                r.jump(id_reader.offset());
+                let mut cloned = id_reader.clone();
                 // Check that the object following it is actually valid before inserting it.
                 cloned.skip_white_spaces_and_comments();
+                work.reached(cloned.offset());
                 // quail: within the window up to the next `endobj`.
-                let end = endobj.window_end(data.as_ref(), cloned.offset());
+                let end = endobj.window_end(data.as_ref(), cloned.offset()).min(lim);
                 let mut cloned = Reader::new_with(&data.as_ref()[..end], cloned.offset());
                 // quail: with `REPAIR_NESTING_DEPTH` levels of room.
-                if cloned
+                let valid = cloned
                     .skip_with_depth::<Object<'_>>(false, REPAIR_BASE_DEPTH)
-                    .is_some()
-                {
+                    .is_some();
+                work.reached(cloned.offset());
+                if valid {
                     xref_map.insert(obj_id, EntryType::Normal(cur_pos));
                     last_obj_num = Some(obj_id);
                     dummy_ctx.set_obj_number(obj_id);
@@ -166,11 +267,16 @@ fn fallback_xref_map_inner<'a>(
             // dictionary.
             // quail: a dictionary is probed within the window up to the next `endobj` too;
             // offsets stay those of the whole file.
-            let end = endobj.window_end(data.as_ref(), r.offset());
+            // quail: and within `lim`.
+            let end = window.min(lim);
             let mut probe_reader = Reader::new_with(&data.as_ref()[..end], r.offset());
             if r.peek_bytes(2).is_some_and(|b| b == b"<<")
-                && let Some(probe) =
-                    { probe_dict(&mut probe_reader, &dummy_ctx, Some(b"<<"), b">>", REPAIR_BASE_DEPTH) }
+                && let Some(probe) = {
+                    let probe =
+                        probe_dict(&mut probe_reader, &dummy_ctx, Some(b"<<"), b">>", REPAIR_BASE_DEPTH);
+                    work.reached(probe_reader.offset());
+                    probe
+                }
             {
                 r.jump(probe_reader.offset());
                 if probe.has_root || probe.has_type {
@@ -189,11 +295,20 @@ fn fallback_xref_map_inner<'a>(
 
                         if dict.get::<Name<'_>>(TYPE).as_deref() == Some(b"ObjStm")
                             && {
-                                let mut after_dict = r.clone();
+                                // quail: within `lim`.
+                                let mut after_dict = Reader::new_with(bounded, r.offset());
                                 after_dict.skip_white_spaces_and_comments();
+                                work.reached(after_dict.offset());
                                 after_dict.forward_tag(b"stream").is_some()
                             }
-                            && let Some(stream) = old_r.read::<Stream<'_>>(&dummy_ctx)
+                            && let Some(stream) = {
+                                // quail: a stream without a usable `/Length` is found by
+                                // searching for `endstream`, which no reader offset shows; a
+                                // failed read is charged up to `lim`.
+                                let stream = old_r.read::<Stream<'_>>(&dummy_ctx);
+                                work.reached(if stream.is_some() { old_r.offset() } else { lim });
+                                stream
+                            }
                             && let Some(last_obj_num) = last_obj_num
                             && let Some(obj_stream) = ObjectStream::new(&stream, data.budget())
                         {
@@ -232,10 +347,14 @@ fn fallback_xref_map_inner<'a>(
             }
         }
 
+        // quail: charge what this step read.
+        work.finish(cur_pos);
+
         if r.at_end() {
             break;
         }
     }
+    drop(work);
 
     // Try to choose the right trailer dict by doing basic validation.
     let mut trailer_dict = None;
