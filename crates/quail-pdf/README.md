@@ -70,6 +70,7 @@ Early stops are reported with `Emitter::problem`, which keeps the partial docume
   - Every filter layer of every chain (Flate, LZW, ASCII85, ASCIIHex, RunLength) stops at what is left, while decoding.
   - Opening fails with `LimitExceeded` if the object graph alone exceeds the budget.
   - A refused stream on a page is a problem; extraction stops once less than 1 MiB is left.
+  - A page whose content streams the budget refused is not inflated up to the cap again by the `Raster`: the extractor records how much budget was left for them, and `render` and the scan lookups refuse the page at once (`LimitExceeded("max_decompressed")`) when their own budget has no more left. The `Raster` records its own refusals the same way. A page refused only because earlier pages spent the file's budget still renders under the per-call budget.
 - Memory: hayro caches each page's decoded content for the life of a parse, so the document is re-parsed once 64 MiB were decoded since it was opened. Peak memory stays near one page plus that margin, and never above the budget.
 - `max_render_pixels` caps every decoded image: `/Width` × `/Height`, and the sizes in JPEG SOF, JPEG 2000 SIZ, JBIG2 page-information and CCITT headers. All of them are checked before the decoder allocates. JBIG2 bitmaps are additionally capped at 2^28 pixels.
 - `max_text_bytes`: text is truncated at a block boundary (problem). Text rejected as garbage does not count against it.
